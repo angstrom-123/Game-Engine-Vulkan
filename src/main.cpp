@@ -1,18 +1,17 @@
-#include "vk_engine.h"
+#include "Engine/engine.h"
+#include "Sandbox/sandbox.h"
 
-int main(int argc, char *argv[]) {
-    (void) argc;
-    (void) argv;
+int main(int argc, const char *argv[]) {
+    Config config = Config(argc, argv);
+    config.windowWidth = 1600;
+    config.windowHeight = 900;
+    config.appName = "Sandbox";
 
-    Config config = {
-        // .syncStrategy = SYNC_STRATEGY_VSYNC,
-        .syncStrategy = SYNC_STRATEGY_UNCAPPED,
-    };
+    Sandbox *sandbox = new Sandbox();
+    Engine *engine = new Engine(sandbox, &config);
 
-    VulkanEngine engine;
-    engine.Init(&config);
-    engine.Run();
-    engine.Cleanup();
+    engine->Run();
+    engine->Cleanup();
 
     return 0;
 }

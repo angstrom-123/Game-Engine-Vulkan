@@ -1,0 +1,29 @@
+#pragma once
+
+#include "Engine/System/Render/renderTypes.h"
+#include <vulkan/vulkan_core.h>
+
+#include <vector>
+
+namespace vkinit {
+    VkCommandBufferBeginInfo CommandBufferBeginInfo(VkCommandBufferUsageFlags flags = 0);
+    VkRenderPassBeginInfo RenderPassBeginInfo(VkRenderPass pass, VkFramebuffer framebuffer, VkClearValue *clearValues, VkExtent2D extent);
+    VkFramebufferCreateInfo FramebufferCreateInfo(VkRenderPass pass, VkExtent2D extent);
+    VkSubmitInfo SubmitInfo(FrameData *frame, ImageData *image, VkPipelineStageFlags *waitStage);
+    VkPresentInfoKHR PresentInfo(ImageData *image, VkSwapchainKHR *swapchain, uint32_t *imageIndex);
+    VkSemaphoreCreateInfo SemaphoreCreateInfo(VkSemaphoreCreateFlags flags = 0);
+    VkFenceCreateInfo FenceCreateInfo(VkFenceCreateFlags flags = 0);
+    VkCommandPoolCreateInfo CommandPoolCreateInfo(uint32_t queueFamilyIndex);
+    VkCommandBufferAllocateInfo CommandBufferAllocateInfo(VkCommandPool pool);
+    VkPipelineShaderStageCreateInfo ShaderStageCreateInfo(VkShaderStageFlagBits stage, VkShaderModule module);
+    VkPipelineVertexInputStateCreateInfo VertexInputStateCreateInfo(std::vector<VkVertexInputBindingDescription> *bindings = nullptr, std::vector<VkVertexInputAttributeDescription> *attributes = nullptr);
+    VkPipelineInputAssemblyStateCreateInfo InputAssemblyStateCreateInfo(VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+    VkPipelineRasterizationStateCreateInfo RasterizationStateCreateInfo(VkPolygonMode polygonMode);
+    VkPipelineMultisampleStateCreateInfo MultisampleStateCreateInfo();
+    VkPipelineColorBlendAttachmentState ColorBlendAttachmentState();
+    VkPipelineLayoutCreateInfo LayoutCreateInfo(VkDescriptorSetLayout *layout = nullptr, VkPushConstantRange *pushConstant = nullptr);
+    VkDescriptorSetLayoutCreateInfo DescriptorSetLayoutCreateInfo();
+    VkImageCreateInfo ImageCreateInfo(VkFormat format, VkImageUsageFlags usage, VkExtent3D extent);
+    VkImageViewCreateInfo ImageViewCreateInfo(VkFormat format, VkImage image, VkImageAspectFlags aspect);
+    VkPipelineDepthStencilStateCreateInfo DepthStencilStateCreateInfo(bool depthTest, bool depthWrite, VkCompareOp compare);
+}

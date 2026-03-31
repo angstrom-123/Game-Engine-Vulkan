@@ -1,82 +1,60 @@
 MAKE_DIR		:= $(PWD)
 
-PLATFORM		:= PLAT_LINUX_WAYLAND
-# PLATFORM		:= PLAT_LINUX_X11
-# PLATFORM		:= PLAT_WINDOWS
+RELEASE_DIR		:= $(MAKE_DIR)/bin/release
+DEBUG_DIR		:= $(MAKE_DIR)/bin/debug
 
-SRC_DIR			:= $(MAKE_DIR)/src
-VEN_DIR 		:= $(MAKE_DIR)/vendor
-BIN_DIR			:= $(MAKE_DIR)/bin
+CC				:= clang++
+BEAR			:= bear
+SHADERC			:= glslangValidator
 
-MAIN_FILE		:= $(SRC_DIR)/main.cpp
+LINKS			:= -lglfw
+LINKS			+= -lvulkan
+LINKS			+= -lm
 
-OUTPUT			:= $(BIN_DIR)/renderer
-BEAR_OUTPUT		:= $(MAKE_DIR)/compile_commands.json
-
-INCLUDE_PATHS	:= 
-INCLUDE_PATHS	+= -I$(SRC_DIR)/
-INCLUDE_PATHS	+= -I$(SRC_DIR)/Renderer/
-INCLUDE_PATHS	+= -I$(VEN_DIR)/VkBootstrap/
-INCLUDE_PATHS	+= -I$(VEN_DIR)/vulkan/
-
-LIB_PATHS		:=
-
-CC				= clang++
-BEAR			= bear
-
-LINK_FLAGS		:= 
-LINK_FLAGS		+= -lglfw
-LINK_FLAGS		+= -lvulkan
-LINK_FLAGS		+= -lm 
-
-C_FLAGS			:= 
-C_FLAGS			+= $(INCLUDE_PATHS) $(LIB_PATHS)
+C_FLAGS			:= -I$(MAKE_DIR)/src
+C_FLAGS			+= -I$(MAKE_DIR)/src/Engine
+C_FLAGS			+= -I$(MAKE_DIR)/src/Sandbox
+C_FLAGS			+= -I$(MAKE_DIR)/vendor
+C_FLAGS			+= -I$(MAKE_DIR)/vendor/vulkan
 C_FLAGS			+= -Wall -Wextra -Wno-missing-braces -Wno-missing-field-initializers
-C_FLAGS			+= -D$(PLATFORM)
 C_FLAGS			+= -std=c++23
+C_FLAGS			+= -g
 
-DEBUG_FLAGS		:=
-DEBUG_FLAGS		+= -fsanitize=address 
-DEBUG_FLAGS		+= -fsanitize=undefined 
-DEBUG_FLAGS		+= -g -O0
-DEBUG_FLAGS		+= -DDEBUG
+DEBUG_FLAGS 	:= -DDEBUG
+DEBUG_FLAGS 	+= -fsanitize=address -fsanitize=undefined
+DEBUG_FLAGS 	+= -O0
 
-RELEASE_FLAGS	:= 
-RELEASE_FLAGS	+= -g -O3
-RELEASE_FLAGS	+= -DRELEASE
+RELEASE_FLAGS 	:= -DRELEASE
+RELEASE_FLAGS   += -O2
 
-export MAKE_DIR SRC_DIR VEN_DIR BIN_DIR CC BEAR C_FLAGS LINK_FLAGS MAIN_FILE DEBUG_FLAGS RELEASE_FLAGS OUTPUT BEAR_OUTPUT
+export MAKE_DIR RELEASE_DIR DEBUG_DIR CC SHADERC LINKS C_FLAGS DEBUG_FLAGS RELEASE_FLAGS
 
-.PHONY: release
-release:
-	@echo COMPILING SHADERS
-	@$(MAKE) -C $(MAKE_DIR)/src/Shader
-	@echo COMPILING RELEASE
-	@$(MAKE) -C $(MAKE_DIR)/src release
+.PHONY: shaders
+shaders:
+	@echo COMPILING SHADERS 
+	@$(MAKE) -C src/Engine/Resource/Shader 
+	@$(MAKE) -C src/Sandbox/Resource/Shader 
 
-.PHONY: debug
-debug:
-	@echo COMPILING SHADERS
-	@$(MAKE) -C $(MAKE_DIR)/src/Shader
-	@echo COMPILING DEBUG
-	@$(MAKE) -C $(MAKE_DIR)/src debug
+.PHONY: debug 
+debug: shaders
+	@echo "COMPILING (DEBUG)"
+	@$(MAKE) -C src BUILD_TYPE=debug debug
+
+.PHONY: release 
+release: shaders
+	@echo "COMPILING (release)"
+	@$(MAKE) -C src BUILD_TYPE=release release
 
 .PHONY: compiledb
-compiledb:
-	@echo COMPILING SHADERS
-	@$(MAKE) -C $(MAKE_DIR)/src/Shader
-	@echo COMPILING DATABASE
-	@$(MAKE) -C $(MAKE_DIR)/src compiledb
+compiledb: shaders
+	@echo "COMPILING (compiledb)"
+	@$(BEAR) --output $(MAKE_DIR)/compile_commands.json -- $(MAKE) -C src BUILD_TYPE=debug debug
 
-.PHONY: shaders 
-shaders:
-	@echo COMPILING SHADERS
-	@$(MAKE) -C $(MAKE_DIR)/src/Shader
-
-.PHONY: clean
+.PHONY: clean 
 clean:
-	@echo CLEANING SHADERS
-	@$(MAKE) -C $(MAKE_DIR)/src/Shader clean
-	@echo CLEANING SOURCE
-	@$(MAKE) -C $(MAKE_DIR)/src clean
+	@echo CLEANING 
+	@$(MAKE) -C src clean 
 
+.PHONY: info 
+info:
+	@$(MAKE) -C src info
