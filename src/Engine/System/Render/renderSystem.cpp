@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <ranges>
 
 #include "Component/camera.h"
 #include "System/Render/initialiser.h"
@@ -15,7 +16,6 @@
 
 #include <VkBootstrap/VkBootstrap.h>
 #include <GLFW/glfw3.h>
-#include <ranges>
 #include <vulkan/vulkan_core.h>
 #include <stb/stb_image.h>
 
@@ -66,12 +66,12 @@ void RenderSystem::Init(ECS& ecs, GLFWwindow *window, Config *config)
     InitPipelines();
     InitUniformBuffers();
 
-    m_Initialized = true;
+    m_IsInitialized = true;
 }
 
 void RenderSystem::Cleanup() 
 {
-    if (m_Initialized) {
+    if (m_IsInitialized) {
         VK_CHECK(vkDeviceWaitIdle(m_Device));
 
         m_MainDeletionQueue.Flush();
@@ -94,6 +94,7 @@ void RenderSystem::Draw(ECS& ecs)
 
     size_t frameIndex = m_FrameNum % FRAMES_IN_FLIGHT;
     FrameData &frame = m_Frames[frameIndex];
+    frame.descriptorOffset = 0; // Reset descriptor offset, ready to copy in from material uniforms
 
     VK_CHECK(vkWaitForFences(m_Device, 1, &frame.renderFence, VK_TRUE, UINT64_MAX));
     VK_CHECK(vkResetFences(m_Device, 1, &frame.renderFence));
@@ -131,25 +132,48 @@ void RenderSystem::Draw(ECS& ecs)
     vkCmdSetScissor(frame.commandBuffer, 0, 1, &m_Scissor);
 
     Camera& cam = ecs.GetComponent<Camera>(m_Camera);
+    Transform& camTransform = ecs.GetComponent<Transform>(m_Camera);
 
     for (Entity e : entities) {
         Mesh& mesh = ecs.GetComponent<Mesh>(e);
         Transform& transform = ecs.GetComponent<Transform>(e);
         Material& material = ecs.GetComponent<Material>(e);
 
-        VERIFY(mesh.allocated && "Drawing unallocated mesh");
+        ASSERT(mesh.allocated && "Drawing unallocated mesh");
 
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, material.pipeline);
 
-        material.defaultConstants.mvp = cam.projection * cam.view * Transform::ToModelMatrix(transform);
-        vkCmdPushConstants(frame.commandBuffer, material.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(MaterialPushConstants), &material.defaultConstants.mvp);
+        glm::mat4x4 model = Transform::ToModelMatrix(transform);
+        material.defaultConstants.mvp = cam.projection * cam.view * model;
+        material.defaultConstants.model = model;
+        vkCmdPushConstants(frame.commandBuffer, material.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants), &material.defaultConstants.mvp);
 
-        glm::vec4 exampleVertexUniform = glm::vec4(0.2);
-        glm::vec4 exampleFragmentUniform = glm::vec4(0.8);
-        memcpy(static_cast<uint8_t *>(frame.uniformBuffer.data) + material.vertexUniformOffset, &exampleVertexUniform, material.vertexUniformSize);
-        memcpy(static_cast<uint8_t *>(frame.uniformBuffer.data) + material.fragmentUniformOffset, &exampleFragmentUniform, material.fragmentUniformSize);
+        // TODO: find out how to customize the uniforms from the material creation 
+        //      - Need to figure out a good api for this.
 
-        uint32_t dynamicOffsets[2] = { static_cast<uint32_t>(material.vertexUniformOffset), static_cast<uint32_t>(material.fragmentUniformOffset) };
+        auto Align = [&](size_t size) {
+            return (size + m_MinimumUniformOffset - 1) & ~(m_MinimumUniformOffset - 1);
+        };
+
+        uint32_t vertexOffset = frame.descriptorOffset;
+        frame.descriptorOffset += Align(sizeof(VertexUniforms));
+
+        uint32_t fragmentOffset = frame.descriptorOffset;
+        frame.descriptorOffset += Align(sizeof(FragmentUniforms));
+
+        ASSERT(frame.descriptorOffset <= MAX_UNIFORM_BUFFER_SIZE && "Uniform buffer overflow");
+
+        VertexUniforms vertexUniforms = {
+            .placeholder = glm::vec4(0.0)
+        };
+        FragmentUniforms fragmentUniforms = {
+            .lightPos = glm::vec4(0.0),
+            .viewPos = glm::vec4(camTransform.translation, 0.0)
+        };
+        memcpy(static_cast<char *>(frame.uniformBuffer.data) + vertexOffset, &vertexUniforms, sizeof(VertexUniforms));
+        memcpy(static_cast<char *>(frame.uniformBuffer.data) + fragmentOffset, &fragmentUniforms, sizeof(FragmentUniforms));
+
+        uint32_t dynamicOffsets[2] = { vertexOffset, fragmentOffset };
         vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, material.pipelineLayout, 0, 1, &material.descriptorSets[frameIndex], 2, dynamicOffsets);
 
         VkDeviceSize offset = 0;
@@ -336,11 +360,8 @@ AllocatedImage RenderSystem::AllocateImage(ImageData& imageData)
     return image;
 }
 
-void RenderSystem::CreateMaterial(const MaterialInfo *info, Material &mat)
+void RenderSystem::CreateMaterial(const MaterialInfo *info, Material& mat)
 {
-    mat.vertexUniformSize = info->vertexUniformSize;
-    mat.fragmentUniformSize = info->fragmentUniformSize;
-
     // Texture
     mat.textureImage = info->textureImage;
     VkImageViewCreateInfo viewInfo = vkinit::ImageViewCreateInfo(VK_FORMAT_R8G8B8A8_SRGB, mat.textureImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -363,13 +384,6 @@ void RenderSystem::CreateMaterial(const MaterialInfo *info, Material &mat)
     });
 
     for (const auto& [index, frame] : m_Frames | std::ranges::views::enumerate) {
-        mat.vertexUniformOffset = frame.descriptorOffset;
-        frame.descriptorOffset += (mat.vertexUniformSize + m_MinimumUniformOffset - 1) & ~(m_MinimumUniformOffset - 1);
-        mat.fragmentUniformOffset = frame.descriptorOffset;
-        frame.descriptorOffset += (mat.fragmentUniformSize + m_MinimumUniformOffset - 1) & ~(m_MinimumUniformOffset - 1);
-
-        ASSERT(frame.descriptorOffset <= MAX_UNIFORM_BUFFER_SIZE && "Allocating too many descriptors");
-
         VkDescriptorSetAllocateInfo allocInfo = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = nullptr,
@@ -381,13 +395,13 @@ void RenderSystem::CreateMaterial(const MaterialInfo *info, Material &mat)
 
         VkDescriptorBufferInfo vertexBufferInfo = {
             .buffer = frame.uniformBuffer.buffer,
-            .offset = mat.vertexUniformOffset,
-            .range = mat.vertexUniformSize
+            .offset = 0,
+            .range = sizeof(VertexUniforms),
         };
         VkDescriptorBufferInfo fragmentBufferInfo = {
             .buffer = frame.uniformBuffer.buffer,
-            .offset = mat.fragmentUniformOffset,
-            .range = mat.fragmentUniformSize
+            .offset = 0,
+            .range = sizeof(FragmentUniforms),
         };
         VkDescriptorImageInfo imageInfo = {
             .sampler = mat.textureSampler,
@@ -431,7 +445,7 @@ void RenderSystem::CreateMaterial(const MaterialInfo *info, Material &mat)
     mat.defaultConstantRange = {
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
         .offset = 0,
-        .size = sizeof(MaterialPushConstants),
+        .size = sizeof(PushConstants),
     };
 
     // Pipeline
@@ -800,6 +814,7 @@ void RenderSystem::InitUniformBuffers()
     VmaAllocationCreateInfo allocInfo = {
         .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT,
         .usage = VMA_MEMORY_USAGE_CPU_TO_GPU,
+        .requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
     };
 
     // 2 uniform buffers + 1 sampler per material
@@ -817,6 +832,7 @@ void RenderSystem::InitUniformBuffers()
 
     for (FrameData& frame : m_Frames) {
         VK_CHECK(vmaCreateBuffer(m_Allocator, &bufferInfo, &allocInfo, &frame.uniformBuffer.buffer, &frame.uniformBuffer.allocation, nullptr));
+
         frame.descriptorOffset = 0;
         VK_CHECK(vkCreateDescriptorPool(m_Device, &poolInfo, nullptr, &frame.descriptorPool));
 

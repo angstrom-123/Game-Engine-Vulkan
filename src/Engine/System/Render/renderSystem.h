@@ -65,7 +65,7 @@ private:
     Entity m_Camera;
 
     // Flags
-    bool m_Initialized;
+    bool m_IsInitialized;
     bool m_DidResize;
 
     // Counters

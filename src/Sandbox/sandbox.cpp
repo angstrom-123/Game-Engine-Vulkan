@@ -14,8 +14,8 @@ void Sandbox::Init()
 
     // Create the materials (default shaders)
     Material defaultMaterial, checkerMaterial;
-    m_Engine->CreateMaterial("", "", "", defaultMaterial);
-    m_Engine->CreateMaterial("src/Sandbox/Resource/Texture/checkerboard.png", "", "", checkerMaterial);
+    m_Engine->CreateMaterial(defaultMaterial);
+    m_Engine->CreateMaterial("src/Sandbox/Resource/Texture/checkerboard.png", checkerMaterial);
 
     Mesh suzanneMesh, suzanneSmoothMesh;
     m_Engine->CreateMesh("src/Sandbox/Resource/Model/suzanne.obj", suzanneMesh);

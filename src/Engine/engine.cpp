@@ -93,16 +93,28 @@ double Engine::GetTime()
     return glfwGetTime();
 }
 
+void Engine::CreateMaterial(Material& material)
+{
+    CreateMaterial("src/Engine/Resource/Texture/default.png", 
+                   "src/Engine/Resource/Shader/basic.vert.spirv", 
+                   "src/Engine/Resource/Shader/basic.frag.spirv", material);
+}
+
+void Engine::CreateMaterial(const fs::path& texturePath, Material& material)
+{
+    CreateMaterial(texturePath, 
+                   "src/Engine/Resource/Shader/basic.vert.spirv", 
+                   "src/Engine/Resource/Shader/basic.frag.spirv", material);
+}
+
 void Engine::CreateMaterial(const fs::path& texturePath, const fs::path& vertexShaderPath, const fs::path& fragmentShaderPath, Material& material)
 {
-    ImageData texture = ImageData((texturePath.empty()) ? "src/Engine/Resource/Texture/default.png" : texturePath);
+    ImageData texture = ImageData(texturePath);
     AllocatedImage textureImage = m_RenderSystem->AllocateImage(texture);
     MaterialInfo materialInfo = {
-        .vertexShader = (vertexShaderPath.empty()) ? "src/Engine/Resource/Shader/basic.vert.spirv" : vertexShaderPath,
-        .fragmentShader = (vertexShaderPath.empty()) ? "src/Engine/Resource/Shader/basic.frag.spirv" : fragmentShaderPath,
-        .textureImage = textureImage,
-        .vertexUniformSize = sizeof(glm::vec4),
-        .fragmentUniformSize = sizeof(glm::vec4),
+        .vertexShader = vertexShaderPath,
+        .fragmentShader = fragmentShaderPath,
+        .textureImage = textureImage
     };
     m_RenderSystem->CreateMaterial(&materialInfo, material);
 }

@@ -9,28 +9,31 @@
 namespace fs = std::filesystem;
 
 struct MaterialInfo {
-    // TODO: Uniforms
     fs::path vertexShader;
     fs::path fragmentShader;
     AllocatedImage textureImage;
-    size_t vertexUniformSize;
-    size_t fragmentUniformSize;
 };
 
-struct MaterialPushConstants {
+struct PushConstants {
     glm::mat4x4 mvp;
+    glm::mat4x4 model;
+};
+
+struct VertexUniforms {
+    glm::vec4 placeholder;
+};
+
+struct FragmentUniforms {
+    glm::vec4 lightPos;
+    glm::vec4 viewPos;
 };
 
 struct Material {
     VkPipeline pipeline;
     VkPipelineLayout pipelineLayout;
     VkDescriptorSet descriptorSets[FRAMES_IN_FLIGHT];
-    VkDeviceSize vertexUniformOffset;
-    VkDeviceSize fragmentUniformOffset;
-    VkDeviceSize vertexUniformSize;
-    VkDeviceSize fragmentUniformSize;
     VkPushConstantRange defaultConstantRange;
-    MaterialPushConstants defaultConstants;
+    PushConstants defaultConstants;
     AllocatedImage textureImage;
     VkImageView textureView;
     VkSampler textureSampler;

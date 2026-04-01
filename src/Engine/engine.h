@@ -34,6 +34,8 @@ public:
     void Cleanup();
     void Resized(int width, int height);
     double GetTime();
+    void CreateMaterial(Material& material);
+    void CreateMaterial(const fs::path& texturePath, Material& material);
     void CreateMaterial(const fs::path& texturePath, const fs::path& vertexShaderPath, const fs::path& fragmentShaderPath, Material& material);
     void CreateMesh(const fs::path& path, Mesh& mesh);
 
