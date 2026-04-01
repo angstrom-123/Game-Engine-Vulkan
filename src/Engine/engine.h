@@ -2,10 +2,12 @@
 
 #include <filesystem>
 
-#include "Engine/Component/mesh.h"
-#include "Engine/System/Render/render.h"
-#include "Engine/config.h"
-#include "Engine/ECS/ecs.h"
+#include "Component/mesh.h"
+#include "System/Render/renderSystem.h"
+#include "config.h"
+#include "ECS/ecs.h"
+
+namespace fs = std::filesystem;
 
 class Engine;
 
@@ -32,15 +34,13 @@ public:
     void Cleanup();
     void Resized(int width, int height);
     double GetTime();
-    Entity CreateGameObject(glm::vec3 at, const std::filesystem::path& path);
+    void CreateMaterial(const fs::path& texturePath, const fs::path& vertexShaderPath, const fs::path& fragmentShaderPath, Material& material);
+    void CreateMesh(const fs::path& path, Mesh& mesh);
 
     RenderSystem *GetRenderer() { return m_RenderSystem; };
     struct GLFWwindow *GetWindow() { return m_Window; };
     size_t GetFrameNumber() { return m_RenderSystem->GetFrameNumber(); };
     ECS& GetECS() { return m_ecs; };
-
-private:
-    Mesh LoadMesh(const std::filesystem::path& path);
 
 private:
     App *m_App;

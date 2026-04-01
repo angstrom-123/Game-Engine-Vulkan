@@ -25,7 +25,6 @@ public:
 
 class OBJData {
 public:
-    ~OBJData() = default;
     OBJData(const std::filesystem::path& filePath);
 
 public:

@@ -2,7 +2,7 @@
 
 #include <glm/common.hpp>
 #include <glm/gtc/quaternion.hpp>
-#include "Engine/Util/logger.h"
+#include "Util/logger.h"
 
 struct Transform {
     glm::vec3 translation;

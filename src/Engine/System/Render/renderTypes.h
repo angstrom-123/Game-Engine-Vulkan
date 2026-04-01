@@ -1,10 +1,12 @@
 #pragma once
 
-#include "Engine/Util/allocator.h"
+#include "Util/allocator.h"
 
-static constexpr size_t MAX_DESCRIPTORS = 4;
-static constexpr size_t MAX_MATERIALS = 32;
+static constexpr size_t MAX_DESCRIPTORS = 10;
 static constexpr size_t FRAMES_IN_FLIGHT = 3;
+static constexpr size_t MAX_MATERIALS = 256;
+static constexpr size_t MAX_UNIFORM_BUFFER_SIZE = 32 * 1024; // 32 KiB
+    
 
 struct FrameData {
     VkFence renderFence;
@@ -13,10 +15,10 @@ struct FrameData {
     VkCommandBuffer commandBuffer;
     AllocatedBuffer uniformBuffer;
     VkDescriptorPool descriptorPool;
-    VkDescriptorSet descriptorSets[MAX_MATERIALS];
+    size_t descriptorOffset;
 };
 
-struct ImageData {
+struct SwapchainImageData {
     VkFence flightFence;
     VkSemaphore renderSemaphore;
     VkImage image;

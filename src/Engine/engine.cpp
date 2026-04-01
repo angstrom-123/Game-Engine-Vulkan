@@ -1,5 +1,6 @@
 #include "engine.h"
-#include "Util/OBJLoader.h"
+#include "Util/objLoader.h"
+#include "Util/imageLoader.h"
 #include "Component/camera.h"
 
 #define VMA_IMPLEMENTATION
@@ -92,9 +93,22 @@ double Engine::GetTime()
     return glfwGetTime();
 }
 
-Mesh Engine::LoadMesh(const std::filesystem::path& path)
+void Engine::CreateMaterial(const fs::path& texturePath, const fs::path& vertexShaderPath, const fs::path& fragmentShaderPath, Material& material)
 {
-    Mesh mesh;
+    ImageData texture = ImageData((texturePath.empty()) ? "src/Engine/Resource/Texture/default.png" : texturePath);
+    AllocatedImage textureImage = m_RenderSystem->AllocateImage(texture);
+    MaterialInfo materialInfo = {
+        .vertexShader = (vertexShaderPath.empty()) ? "src/Engine/Resource/Shader/basic.vert.spirv" : vertexShaderPath,
+        .fragmentShader = (vertexShaderPath.empty()) ? "src/Engine/Resource/Shader/basic.frag.spirv" : fragmentShaderPath,
+        .textureImage = textureImage,
+        .vertexUniformSize = sizeof(glm::vec4),
+        .fragmentUniformSize = sizeof(glm::vec4),
+    };
+    m_RenderSystem->CreateMaterial(&materialInfo, material);
+}
+
+void Engine::CreateMesh(const std::filesystem::path& path, Mesh& mesh)
+{
     mesh.allocated = false;
     mesh.vertexCount = 0;
 
@@ -102,7 +116,7 @@ Mesh Engine::LoadMesh(const std::filesystem::path& path)
     if (meshData->corrupted) {
         delete meshData;
         ERROR("Failed to load mesh: " << path);
-        return mesh;
+        return;
     }
 
     // TODO: Optimise vertex size
@@ -122,26 +136,5 @@ Mesh Engine::LoadMesh(const std::filesystem::path& path)
 
     delete meshData;
 
-    return mesh;
-}
-
-Entity Engine::CreateGameObject(glm::vec3 at, const std::filesystem::path& path)
-{
-    Entity obj = m_ecs.CreateEntity();
-
-    Mesh mesh = LoadMesh(path);
     m_RenderSystem->AllocateMesh(mesh);
-    m_ecs.AddComponent<Mesh>(obj, mesh);
-
-    MaterialInfo materialInfo = {
-        .vertexShader = "src/Sandbox/Resource/Shader/basic.vert.spirv",
-        .fragmentShader = "src/Sandbox/Resource/Shader/basic.frag.spirv",
-    };
-    Material material = m_RenderSystem->CreateMaterial(&materialInfo);
-    m_ecs.AddComponent<Material>(obj, material);
-
-    Transform& transform = m_ecs.GetComponent<Transform>(obj);
-    transform.translation = at;
-
-    return obj;
 }

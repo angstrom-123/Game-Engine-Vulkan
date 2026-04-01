@@ -3,7 +3,7 @@
 #include <cstring>
 #include <unordered_map>
 
-#include "Engine/Util/myAssert.h"
+#include "Util/myAssert.h"
 #include "ecsTypes.h"
 
 class ComponentArrayBase {

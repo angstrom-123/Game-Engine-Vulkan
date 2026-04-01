@@ -1,5 +1,4 @@
 #include "initialiser.h"
-#include <vulkan/vulkan_core.h>
 
 VkCommandBufferBeginInfo 
 vkinit::CommandBufferBeginInfo(VkCommandBufferUsageFlags flags)
@@ -45,7 +44,7 @@ vkinit::FramebufferCreateInfo(VkRenderPass pass, VkExtent2D extent)
 }
 
 VkSubmitInfo 
-vkinit::SubmitInfo(FrameData *frame, ImageData *image, VkPipelineStageFlags *waitStage)
+vkinit::SubmitInfo(FrameData *frame, SwapchainImageData *image, VkPipelineStageFlags *waitStage)
 {
     return (VkSubmitInfo) {
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -60,8 +59,24 @@ vkinit::SubmitInfo(FrameData *frame, ImageData *image, VkPipelineStageFlags *wai
     };
 }
 
+VkSubmitInfo 
+vkinit::SubmitInfo(VkCommandBuffer *commandBuffer)
+{
+    return (VkSubmitInfo) {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .pNext = nullptr,
+        .waitSemaphoreCount = 0,
+        .pWaitSemaphores = nullptr,
+        .pWaitDstStageMask = nullptr,
+        .commandBufferCount = 1,
+        .pCommandBuffers = commandBuffer,
+        .signalSemaphoreCount = 0,
+        .pSignalSemaphores = nullptr,
+    };
+}
+
 VkPresentInfoKHR 
-vkinit::PresentInfo(ImageData *image, VkSwapchainKHR *swapchain, uint32_t *imageIndex)
+vkinit::PresentInfo(SwapchainImageData *image, VkSwapchainKHR *swapchain, uint32_t *imageIndex)
 {
     return (VkPresentInfoKHR) {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -202,27 +217,25 @@ vkinit::ColorBlendAttachmentState()
 }
 
 VkPipelineLayoutCreateInfo 
-vkinit::LayoutCreateInfo(VkDescriptorSetLayout *layout, VkPushConstantRange *pushConstant)
+vkinit::LayoutCreateInfo(VkPushConstantRange *pushConstant)
 {
     return (VkPipelineLayoutCreateInfo) {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .setLayoutCount = (layout) ? 1u : 0u,
-        .pSetLayouts = layout,
         .pushConstantRangeCount = (pushConstant) ? 1u : 0u,
         .pPushConstantRanges = pushConstant,
     };
 }
 
 VkDescriptorSetLayoutCreateInfo 
-vkinit::DescriptorSetLayoutCreateInfo()
+vkinit::DescriptorSetLayoutCreateInfo(uint32_t binding, VkDescriptorType type, VkShaderStageFlags flags)
 {
     VkDescriptorSetLayoutBinding layoutBinding = {
-        .binding = 0,
-        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .binding = binding,
+        .descriptorType = type,
         .descriptorCount = 1,
-        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .stageFlags = flags,
         .pImmutableSamplers = nullptr
     };
 
@@ -281,8 +294,8 @@ vkinit::DepthStencilStateCreateInfo(bool depthTest, bool depthWrite, VkCompareOp
         .depthWriteEnable = depthWrite ? VK_TRUE : VK_FALSE,
         .depthCompareOp = depthTest ? compare : VK_COMPARE_OP_ALWAYS,
         .depthBoundsTestEnable = VK_FALSE,
+        .stencilTestEnable = VK_FALSE,
         .minDepthBounds = 0.0,
         .maxDepthBounds = 1.0,
-        .stencilTestEnable = VK_FALSE
     };
 }

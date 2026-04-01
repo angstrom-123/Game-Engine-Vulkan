@@ -16,7 +16,8 @@ C_FLAGS			+= -I$(MAKE_DIR)/src/Engine
 C_FLAGS			+= -I$(MAKE_DIR)/src/Sandbox
 C_FLAGS			+= -I$(MAKE_DIR)/vendor
 C_FLAGS			+= -I$(MAKE_DIR)/vendor/vulkan
-C_FLAGS			+= -Wall -Wextra -Wno-missing-braces -Wno-missing-field-initializers
+C_FLAGS			+= -Wall -Wextra -Wno-missing-braces -Wno-missing-field-initializers 
+C_FLAGS 		+= -Wno-nullability-completeness
 C_FLAGS			+= -std=c++23
 C_FLAGS			+= -g
 

@@ -5,6 +5,7 @@ a high quality 3D engine and game for personal use.
 
 ## External Libraries
 
+- STB (stb_image.h)
 - VMA
 - VkBootstrap
 - GLM

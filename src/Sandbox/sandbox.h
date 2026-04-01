@@ -11,8 +11,9 @@ public:
     void Resized(int width, int height) override;
 
 private:
-    Entity m_Suzanne;
-    Entity m_SuzanneSmooth;
+    Entity m_Suzanne1;
+    Entity m_Suzanne2;
+    Entity m_Suzanne3;
     double m_LastTime;
     size_t m_LastFrame;
 };

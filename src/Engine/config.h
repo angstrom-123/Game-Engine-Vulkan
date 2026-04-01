@@ -2,7 +2,7 @@
 
 #include <cstdint>
 #include <cstring>
-#include "Engine/Util/logger.h"
+#include "Util/logger.h"
 
 enum SyncStrategy {
     SYNC_STRATEGY_VSYNC,
@@ -11,10 +11,10 @@ enum SyncStrategy {
 };
 
 struct Config {
-    const char *appName;
-    SyncStrategy syncStrategy;
-    uint32_t windowWidth;
-    uint32_t windowHeight;
+    const char *appName = "app";
+    SyncStrategy syncStrategy = SYNC_STRATEGY_VSYNC;
+    uint32_t windowWidth = 1600;
+    uint32_t windowHeight = 900;
 
     Config();
     Config(int argc, const char *argv[]);

@@ -4,18 +4,19 @@
 
 #include <vulkan/vulkan_core.h>
 
-#include "Engine/Component/material.h"
-#include "Engine/Component/mesh.h"
-#include "Engine/ECS/ecs.h"
-#include "Engine/Util/allocator.h"
-#include "Engine/config.h"
+#include "Component/material.h"
+#include "Component/mesh.h"
+#include "ECS/ecs.h"
+#include "Util/allocator.h"
+#include "Util/imageLoader.h"
+#include "config.h"
 
 #include "renderTypes.h"
 
 struct DeletionQueue {
     std::deque<std::function<void ()>> deletors;
 
-    void PushFunction(std::function<void ()> function) { deletors.push_back(function); }
+    void PushFunction(std::function<void ()>&& function) { deletors.push_back(function); }
     void Clear() { deletors.clear(); }
     void Flush()
     {
@@ -27,6 +28,13 @@ struct DeletionQueue {
     }
 };
 
+struct UploadContext {
+    VkFence uploadFence;
+    VkCommandPool commandPool;
+    VkCommandBuffer commandBuffer;
+    bool initialized;
+};
+
 class RenderSystem : public System {
 public:
     void Init(ECS& ecs, struct GLFWwindow *window, Config *config);
@@ -34,7 +42,8 @@ public:
     void Draw(ECS& ecs);
     void RequestResize();
     void AllocateMesh(Mesh& mesh);
-    Material CreateMaterial(const MaterialInfo *info);
+    AllocatedImage AllocateImage(ImageData& imageData);
+    void CreateMaterial(const MaterialInfo *info, Material& material);
 
     Signature GetSignature(ECS *ecs) { return (Signature) { ecs->GetBit<Transform>() | ecs->GetBit<Mesh>() | ecs->GetBit<Material>() }; };
     size_t GetFrameNumber() { return m_FrameNum; };
@@ -49,24 +58,37 @@ private:
     void InitSyncStructures();
     void InitPipelines();
     void InitUniformBuffers();
+    void ImmediateSubmit(std::function<void (VkCommandBuffer commandBuffer)>&& function);
     void LoadShaderModule(const std::filesystem::path& path, VkShaderModule *module);
 
 private:
     Entity m_Camera;
-    size_t m_FrameNum;
+
+    // Flags
     bool m_Initialized;
     bool m_DidResize;
+
+    // Counters
+    size_t m_FrameNum;
     size_t m_AllocatedMaterials;
+
+    // Cleanup
     DeletionQueue m_MainDeletionQueue;
     DeletionQueue m_DynamicDeletionQueue;
 
+    // Data
     VkPresentModeKHR m_PresentMode;
     VkExtent2D m_Extent;
     VkViewport m_Viewport;
     VkRect2D m_Scissor;
+    VkDescriptorSetLayout m_MaterialSetLayout;
+    VkDeviceSize m_MinimumUniformOffset;
 
     struct VmaAllocator_T *m_Allocator;
 
+    UploadContext m_UploadContext;
+
+    // Vulkan Primitives
     VkInstance m_Instance;
     VkPhysicalDevice m_PhysicalDevice;
     VkDevice m_Device;
@@ -78,7 +100,7 @@ private:
     VkSwapchainKHR m_Swapchain;
     VkFormat m_SwapchainFormat;
     VkFormat m_DepthFormat;
-    std::vector<ImageData> m_Images;
+    std::vector<SwapchainImageData> m_Images;
 
     // Synchronization
     FrameData m_Frames[FRAMES_IN_FLIGHT];

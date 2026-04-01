@@ -1,4 +1,4 @@
-#include "OBJLoader.h"
+#include "objLoader.h"
 #include "logger.h"
 
 #include <cmath>

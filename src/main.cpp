@@ -3,8 +3,6 @@
 
 int main(int argc, const char *argv[]) {
     Config config = Config(argc, argv);
-    config.windowWidth = 1600;
-    config.windowHeight = 900;
     config.appName = "Sandbox";
 
     Sandbox *sandbox = new Sandbox();
