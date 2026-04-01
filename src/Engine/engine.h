@@ -6,6 +6,7 @@
 #include "System/Render/renderSystem.h"
 #include "config.h"
 #include "ECS/ecs.h"
+#include "eventHandler.h"
 
 namespace fs = std::filesystem;
 
@@ -16,10 +17,7 @@ public:
     virtual void Init() = 0;
     virtual void Frame(double deltaTime) = 0;
     virtual void Cleanup() = 0;
-    // TODO: Change the resized thing to be generic event?
-    // The resize can be handled by the engine once I move it over.
-    virtual void Event() = 0;
-    virtual void Resized(int width, int height) = 0;
+    virtual void EventCallback(Event event) = 0;
     void SetEnginePointer(Engine *engine) { m_Engine = engine; };
 
 protected:
@@ -32,7 +30,9 @@ public:
     void Init();
     void Run();
     void Cleanup();
-    void Resized(int width, int height);
+    void EventCallback(Event event);
+    static void EventHook(Event event, void *data);
+    // void Resized(int width, int height);
     double GetTime();
     void CreateMaterial(Material& material);
     void CreateMaterial(const fs::path& texturePath, Material& material);
@@ -47,6 +47,7 @@ public:
 private:
     App *m_App;
     ECS m_ecs;
+    EventHandler m_EventHandler;
     struct GLFWwindow *m_Window;
 
     // Default entities and systems, managed by the engine

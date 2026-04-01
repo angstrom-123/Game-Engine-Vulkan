@@ -14,12 +14,6 @@ void GLFWErrorCb(int error, const char *desc)
     ERROR(desc);
 }
 
-void GLFWResizeCb(GLFWwindow *window, int width, int height)
-{
-    Engine *engine = static_cast<Engine *>(glfwGetWindowUserPointer(window));
-    engine->Resized(width, height);
-}
-
 Engine::Engine(App *app, Config *config)
 {
     // Window
@@ -33,9 +27,10 @@ Engine::Engine(App *app, Config *config)
     m_Window = glfwCreateWindow(config->windowWidth, config->windowHeight, config->appName, nullptr, nullptr);
 
     glfwSetErrorCallback(GLFWErrorCb);
-    glfwSetWindowUserPointer(m_Window, this);
-    glfwSetFramebufferSizeCallback(m_Window, GLFWResizeCb);
-    glfwSetWindowSizeCallback(m_Window, GLFWResizeCb);
+
+    // Event Handler
+    m_EventHandler.Init(m_Window);
+    m_EventHandler.SetEventCallback(Engine::EventHook, this);
 
     // ECS
     m_ecs = ECS();
@@ -69,6 +64,8 @@ void Engine::Run()
         m_RenderSystem->Draw(m_ecs);
 
         lastTime = currTime;
+
+        m_EventHandler.RecordFrame();
     }
 }
 
@@ -80,12 +77,23 @@ void Engine::Cleanup()
     glfwTerminate();
 }
 
-void Engine::Resized(int width, int height)
+void Engine::EventCallback(Event event)
 {
-    if (width > 0 && height > 0) {
-        m_App->Resized(width, height);
-        m_RenderSystem->RequestResize();
-    }
+    switch (event.kind) {
+        case EVENT_WINDOW_RESIZE:
+            m_RenderSystem->RequestResize();
+            break;
+        default:
+            break;
+    };
+
+    m_App->EventCallback(event);
+}
+
+void Engine::EventHook(Event event, void *data)
+{
+    Engine *engine = static_cast<Engine *>(data);
+    engine->EventCallback(event);
 }
 
 double Engine::GetTime()

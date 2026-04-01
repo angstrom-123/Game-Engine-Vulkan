@@ -6,9 +6,8 @@ class Sandbox: public App {
 public: 
     void Init() override;
     void Frame(double deltaTime) override;
-    void Event() override;
+    void EventCallback(Event event) override;
     void Cleanup() override;
-    void Resized(int width, int height) override;
 
 private:
     Entity m_Suzanne1;

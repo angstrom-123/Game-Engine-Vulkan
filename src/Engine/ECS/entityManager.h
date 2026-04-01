@@ -9,6 +9,7 @@ class EntityManager {
 public:
     EntityManager()
     {
+        m_LiveEntities = 0;
         for (int32_t i = 0; i < MAX_ENTITIES; i++) {
             m_FreeEntities.push(i);
         }

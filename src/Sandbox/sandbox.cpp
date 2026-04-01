@@ -1,4 +1,5 @@
 #include "sandbox.h"
+#include "event.h"
 
 #include <Engine/Util/logger.h>
 #include <Engine/Component/transform.h>
@@ -55,17 +56,21 @@ void Sandbox::Frame(double deltaTime)
     ecs.GetComponent<Transform>(m_Suzanne3).Rotate(glm::radians(45.0f * deltaTime), glm::vec3(0.0, 1.0, 0.0));
 }
 
-void Sandbox::Event()
+void Sandbox::EventCallback(Event event)
 {
-    INFO("Sandbox Event");
+    switch (event.kind) {
+        case EVENT_WINDOW_RESIZE:
+            INFO("Resized to " << event.windowWidth << "x" << event.windowHeight);
+            break;
+        case EVENT_MOUSE_PRESS:
+            INFO("Mouse pressed (button " << (int) event.mouseButton << ")");
+            break;
+        default:
+            break;
+    };
 }
 
 void Sandbox::Cleanup()
 {
-}
-
-void Sandbox::Resized(int width, int height)
-{
-    INFO("Resized to " << width << "x" << height);
 }
 
