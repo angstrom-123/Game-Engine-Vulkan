@@ -36,12 +36,8 @@
     #error "DEBUG or RELEASE must be specified"
 #endif
 
-void RenderSystem::Init(ECS& ecs, GLFWwindow *window, Config *config)
+void RenderSystem::Init(GLFWwindow *window, Config *config)
 {
-    m_Camera = ecs.CreateEntity();
-    Camera camera = Camera(glm::vec3(0.0), glm::vec2(config->windowWidth, config->windowHeight), glm::radians(60.0), 0.1, 1000.0);
-    ecs.AddComponent<Camera>(m_Camera, camera);
-
     m_Extent.width = config->windowWidth;
     m_Extent.height = config->windowHeight;
 
@@ -67,6 +63,11 @@ void RenderSystem::Init(ECS& ecs, GLFWwindow *window, Config *config)
     InitUniformBuffers();
 
     m_IsInitialized = true;
+}
+
+void RenderSystem::SetCamera(Entity camera)
+{
+    m_Camera = camera;
 }
 
 void RenderSystem::Cleanup() 

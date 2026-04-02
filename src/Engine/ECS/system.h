@@ -6,6 +6,6 @@
 
 class System {
 public:
-    Signature signature = {0};
+    Signature signature = 0;
     std::set<Entity> entities;
 };

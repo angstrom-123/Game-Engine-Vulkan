@@ -19,10 +19,11 @@ void main()
     vec3 viewDir = normalize(uniforms.viewPos.xyz - vPosition);
     vec3 halfDir = normalize(lightDir + viewDir);
 
+    float ambient = 0.3;
     float diffuse = max(dot(vNormal, lightDir), 0.0);
     float specular = pow(max(dot(vNormal, halfDir), 0.0), 16.0);
 
-    vec3 color = texture(tex, vUV).xyz * (diffuse + specular);
+    vec3 color = texture(tex, vUV).xyz * min(diffuse + specular + ambient, 1.0);
 
     outFragColor = vec4(color, 1.0);
 }

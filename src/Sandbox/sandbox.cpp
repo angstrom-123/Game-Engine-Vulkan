@@ -13,6 +13,10 @@ void Sandbox::Init()
     m_LastFrame = 0;
     m_LastTime = m_Engine->GetTime();
 
+    // Create camera control system (Camera is a default Entity) 
+    m_CameraSystem = ecs.RegisterSystem<DefaultCameraSystem>();
+    ecs.SetSystemSignature<DefaultCameraSystem>(m_CameraSystem->GetSignature(ecs));
+
     // Create the materials (default shaders)
     Material defaultMaterial, checkerMaterial;
     m_Engine->CreateMaterial(defaultMaterial);
@@ -54,6 +58,9 @@ void Sandbox::Frame(double deltaTime)
     ecs.GetComponent<Transform>(m_Suzanne1).Rotate(glm::radians(45.0f * deltaTime), glm::vec3(0.0, 1.0, 0.0));
     ecs.GetComponent<Transform>(m_Suzanne2).Rotate(glm::radians(45.0f * deltaTime), glm::vec3(0.0, 1.0, 0.0));
     ecs.GetComponent<Transform>(m_Suzanne3).Rotate(glm::radians(45.0f * deltaTime), glm::vec3(0.0, 1.0, 0.0));
+
+    // Control the camera
+    m_CameraSystem->Update(ecs, m_Engine->GetKeysDown(), m_Engine->GetFrameMouseDelta(), deltaTime);
 }
 
 void Sandbox::EventCallback(Event event)

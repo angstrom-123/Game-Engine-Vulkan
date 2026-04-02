@@ -42,6 +42,8 @@ public:
     RenderSystem *GetRenderer() { return m_RenderSystem; };
     struct GLFWwindow *GetWindow() { return m_Window; };
     size_t GetFrameNumber() { return m_RenderSystem->GetFrameNumber(); };
+    glm::vec2 GetFrameMouseDelta() { return m_EventHandler.mousePos - m_EventHandler.mousePosLastFrame; };
+    bool *GetKeysDown() { return m_EventHandler.keysDown; };
     ECS& GetECS() { return m_ecs; };
 
 private:

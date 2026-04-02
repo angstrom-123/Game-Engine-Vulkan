@@ -24,6 +24,12 @@ public:
         return e;
     }
 
+    // Note: Specifically NOT returning a reference, since we don't want the user to edit the signature directly
+    Signature GetSignature(Entity entity)
+    {
+        return m_EntityManager.GetSignature(entity);
+    }
+
     void DestroyEntity(Entity entity)
     {
         m_EntityManager.DestroyEntity(entity);

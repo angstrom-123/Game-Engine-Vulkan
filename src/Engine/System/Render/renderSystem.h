@@ -37,7 +37,8 @@ struct UploadContext {
 
 class RenderSystem : public System {
 public:
-    void Init(ECS& ecs, struct GLFWwindow *window, Config *config);
+    void Init(struct GLFWwindow *window, Config *config);
+    void SetCamera(Entity camera);
     void Cleanup();
     void Draw(ECS& ecs);
     void RequestResize();
@@ -45,7 +46,7 @@ public:
     AllocatedImage AllocateImage(ImageData& imageData);
     void CreateMaterial(const MaterialInfo *info, Material& material);
 
-    Signature GetSignature(ECS *ecs) { return (Signature) { ecs->GetBit<Transform>() | ecs->GetBit<Mesh>() | ecs->GetBit<Material>() }; };
+    Signature GetSignature(ECS& ecs) { return ecs.GetBit<Transform>() | ecs.GetBit<Mesh>() | ecs.GetBit<Material>(); };
     size_t GetFrameNumber() { return m_FrameNum; };
 
 private:

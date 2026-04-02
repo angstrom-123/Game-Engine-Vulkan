@@ -43,13 +43,20 @@ Engine::Engine(App *app, Config *config)
 
     // Default Systems
     m_RenderSystem = m_ecs.RegisterSystem<RenderSystem>();
-    m_ecs.SetSystemSignature<RenderSystem>(m_RenderSystem->GetSignature(&m_ecs));
-    m_RenderSystem->Init(m_ecs, m_Window, config);
+    m_ecs.SetSystemSignature<RenderSystem>(m_RenderSystem->GetSignature(m_ecs));
+    m_RenderSystem->Init(m_Window, config);
 
     // App
     m_App = app;
     m_App->SetEnginePointer(this);
     app->Init();
+
+    // Default Entities + Connection to default systems
+    // NOTE: App is inited before this so that any systems created there pick up on these components
+    Entity camera = m_ecs.CreateEntity();
+    m_ecs.AddComponent<Camera>(camera, Camera(glm::vec3(0.0), glm::vec2(config->windowWidth, config->windowHeight), glm::radians(60.0), 0.1, 1000.0));
+    m_RenderSystem->SetCamera(camera);
+
 }
 
 void Engine::Run()

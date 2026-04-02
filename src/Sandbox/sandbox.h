@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Engine/engine.h"
+#include "System/defaultCameraSystem.h"
 
 class Sandbox: public App {
 public: 
@@ -15,4 +16,5 @@ private:
     Entity m_Suzanne3;
     double m_LastTime;
     size_t m_LastFrame;
+    DefaultCameraSystem *m_CameraSystem;
 };
