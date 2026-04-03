@@ -111,7 +111,9 @@ void EventHandler::OnMousePress(GLFWwindow *window, int button, int action, int 
 
     handler->ForwardEvent((Event) {
         .kind = (action == GLFW_PRESS) ? EVENT_MOUSE_PRESS : EVENT_MOUSE_RELEASE,
-        .mouseButton = static_cast<uint8_t>(button)
+        .mouseX = handler->mousePos.x,
+        .mouseY = handler->mousePos.y,
+        .mouseButton = static_cast<uint8_t>(button),
     });
 }
 
@@ -121,6 +123,8 @@ void EventHandler::OnMouseScroll(GLFWwindow *window, double xOffset, double yOff
 
     handler->ForwardEvent((Event) {
         .kind = EVENT_MOUSE_SCROLL,
+        .mouseX = handler->mousePos.x,
+        .mouseY = handler->mousePos.y,
         .scrollX = static_cast<float>(xOffset),
         .scrollY = static_cast<float>(yOffset)
     });

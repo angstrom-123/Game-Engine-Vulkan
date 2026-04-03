@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Engine/engine.h"
-#include "System/defaultCameraSystem.h"
+#include <Engine/engine.h>
+#include <Engine/System/defaultCameraSystem.h>
 
 class Sandbox: public App {
 public: 
@@ -11,9 +11,10 @@ public:
     void Cleanup() override;
 
 private:
-    Entity m_Suzanne1;
-    Entity m_Suzanne2;
-    Entity m_Suzanne3;
+    Entity m_Parent;
+    std::vector<Entity> m_SponzaParts;
+    Entity m_Monkey;
+
     double m_LastTime;
     size_t m_LastFrame;
     DefaultCameraSystem *m_CameraSystem;

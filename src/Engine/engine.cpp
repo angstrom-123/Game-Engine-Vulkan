@@ -2,6 +2,7 @@
 #include "Util/objLoader.h"
 #include "Util/imageLoader.h"
 #include "Component/camera.h"
+#include <ranges>
 
 #define VMA_IMPLEMENTATION
 #include <VulkanMemoryAllocator/vk_mem_alloc.h>
@@ -35,7 +36,7 @@ Engine::Engine(App *app, Config *config)
     // ECS
     m_ecs = ECS();
 
-    // Default Components
+    // Register Components
     m_ecs.RegisterComponent<Transform>();
     m_ecs.RegisterComponent<Mesh>();
     m_ecs.RegisterComponent<Camera>();
@@ -45,6 +46,9 @@ Engine::Engine(App *app, Config *config)
     m_RenderSystem = m_ecs.RegisterSystem<RenderSystem>();
     m_ecs.SetSystemSignature<RenderSystem>(m_RenderSystem->GetSignature(m_ecs));
     m_RenderSystem->Init(m_Window, config);
+
+    // Instantiate Default Components
+    CreateMaterial(m_DefaultMaterial);
 
     // App
     m_App = app;
@@ -124,6 +128,7 @@ void Engine::CreateMaterial(const fs::path& texturePath, Material& material)
 
 void Engine::CreateMaterial(const fs::path& texturePath, const fs::path& vertexShaderPath, const fs::path& fragmentShaderPath, Material& material)
 {
+    INFO("Loading path: " << texturePath);
     ImageData texture = ImageData(texturePath);
     AllocatedImage textureImage = m_RenderSystem->AllocateImage(texture);
     MaterialInfo materialInfo = {
@@ -131,37 +136,66 @@ void Engine::CreateMaterial(const fs::path& texturePath, const fs::path& vertexS
         .fragmentShader = fragmentShaderPath,
         .textureImage = textureImage
     };
-    m_RenderSystem->CreateMaterial(&materialInfo, material);
+    m_RenderSystem->CreateMaterial(materialInfo, material);
 }
 
-void Engine::CreateMesh(const std::filesystem::path& path, Mesh& mesh)
+void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results)
 {
-    mesh.allocated = false;
-    mesh.vertexCount = 0;
+    // Materials can be created from this by the engine 
+    // mtl file contains good things to have in the material struct.
+    // Perhaps I need another material data component?
+    //      - this one could be per-mesh
+    //      - automatically added with the material component? (defaulted out)
+    //      - required by renderer
+    //      - if meshes are only loaded with this api then user doesn't need to 
+    //        worry about adding any components themself,
+    //        they just provide the path to the stuff and its created automatically
 
-    OBJData *meshData = new OBJData(path);
-    if (meshData->corrupted) {
-        delete meshData;
-        ERROR("Failed to load mesh: " << path);
+    double startTime = GetTime();
+
+    ObjLoader loader;
+    std::vector<Shape> shapes;
+    std::unordered_map<std::string, MtlData> materialData;
+    if (!loader.LoadObj(objPath, mtlPath, materialData, shapes)) {
+        ERROR("Failed to load mesh: " << objPath);
         return;
     }
 
-    // TODO: Optimise vertex size
-    mesh.vertices = new Vertex[meshData->faces.size() * 3];
-    
-    for (OBJFaceIndices fi : meshData->faces) {
-        for (size_t i = 0; i < 3; i++) {
-            glm::ivec3 set = fi[i];
-            Vertex v = {
-                .position = meshData->vertices[OBJFaceIndices::GetVertexIndex(set)],
-                .normal = meshData->normals[OBJFaceIndices::GetNormalIndex(set)],
-                .uv = meshData->textureCoords[OBJFaceIndices::GetTexCoordIndex(set)],
-            };
-            mesh.vertices[mesh.vertexCount++] = v;
+    std::unordered_map<std::string, Material> materials;
+
+    for (const auto& [name, data] : materialData) {
+        if (data.diffuseTexture.empty()) {
+            materials.insert({name, m_DefaultMaterial});
+        } else {
+            std::string texPath("src/Sandbox/Resource/Model/");
+            texPath.append(data.diffuseTexture);
+
+            Material mat;
+            CreateMaterial(texPath, mat);
+            materials.insert({name, mat});
         }
     }
 
-    delete meshData;
+    // TODO: Optimise vertex size
+    //       SNORM for the normals and uvs
+    results.reserve(shapes.size());
+    for (const Shape& s : shapes) {
+        Entity e = m_ecs.CreateEntity();
 
-    m_RenderSystem->AllocateMesh(mesh);
+        Mesh mesh;
+        mesh.allocated = false;
+        mesh.vertexCount = s.indices.size();
+        mesh.vertices = new Vertex[mesh.vertexCount];
+        for (const auto& [index, triple] : s.indices | std::ranges::views::enumerate) {
+            mesh.vertices[index] = loader.GetVertex(triple);
+        }
+        m_RenderSystem->AllocateMesh(mesh);
+        m_ecs.AddComponent<Mesh>(e, mesh);
+        results.push_back(e);
+
+        Material mat = materials[s.materialName];
+        m_ecs.AddComponent<Material>(e, mat);
+    }
+
+    INFO("Load took " << GetTime() - startTime << "s");
 }

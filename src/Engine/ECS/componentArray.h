@@ -21,8 +21,8 @@ public:
 
     void Insert(Entity entity, T component)
     {
-        VERIFY(entity != INVALID_HANDLE);
-        VERIFY(m_EntityToIndex.find(entity) == m_EntityToIndex.end() && "Adding component to same entity twice");
+        ASSERT(entity != INVALID_HANDLE);
+        ASSERT(m_EntityToIndex.find(entity) == m_EntityToIndex.end() && "Adding component to same entity twice");
 
         m_Components[m_Count] = component;
         m_EntityToIndex[entity] = m_Count;
@@ -32,8 +32,8 @@ public:
 
     void Remove(Entity entity)
     {
-        VERIFY(entity != INVALID_HANDLE);
-        VERIFY(m_EntityToIndex.find(entity) != m_EntityToIndex.end() && "Removing component from entity without one");
+        ASSERT(entity != INVALID_HANDLE);
+        ASSERT(m_EntityToIndex.find(entity) != m_EntityToIndex.end() && "Removing component from entity without one");
 
         int32_t removedIndex = m_EntityToIndex[entity];
         m_Components[removedIndex] = m_Components[m_Count - 1];
@@ -47,8 +47,8 @@ public:
 
     T& Get(Entity entity)
     {
-        VERIFY(entity != INVALID_HANDLE);
-        VERIFY(m_EntityToIndex.find(entity) != m_EntityToIndex.end() && "Getting component from entity without one");
+        ASSERT(entity != INVALID_HANDLE);
+        ASSERT(m_EntityToIndex.find(entity) != m_EntityToIndex.end() && "Getting component from entity without one");
 
         return m_Components[m_EntityToIndex[entity]];
     }

@@ -3,39 +3,56 @@
 #include <glm/common.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include "Util/logger.h"
+#include "ECS/ecsTypes.h"
+
+#define X_AXIS glm::vec3(1.0, 0.0, 0.0)
+#define Y_AXIS glm::vec3(0.0, 1.0, 0.0)
+#define Z_AXIS glm::vec3(0.0, 0.0, -1.0)
 
 struct Transform {
     glm::vec3 translation;
     glm::quat rotation;
     glm::vec3 scale;
+    Entity inherit;
 
     Transform()
     {
         translation = glm::vec3(0.0);
         rotation = glm::quat(1.0, 0.0, 0.0, 0.0);
         scale = glm::vec3(1.0);
+        inherit = INVALID_HANDLE;
     }
 
-    void Rotate(float thetaRadians, const glm::vec3& axis)
+    void InheritFrom(Entity parent)
+    {
+        inherit = parent;
+    }
+
+    Transform& Rotate(float thetaRadians, const glm::vec3& axis)
     {
         glm::quat q = glm::angleAxis(thetaRadians, glm::normalize(axis));
         rotation = q * rotation;
+        return *this;
     }
 
-    void Log()
+    Transform& Scale(float scaleFactor)
     {
-        INFO("Transform: " << std::endl <<
-             "    translation: " << translation.x << ", " << translation.y << ", " << translation.z << std::endl <<
-             "    rotation   : " << rotation.x << ", " << rotation.y << ", " << rotation.z << ", " << rotation.w << std::endl <<
-             "    scale      : " << scale.x << ", " << scale.y << ", " << scale.z);
+        scale = glm::vec3(scaleFactor);
+        return *this;
     }
 
-    static glm::mat4x4 ToModelMatrix(Transform& t)
+    Transform& Translate(float x, float y, float z)
+    {
+        translation = glm::vec3(x, y, z);
+        return *this;
+    }
+
+    glm::mat4x4 ModelMatrix()
     {
         glm::mat4x4 model = glm::mat4x4(1.0);
-        model = glm::translate(model, t.translation);
-        model = model * glm::mat4x4(t.rotation);
-        model = glm::scale(model, t.scale);
+        model = glm::translate(model, translation);
+        model = model * glm::mat4x4(rotation);
+        model = glm::scale(model, scale);
         return model;
     }
 };

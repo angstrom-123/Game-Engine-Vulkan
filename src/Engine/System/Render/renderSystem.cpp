@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <ranges>
 
@@ -144,13 +145,13 @@ void RenderSystem::Draw(ECS& ecs)
 
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, material.pipeline);
 
-        glm::mat4x4 model = Transform::ToModelMatrix(transform);
+        glm::mat4x4 model = transform.ModelMatrix();
+        if (transform.inherit != INVALID_HANDLE) {
+            model *= ecs.GetComponent<Transform>(transform.inherit).ModelMatrix();
+        }
         material.defaultConstants.mvp = cam.projection * cam.view * model;
         material.defaultConstants.model = model;
         vkCmdPushConstants(frame.commandBuffer, material.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants), &material.defaultConstants.mvp);
-
-        // TODO: find out how to customize the uniforms from the material creation 
-        //      - Need to figure out a good api for this.
 
         auto Align = [&](size_t size) {
             return (size + m_MinimumUniformOffset - 1) & ~(m_MinimumUniformOffset - 1);
@@ -169,7 +170,7 @@ void RenderSystem::Draw(ECS& ecs)
         };
         FragmentUniforms fragmentUniforms = {
             .lightPos = glm::vec4(0.0),
-            .viewPos = glm::vec4(camTransform.translation, 0.0)
+            .viewPos = glm::vec4(camTransform.translation, 0.0),
         };
         memcpy(static_cast<char *>(frame.uniformBuffer.data) + vertexOffset, &vertexUniforms, sizeof(VertexUniforms));
         memcpy(static_cast<char *>(frame.uniformBuffer.data) + fragmentOffset, &fragmentUniforms, sizeof(FragmentUniforms));
@@ -361,10 +362,10 @@ AllocatedImage RenderSystem::AllocateImage(ImageData& imageData)
     return image;
 }
 
-void RenderSystem::CreateMaterial(const MaterialInfo *info, Material& mat)
+void RenderSystem::CreateMaterial(const MaterialInfo& info, Material& mat)
 {
     // Texture
-    mat.textureImage = info->textureImage;
+    mat.textureImage = info.textureImage;
     VkImageViewCreateInfo viewInfo = vkinit::ImageViewCreateInfo(VK_FORMAT_R8G8B8A8_SRGB, mat.textureImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
     VK_CHECK(vkCreateImageView(m_Device, &viewInfo, nullptr, &mat.textureView));
 
@@ -470,8 +471,8 @@ void RenderSystem::CreateMaterial(const MaterialInfo *info, Material& mat)
            .SetPipelineLayout(mat.pipelineLayout);
 
     VkShaderModule vert, frag;
-    LoadShaderModule(info->vertexShader, &vert);
-    LoadShaderModule(info->fragmentShader, &frag);
+    LoadShaderModule(info.vertexShader, &vert);
+    LoadShaderModule(info.fragmentShader, &frag);
 
     builder.MakeShader(vkinit::ShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vert),
                        vkinit::ShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, frag));

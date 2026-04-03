@@ -6,12 +6,16 @@
 #include <GLFW/glfw3.h>
 #include <algorithm>
 
+static constexpr float MAX_PITCH = 89.9;
+
+void DefaultCameraSystem::Init(float sensitivity, float speed)
+{
+    m_Sensitivity = sensitivity;
+    m_Speed = speed;
+}
+
 void DefaultCameraSystem::Update(ECS& ecs, bool *keysDown, glm::vec2 mouseDelta, double dt)
 {
-    constexpr float MOVE_SPEED = 4.0;
-    constexpr float MOUSE_SENSITIVITY = 0.04;
-    constexpr float MAX_PITCH = 89.9;
-
     for (Entity e : entities) {
         Camera& camera = ecs.GetComponent<Camera>(e);
         Transform& transform = ecs.GetComponent<Transform>(e);
@@ -33,11 +37,11 @@ void DefaultCameraSystem::Update(ECS& ecs, bool *keysDown, glm::vec2 mouseDelta,
         if (move == glm::vec3(0.0) && mouseDelta == glm::vec2(0.0)) 
             return;
 
-        transform.translation += move * MOVE_SPEED * static_cast<float>(dt);
+        transform.translation += move * m_Speed * static_cast<float>(dt);
 
         // Mouse input
-        camera.pitch += -mouseDelta.y * MOUSE_SENSITIVITY;
-        camera.yaw += -mouseDelta.x * MOUSE_SENSITIVITY;
+        camera.pitch += -mouseDelta.y * m_Sensitivity;
+        camera.yaw += -mouseDelta.x * m_Sensitivity;
 
         camera.pitch = std::clamp(camera.pitch, -MAX_PITCH, MAX_PITCH);
 

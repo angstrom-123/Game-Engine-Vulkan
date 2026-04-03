@@ -1,159 +1,276 @@
 #include "objLoader.h"
-#include "logger.h"
 
+#include "Util/logger.h"
+#include "Util/myAssert.h"
+
+#include <charconv>
 #include <cmath>
-#include <cstring>
 #include <fstream>
-#include <ranges>
+#include <sstream>
 #include <string>
 
-glm::ivec3& OBJFaceIndices::operator[](int index)
+constexpr uint32_t HashString(const char *str) 
 {
-    if (index == 0) return this->x;
-    else if (index == 1) return this->y;
-    else if (index == 2) return this->z;
-    else {
-        ERROR("Indexing ObjFace out of bounds");
-        abort();
+    uint32_t hash = 5138;
+    while (*str) {
+        hash = ((hash << 5) * hash) + *str;
+        str++;
     }
-};
+    return hash;
+}
 
-OBJData::OBJData(const std::filesystem::path& filePath)
+constexpr uint32_t HASH_V = HashString("v");
+constexpr uint32_t HASH_VT = HashString("vt");
+constexpr uint32_t HASH_VN = HashString("vn");
+constexpr uint32_t HASH_F = HashString("f");
+constexpr uint32_t HASH_O = HashString("o");
+constexpr uint32_t HASH_G = HashString("g");
+constexpr uint32_t HASH_USEMTL = HashString("usemtl");
+constexpr uint32_t HASH_NEWMTL = HashString("newmtl");
+constexpr uint32_t HASH_KA = HashString("Ka");
+constexpr uint32_t HASH_KD = HashString("Kd");
+constexpr uint32_t HASH_KS = HashString("Ks");
+constexpr uint32_t HASH_NS = HashString("Ns");
+constexpr uint32_t HASH_NI = HashString("Ni");
+constexpr uint32_t HASH_D = HashString("d");
+constexpr uint32_t HASH_MAP_D = HashString("map_d");
+constexpr uint32_t HASH_MAP_DISP = HashString("map_Disp");
+constexpr uint32_t HASH_MAP_KA = HashString("map_Ka");
+constexpr uint32_t HASH_MAP_KD = HashString("map_Kd");
+
+bool ObjLoader::LoadObj(const std::filesystem::path& objFilePath, const std::filesystem::path& mtlFilePath, std::unordered_map<std::string, MtlData>& materialData, std::vector<Shape>& results)
 {
-    INFO("Loading OBJ file: " << filePath);
+    std::ios::sync_with_stdio(false);
 
-    std::ifstream file(filePath);
+    std::istringstream iss;
     std::string line;
-    while (std::getline(file, line)) {
-        if (!ParseLine(line)) {
-            corrupted = true;
-            file.close();
-            return;
-        }
-    }
-    file.close();
-}
 
-bool OBJData::ParseLine(const std::string& line)
-{
-    std::vector<std::string_view> tokens;
+    constexpr size_t BUFFER_SIZE = 1024 * 1024;
+    char buffer[BUFFER_SIZE];
 
-    size_t i = 0;
-    for (size_t j = 0; j < line.size(); j++) {
-        if (j == line.size() - 1) {
-            tokens.push_back(std::string_view(line).substr(i, j - i + 1));
-            i = j + 1;
-        } else if (line[j] == ' ' || line[j] == '/') {
-            tokens.push_back(std::string_view(line).substr(i, j - i));
-            i = j + 1;
-        }
+    std::ifstream mtlFile(mtlFilePath, std::ios::in | std::ios::binary);
+    mtlFile.rdbuf()->pubsetbuf(buffer, BUFFER_SIZE);
+    if (!mtlFile.is_open()) {
+        ERROR("Failed to open mtl file: " << mtlFilePath);
+        return false;
     }
 
-    if (tokens[0] == "vt") {
-        if (tokens.size() != 3) return false;
-
-        glm::vec2 tmp;
-        for (auto const [index, token] : tokens | std::views::drop(1) | std::ranges::views::enumerate) {
-            if (!ReadFloat(token, &tmp[index])) return false;
-        }
-        textureCoords.push_back(tmp);
-    } else if (tokens[0] == "vn") {
-        if (tokens.size() != 4) return false;
-
-        glm::vec3 tmp;
-        for (auto const [index, token] : tokens | std::views::drop(1) | std::ranges::views::enumerate) {
-            if (!ReadFloat(token, &tmp[index])) return false;
-        }
-        normals.push_back(tmp);
-    } else if (tokens[0] == "v") {
-        if (tokens.size() != 4) return false;
-
-        glm::vec3 tmp;
-        for (auto const [index, token] : tokens | std::views::drop(1) | std::ranges::views::enumerate) {
-            if (!ReadFloat(token, &tmp[index])) return false;
-        }
-        vertices.push_back(tmp);
-    } else if (tokens[0] == "f") {
-        if (tokens.size() != 10) return false;
-
-        OBJFaceIndices tmp;
-        int subIndex = -1;
-        for (auto const [index, token] : tokens | std::views::drop(1) | std::ranges::views::enumerate) {
-            if (index % 3 == 0) {
-                subIndex++;
-            }
-            if (!ReadInt(token, &tmp[subIndex][index % 3])) return false;
-        }
-        faces.push_back(tmp);
+    MtlData material;
+    while (std::getline(mtlFile, line)) {
+        if (line.empty()) continue;
+        ProcessLineMtl(iss, line, &material, materialData);
     }
+
+    mtlFile.close();
+
+    if (!material.name.empty()) {
+        materialData.insert({std::string(material.name), material});
+    }
+
+    std::ifstream objFile(objFilePath, std::ios::in | std::ios::binary);
+    objFile.rdbuf()->pubsetbuf(buffer, BUFFER_SIZE);
+    if (!objFile.is_open()) {
+        ERROR("Failed to open obj file: " << objFilePath);
+        return false;
+    }
+
+    objFile.seekg(std::ios::end);
+
+    size_t fileSize = objFile.tellg();
+    size_t reserveSize = fileSize / 3; // Overallocation is fine, I want to avoid resizing
+    m_Positions.reserve(reserveSize);
+    m_Normals.reserve(reserveSize);
+    m_UVs.reserve(reserveSize);
+
+    objFile.seekg(std::ios::beg);
+
+    Shape shape = {};
+    line = std::string();
+    while (std::getline(objFile, line)) {
+        if (line.empty()) continue;
+        ProcessLineObj(iss, line, &shape, materialData, results);
+    }
+
+    objFile.close();
+
+    if (!shape.indices.empty()) {
+        results.push_back(shape);
+    }
+
+    m_Positions.shrink_to_fit();
+    m_Normals.shrink_to_fit();
+    m_UVs.shrink_to_fit();
 
     return true;
 }
 
-// strtol won't work for me, because I need the function to operate on a string_view
-bool OBJData::ReadInt(std::string_view view, int32_t *res)
+Vertex ObjLoader::GetVertex(IndexTriple index)
 {
-    bool negative = false;
-    float tmp = 0.0;
-    int32_t mul = std::pow(10, view.size() - 1);
-    for (const auto [i, c] : view | std::views::enumerate) {
-        if (c == '-') {
-            if (i == 0) {
-                negative = true; 
-                continue;
-            }
-            else return false;
-        }
-
-        int digit = c - '0';
-        if (digit < 0 || digit > 9) return false;
-
-        tmp += digit * mul;
-        mul /= 10;
-    }
-    if (negative) tmp /= -10;
-    *res = tmp;
-    return true;
+    return (Vertex) {
+        .position = m_Positions[index.positionIndex - 1],
+        .normal = m_Normals[index.normalIndex - 1],
+        .uv = m_UVs[index.uvIndex - 1]
+    };
 }
 
-// strtof won't work for me, because I need the function to operate on a string_view
-bool OBJData::ReadFloat(std::string_view view, float *res)
+void ObjLoader::ProcessLineMtl(std::istringstream& iss, const std::string& line, MtlData *mtl, std::unordered_map<std::string, MtlData>& results)
 {
-    float mul = -1.0;
-    for (const auto [i, c] : view | std::views::enumerate) {
-        if (c == '.') {
-            mul = std::pow(10.0f, static_cast<float>(i - 1));
+    iss.clear();
+    iss.str(line);
+    std::string tokenString;
+    uint32_t token;
+
+    if (!(iss >> tokenString)) return;
+    token = HashString(tokenString.data());
+    switch (token) {
+        case HASH_NEWMTL: {
+            std::string materialName = {};
+            if (iss >> materialName) {
+                if (!mtl->name.empty()) {
+                    results.insert({mtl->name, *mtl});
+                    *mtl = (MtlData) {};
+                }
+                mtl->name = materialName;
+            } else {
+                ERROR("Failed to read material name");
+                abort();
+            }
+            break;
+        } 
+        case HASH_KA: 
+            if (!(iss >> mtl->ambientColor[0] >> mtl->ambientColor[1] >> mtl->ambientColor[2])) {
+                ERROR("Failed to read ambient color");
+                abort();
+            }
+            break;
+        case HASH_KD: 
+            if (!(iss >> mtl->diffuseColor[0] >> mtl->diffuseColor[1] >> mtl->diffuseColor[2])) {
+                ERROR("Failed to read diffuse color");
+                abort();
+            }
+            break;
+        case HASH_KS:
+            if (!(iss >> mtl->specularColor[0] >> mtl->specularColor[1] >> mtl->specularColor[2])) {
+                ERROR("Failed to read diffuse color");
+                abort();
+            }
+            break;
+        case HASH_NS: 
+            if (!(iss >> mtl->specularExponent)) {
+                ERROR("Failed to read specular exponent value");
+                abort();
+            }
+            break;
+        case HASH_NI: 
+            if (!(iss >> mtl->refractiveIndex)) {
+                ERROR("Failed to read refractive index value");
+                abort();
+            }
+            break;
+        case HASH_D:
+            if (!(iss >> mtl->dissolve)) {
+                ERROR("Failed to read dissolve value");
+                abort();
+            }
+            break;
+        case HASH_MAP_D:
+            if (!(iss >> mtl->alphaTexture)) {
+                ERROR("Failed to read alpha texture path");
+                abort();
+            }
+            break;
+        case HASH_MAP_DISP:
+            if (!(iss >> mtl->displacementTexture)) {
+                ERROR("Failed to read displacement texture path");
+                abort();
+            }
+            break;
+        case HASH_MAP_KA:
+            if (!(iss >> mtl->ambientTexture)) {
+                ERROR("Failed to read ambient texture path");
+                abort();
+            }
+            break;
+        case HASH_MAP_KD: 
+            if (!(iss >> mtl->diffuseTexture)) {
+                ERROR("Failed to read diffuse texture path");
+                abort();
+            }
+            break;
+    };
+}
+
+void ObjLoader::ProcessLineObj(std::istringstream& iss, const std::string& line, Shape *shape, std::unordered_map<std::string, MtlData>& materials, std::vector<Shape>& results)
+{
+    iss.clear();
+    iss.str(line);
+    std::string tokenString;
+    uint32_t token;
+
+    if (!(iss >> tokenString)) return;
+    token = HashString(tokenString.data());
+    switch (token) {
+        case HASH_V: {
+            glm::vec3 position = {};
+            if (!(iss >> position[0] >> position[1] >> position[2])) {
+                ERROR("Failed to read vertex position");
+                abort();
+            }
+            m_Positions.push_back(position);
             break;
         }
-    }
-
-    // No decimal point
-    if (mul < 0.0) {
-        int32_t tmp;
-        if (!ReadInt(view, &tmp)) return false;
-        *res = static_cast<float>(tmp);
-        return true;
-    }
-
-    bool negative = false;
-    float tmp = 0.0;
-    for (const auto [i, c] : view | std::views::enumerate) {
-        if (c == '.') continue;
-        if (c == '-') {
-            if (i == 0) {
-                negative = true; 
-                continue;
+        case HASH_VT: {
+            glm::vec2 uv = {};
+            if (!(iss >> uv[0] >> uv[1])) {
+                ERROR("Failed to read vertex texture coordinate");
+                abort();
             }
-            else return false;
+            m_UVs.push_back(uv);
+            break;
         }
-
-        int digit = c - '0';
-        if (digit < 0 || digit > 9) return false;
-
-        tmp += static_cast<float>(digit) * mul;
-        mul /= 10.0;
-    }
-    if (negative) tmp *= -0.1;
-    *res = tmp;
-    return true;
+        case HASH_VN: {
+            glm::vec3 normal = {}; 
+            if (!(iss >> normal[0] >> normal[1] >> normal[2])) {
+                ERROR("Failed to read vertex normal");
+                abort();
+            }
+            m_Normals.push_back(normal);
+            break;
+        }
+        case HASH_USEMTL: {
+            std::string materialName = {};
+            if (!(iss >> materialName)) {
+                ERROR("Failed to read material name");
+                abort();
+            }
+            ASSERT(materials.find(materialName) != materials.end() && "Invalid material");
+            shape->materialName = materialName;
+            break;
+        }
+        case HASH_O: case HASH_G: // Was just HASH_O
+            if (!shape->indices.empty()) {
+                results.push_back(*shape);
+                *shape = (Shape) {};
+            }
+            break;
+        case HASH_F:
+            IndexTriple indices = {};
+            std::string facePart = {};
+            std::string indexString = {};
+            std::istringstream vertexStream = {};
+            // Face parts are index triples separated by '/', so I use a new stream for that
+            while (iss >> facePart) {
+                size_t partIndex = 0;
+                indexString.clear();
+                vertexStream.clear();
+                vertexStream.str(facePart);
+                while (std::getline(vertexStream, indexString, '/')) {
+                    std::from_chars_result res = std::from_chars(indexString.data(), indexString.data() + indexString.size(), indices.data[partIndex]);
+                    ASSERT(res.ec == std::errc() && "Failed to read face index");
+                    partIndex++;
+                }
+                shape->indices.push_back(indices);
+            }
+            break;
+    };
 }

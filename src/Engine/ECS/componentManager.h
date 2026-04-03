@@ -11,8 +11,8 @@ public:
     template<typename T> void RegisterComponent()
     {
         std::type_index index = std::type_index(typeid(T));
-        VERIFY(m_ComponentArrays.find(index) == m_ComponentArrays.end() && "Registering component type twice");
-        VERIFY(m_CurrentBit < 64 && "Registering too many components");
+        ASSERT(m_ComponentArrays.find(index) == m_ComponentArrays.end() && "Registering component type twice");
+        ASSERT(m_CurrentBit < 64 && "Registering too many components");
 
         m_ComponentArrays.insert({index, new ComponentArray<T>()});
         m_RegisteredTypeBits.insert({index, 1 << m_CurrentBit});
@@ -22,7 +22,7 @@ public:
     template<typename T> uint64_t GetBit()
     {
         std::type_index index = std::type_index(typeid(T));
-        VERIFY(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Getting bit of unregistered component");
+        ASSERT(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Getting bit of unregistered component");
 
         return m_RegisteredTypeBits[index];
     }
@@ -30,7 +30,7 @@ public:
     template<typename T> void AddComponent(Entity entity, T component)
     {
         std::type_index index = std::type_index(typeid(T));
-        VERIFY(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Adding unregistered component");
+        ASSERT(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Adding unregistered component");
 
         ComponentArray<T> *array = (ComponentArray<T> *) m_ComponentArrays[index];
         array->Insert(entity, component);
@@ -39,7 +39,7 @@ public:
     template<typename T> void RemoveComponent(Entity entity)
     {
         std::type_index index = std::type_index(typeid(T));
-        VERIFY(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Removing unregistered component");
+        ASSERT(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Removing unregistered component");
 
         ComponentArray<T> *array = (ComponentArray<T> *) m_ComponentArrays[index];
         array->Remove(entity);
@@ -48,7 +48,7 @@ public:
     template<typename T> T& GetComponent(Entity entity)
     {
         std::type_index index = std::type_index(typeid(T));
-        VERIFY(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Getting unregistered component");
+        ASSERT(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Getting unregistered component");
 
         ComponentArray<T> *array = (ComponentArray<T> *) m_ComponentArrays[index];
         return array->Get(entity);

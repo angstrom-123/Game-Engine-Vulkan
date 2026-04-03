@@ -22,6 +22,6 @@ void main()
     gl_Position = constants.mvp * vec4(aPosition, 1.0);
 
     vPosition = vec3(constants.model * vec4(aPosition, 1.0));
-    vNormal = mat3(constants.model) * aNormal;
+    vNormal = normalize(mat3(constants.model) * aNormal);
     vUV = aUV;
 }

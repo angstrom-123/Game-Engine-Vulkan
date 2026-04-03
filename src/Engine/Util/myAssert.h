@@ -7,7 +7,7 @@
 #ifdef DEBUG 
     #define ASSERT(expr) if (!(expr)) abort()
 #elifdef RELEASE
-    #define ASSERT(expr) (void) sizeof(expr)
+    #define ASSERT(expr) (void) sizeof((expr))
 #else 
     #error "DEBUG or RELEASE must be specified"
 #endif

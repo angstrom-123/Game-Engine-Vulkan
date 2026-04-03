@@ -2,7 +2,6 @@
 
 #include <filesystem>
 
-#include "Component/mesh.h"
 #include "System/Render/renderSystem.h"
 #include "config.h"
 #include "ECS/ecs.h"
@@ -34,10 +33,7 @@ public:
     static void EventHook(Event event, void *data);
     // void Resized(int width, int height);
     double GetTime();
-    void CreateMaterial(Material& material);
-    void CreateMaterial(const fs::path& texturePath, Material& material);
-    void CreateMaterial(const fs::path& texturePath, const fs::path& vertexShaderPath, const fs::path& fragmentShaderPath, Material& material);
-    void CreateMesh(const fs::path& path, Mesh& mesh);
+    void CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results);
 
     RenderSystem *GetRenderer() { return m_RenderSystem; };
     struct GLFWwindow *GetWindow() { return m_Window; };
@@ -47,11 +43,17 @@ public:
     ECS& GetECS() { return m_ecs; };
 
 private:
+    void CreateMaterial(Material& material);
+    void CreateMaterial(const fs::path& texturePath, Material& material);
+    void CreateMaterial(const fs::path& texturePath, const fs::path& vertexShaderPath, const fs::path& fragmentShaderPath, Material& material);
+
+private:
     App *m_App;
     ECS m_ecs;
     EventHandler m_EventHandler;
     struct GLFWwindow *m_Window;
 
-    // Default entities and systems, managed by the engine
+    // Default entities, components, and systems, managed by the engine
     RenderSystem *m_RenderSystem;
+    Material m_DefaultMaterial;
 };

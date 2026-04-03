@@ -12,7 +12,7 @@ public:
     template<typename T> T *RegisterSystem()
     {
         std::type_index index = std::type_index(typeid(T));
-        VERIFY(m_Systems.find(index) == m_Systems.end() && "Registering system twice");
+        ASSERT(m_Systems.find(index) == m_Systems.end() && "Registering system twice");
 
         T *system = new T();
         m_Systems.insert({index, system});
@@ -22,7 +22,7 @@ public:
     template<typename T> void SetSignature(Signature signature)
     {
         std::type_index index = std::type_index(typeid(T));
-        VERIFY(m_Systems.find(index) != m_Systems.end() && "Setting signature of unregistered system");
+        ASSERT(m_Systems.find(index) != m_Systems.end() && "Setting signature of unregistered system");
 
         m_Systems[index]->signature = signature;
     }

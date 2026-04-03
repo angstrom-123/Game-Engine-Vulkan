@@ -44,7 +44,7 @@ public:
     void RequestResize();
     void AllocateMesh(Mesh& mesh);
     AllocatedImage AllocateImage(ImageData& imageData);
-    void CreateMaterial(const MaterialInfo *info, Material& material);
+    void CreateMaterial(const MaterialInfo& info, Material& material);
 
     Signature GetSignature(ECS& ecs) { return ecs.GetBit<Transform>() | ecs.GetBit<Mesh>() | ecs.GetBit<Material>(); };
     size_t GetFrameNumber() { return m_FrameNum; };
