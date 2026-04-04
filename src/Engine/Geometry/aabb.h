@@ -9,3 +9,13 @@ struct AABB {
     void Update(Vertex& vertex);
     glm::vec3 Centroid();
 };
+
+struct CentreExtents {
+    glm::vec3 centre;
+    glm::vec3 extents;
+
+    CentreExtents() {};
+    CentreExtents(AABB& aabb);
+    CentreExtents WorldSpace(const glm::mat4x4& model);
+};
+

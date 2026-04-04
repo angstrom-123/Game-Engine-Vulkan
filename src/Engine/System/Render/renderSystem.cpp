@@ -7,6 +7,7 @@
 #include <ranges>
 
 #include "Component/camera.h"
+#include "Geometry/frustum.h"
 #include "System/Render/initialiser.h"
 #include "System/Render/pipeline.h"
 #include "System/Render/renderTypes.h"
@@ -128,22 +129,31 @@ void RenderSystem::Draw(ECS& ecs)
     Transform& camTransform = ecs.GetComponent<Transform>(m_Camera);
 
     glm::mat4 vp = cam.projection * cam.view;
+    Frustum camFrustum = Frustum(vp);
 
     for (Entity e : entities) {
         Mesh& mesh = ecs.GetComponent<Mesh>(e);
-        Material& material = ecs.GetComponent<Material>(e);
         Transform& transform = ecs.GetComponent<Transform>(e);
-
-        ASSERT(mesh.allocated && "Drawing unallocated mesh");
-
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, material.pipeline);
 
         glm::mat4x4 model = transform.ModelMatrix();
         if (transform.inherit != INVALID_HANDLE) {
-            model *= ecs.GetComponent<Transform>(transform.inherit).ModelMatrix();
+            model = ecs.GetComponent<Transform>(transform.inherit).ModelMatrix() * model;
         }
+
+        // Frustum culling
+        CentreExtents centreExtents = CentreExtents(mesh.bounds);
+        if (!camFrustum.Intersects(centreExtents.WorldSpace(model))) {
+            continue; 
+        }
+
+        ASSERT(mesh.allocated && "Drawing unallocated mesh");
+
+        Material& material = ecs.GetComponent<Material>(e);
         material.defaultConstants.mvp = vp * model;
         material.defaultConstants.model = model;
+
+        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, material.pipeline);
+
         vkCmdPushConstants(frame.commandBuffer, material.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants), &material.defaultConstants.mvp);
 
         uint32_t vertexOffset = frame.descriptorOffset;
