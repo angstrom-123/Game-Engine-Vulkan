@@ -41,20 +41,10 @@ void RenderSystem::Init(GLFWwindow *window, Config *config)
 {
     m_Extent.width = config->windowWidth;
     m_Extent.height = config->windowHeight;
+    m_PresentMode = config->vsync ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
 
-    switch (config->syncStrategy) {
-        case SYNC_STRATEGY_UNCAPPED: 
-            m_PresentMode = VK_PRESENT_MODE_MAILBOX_KHR; 
-            break;
-        case SYNC_STRATEGY_VSYNC: 
-            m_PresentMode = VK_PRESENT_MODE_FIFO_KHR; 
-            break;
-        default: 
-            ERROR("Invalid sync strategy: " << config->syncStrategy); 
-            abort();
-    };
-    
     InitVulkan(window);
+    InitMSAA(config->msaaSamples);
     InitSwapchain();
     InitCommands();
     InitDefaultRenderPass();
@@ -124,10 +114,11 @@ void RenderSystem::Draw(ECS& ecs)
     VK_CHECK(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo));
 
     VkClearValue colorClear = { .color = {{ 0.5, 0.7, 1.0, 1.0 }} };
+    VkClearValue resolveClear = { .color = {{ 0.0, 0.0, 0.0, 0.0 }} };
     VkClearValue depthClear = { .depthStencil = { .depth = 1.0f } };
-    VkClearValue clearValues[2] = { colorClear, depthClear };
+    VkClearValue clearValues[3] = { colorClear, resolveClear, depthClear };
 
-    VkRenderPassBeginInfo passInfo = vkinit::RenderPassBeginInfo(m_RenderPass, image.framebuffer, &clearValues[0], m_Extent);
+    VkRenderPassBeginInfo passInfo = vkinit::RenderPassBeginInfo(m_RenderPass, image.framebuffer, &clearValues[0], 3, m_Extent);
     vkCmdBeginRenderPass(frame.commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
     
     vkCmdSetViewport(frame.commandBuffer, 0, 1, &m_Viewport);
@@ -136,10 +127,12 @@ void RenderSystem::Draw(ECS& ecs)
     Camera& cam = ecs.GetComponent<Camera>(m_Camera);
     Transform& camTransform = ecs.GetComponent<Transform>(m_Camera);
 
+    glm::mat4 vp = cam.projection * cam.view;
+
     for (Entity e : entities) {
         Mesh& mesh = ecs.GetComponent<Mesh>(e);
-        Transform& transform = ecs.GetComponent<Transform>(e);
         Material& material = ecs.GetComponent<Material>(e);
+        Transform& transform = ecs.GetComponent<Transform>(e);
 
         ASSERT(mesh.allocated && "Drawing unallocated mesh");
 
@@ -149,19 +142,15 @@ void RenderSystem::Draw(ECS& ecs)
         if (transform.inherit != INVALID_HANDLE) {
             model *= ecs.GetComponent<Transform>(transform.inherit).ModelMatrix();
         }
-        material.defaultConstants.mvp = cam.projection * cam.view * model;
+        material.defaultConstants.mvp = vp * model;
         material.defaultConstants.model = model;
         vkCmdPushConstants(frame.commandBuffer, material.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants), &material.defaultConstants.mvp);
-
-        auto Align = [&](size_t size) {
-            return (size + m_MinimumUniformOffset - 1) & ~(m_MinimumUniformOffset - 1);
-        };
 
         uint32_t vertexOffset = frame.descriptorOffset;
         frame.descriptorOffset += Align(sizeof(VertexUniforms));
 
         uint32_t fragmentOffset = frame.descriptorOffset;
-        frame.descriptorOffset += Align(sizeof(FragmentUniforms));
+         frame.descriptorOffset += Align(sizeof(FragmentUniforms));
 
         ASSERT(frame.descriptorOffset <= MAX_UNIFORM_BUFFER_SIZE && "Uniform buffer overflow");
 
@@ -366,6 +355,7 @@ void RenderSystem::CreateMaterial(const MaterialInfo& info, Material& mat)
 {
     // Texture
     mat.textureImage = info.textureImage;
+    mat.hasTransparency = info.hasTransparency;
     VkImageViewCreateInfo viewInfo = vkinit::ImageViewCreateInfo(VK_FORMAT_R8G8B8A8_SRGB, mat.textureImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
     VK_CHECK(vkCreateImageView(m_Device, &viewInfo, nullptr, &mat.textureView));
 
@@ -465,7 +455,7 @@ void RenderSystem::CreateMaterial(const MaterialInfo& info, Material& mat)
     builder.SetVertexInput(vkinit::VertexInputStateCreateInfo(&inputDesc.bindings, &inputDesc.attributes))
            .SetInputAssembly(vkinit::InputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
            .SetRasterizer(vkinit::RasterizationStateCreateInfo(VK_POLYGON_MODE_FILL))
-           .SetMultisampling(vkinit::MultisampleStateCreateInfo())
+           .SetMultisampling(vkinit::MultisampleStateCreateInfo(m_MSAASamples, info.hasTransparency))
            .SetColorBlend(vkinit::ColorBlendAttachmentState())
            .SetDepthStencil(vkinit::DepthStencilStateCreateInfo(true, true, VK_COMPARE_OP_LESS_OR_EQUAL))
            .SetPipelineLayout(mat.pipelineLayout);
@@ -513,6 +503,8 @@ void RenderSystem::Resize(ECS& ecs)
         vkDestroyFramebuffer(m_Device, image.framebuffer, nullptr);
         vkDestroyImageView(m_Device, image.depthView, nullptr);
         vmaDestroyImage(m_Allocator, image.depthImage.image, image.depthImage.allocation);
+        vkDestroyImageView(m_Device, image.msaaColorView, nullptr);
+        vmaDestroyImage(m_Allocator, image.msaaColorImage.image, image.msaaColorImage.allocation);
         image.flightFence = VK_NULL_HANDLE;
     }
     for (FrameData& frame : m_Frames) {
@@ -564,8 +556,12 @@ void RenderSystem::InitVulkan(GLFWwindow *window)
         WARN("Only available physical device is: " << devices.front());
     }
 
+    VkPhysicalDeviceFeatures features = {
+        .sampleRateShading = VK_TRUE
+    };
     vkb::PhysicalDevice physicalDevice = selector.set_minimum_version(1, 1)
                                                  .set_surface(m_Surface)
+                                                 .set_required_features(features)
                                                  .select()
                                                  .value();
     vkb::DeviceBuilder deviceBuilder { physicalDevice };
@@ -585,6 +581,27 @@ void RenderSystem::InitVulkan(GLFWwindow *window)
         .instance = m_Instance,
     };
     VK_CHECK(vmaCreateAllocator(&allocInfo, &m_Allocator));
+}
+
+void RenderSystem::InitMSAA(uint64_t requestedSamples)
+{
+    VkPhysicalDeviceProperties properties;
+    vkGetPhysicalDeviceProperties(m_PhysicalDevice, &properties);
+    VkSampleCountFlags available = properties.limits.framebufferColorSampleCounts & properties.limits.framebufferDepthSampleCounts;
+
+    if (available & VK_SAMPLE_COUNT_64_BIT) m_MSAASamples = VK_SAMPLE_COUNT_64_BIT;
+    else if (available & VK_SAMPLE_COUNT_32_BIT) m_MSAASamples = VK_SAMPLE_COUNT_32_BIT;
+    else if (available & VK_SAMPLE_COUNT_16_BIT) m_MSAASamples = VK_SAMPLE_COUNT_16_BIT;
+    else if (available & VK_SAMPLE_COUNT_8_BIT) m_MSAASamples = VK_SAMPLE_COUNT_8_BIT;
+    else if (available & VK_SAMPLE_COUNT_4_BIT) m_MSAASamples = VK_SAMPLE_COUNT_4_BIT;
+    else if (available & VK_SAMPLE_COUNT_2_BIT) m_MSAASamples = VK_SAMPLE_COUNT_2_BIT;
+    else m_MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+    INFO("Maximum MSAA samples: " << m_MSAASamples);
+    if (m_MSAASamples > requestedSamples) {
+        m_MSAASamples = static_cast<VkSampleCountFlagBits>(requestedSamples);
+    }
+    INFO("Using MSAA samples: " << m_MSAASamples);
 }
 
 void RenderSystem::InitSwapchain()
@@ -620,7 +637,6 @@ void RenderSystem::InitSwapchain()
         vkDestroySwapchainKHR(m_Device, m_Swapchain, nullptr); 
     });
 
-    // TODO: Resize the depth image
     VkExtent3D depthExtent = {
         .width = m_Extent.width,
         .height = m_Extent.height,
@@ -630,6 +646,7 @@ void RenderSystem::InitSwapchain()
     m_DepthFormat = VK_FORMAT_D32_SFLOAT;
 
     VkImageCreateInfo depthImageInfo = vkinit::ImageCreateInfo(m_DepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, depthExtent);
+    depthImageInfo.samples = m_MSAASamples;
     VmaAllocationCreateInfo depthImageAllocInfo = {
         .usage = VMA_MEMORY_USAGE_GPU_ONLY,
         .requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
@@ -644,6 +661,30 @@ void RenderSystem::InitSwapchain()
         m_DynamicDeletionQueue.PushFunction([=, this] {
             vkDestroyImageView(m_Device, image.depthView, nullptr);
             vmaDestroyImage(m_Allocator, image.depthImage.image, image.depthImage.allocation);
+        });
+    }
+
+    VkExtent3D msaaExtent = {
+        .width = m_Extent.width,
+        .height = m_Extent.height,
+        .depth = 1
+    };
+
+    VkImageCreateInfo msaaImageInfo = vkinit::ImageCreateInfo(m_SwapchainFormat, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, msaaExtent);
+    msaaImageInfo.samples = m_MSAASamples;
+    VmaAllocationCreateInfo msaaImageAllocInfo = {
+        .usage = VMA_MEMORY_USAGE_GPU_ONLY,
+        .requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
+    };
+    for (SwapchainImageData& image : m_Images) {
+        VK_CHECK(vmaCreateImage(m_Allocator, &msaaImageInfo, &msaaImageAllocInfo, &image.msaaColorImage.image, &image.msaaColorImage.allocation, nullptr));
+
+        VkImageViewCreateInfo msaaViewInfo = vkinit::ImageViewCreateInfo(m_SwapchainFormat, image.msaaColorImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
+        VK_CHECK(vkCreateImageView(m_Device, &msaaViewInfo, nullptr, &image.msaaColorView));
+
+        m_DynamicDeletionQueue.PushFunction([=, this] {
+            vkDestroyImageView(m_Device, image.msaaColorView, nullptr);
+            vmaDestroyImage(m_Allocator, image.msaaColorImage.image, image.msaaColorImage.allocation);
         });
     }
 }
@@ -677,22 +718,37 @@ void RenderSystem::InitDefaultRenderPass()
 {
     VkAttachmentDescription colorAttachment = {
         .format = m_SwapchainFormat,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .samples = m_MSAASamples,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
         .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
     };
     VkAttachmentReference colorRef = {
         .attachment = 0,
         .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
     };
 
+    VkAttachmentDescription resolveAttachment = {
+        .format = m_SwapchainFormat,
+        .samples = VK_SAMPLE_COUNT_1_BIT, // Single sampled for presentation
+        .loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+    };
+    VkAttachmentReference resolveRef = {
+        .attachment = 1,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+
     VkAttachmentDescription depthAttachment = {
         .format = m_DepthFormat,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .samples = m_MSAASamples,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
@@ -701,7 +757,7 @@ void RenderSystem::InitDefaultRenderPass()
         .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
     };
     VkAttachmentReference depthRef = {
-        .attachment = 1,
+        .attachment = 2,
         .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
     };
 
@@ -709,20 +765,19 @@ void RenderSystem::InitDefaultRenderPass()
         .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
         .colorAttachmentCount = 1,
         .pColorAttachments = &colorRef,
+        .pResolveAttachments = &resolveRef,
         .pDepthStencilAttachment = &depthRef
     };
 
-    VkAttachmentDescription attachments[2] = { colorAttachment, depthAttachment };
+    VkAttachmentDescription attachments[3] = { colorAttachment, resolveAttachment, depthAttachment };
 
     VkRenderPassCreateInfo info = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .attachmentCount = 2,
+        .attachmentCount = 3,
         .pAttachments = &attachments[0],
         .subpassCount = 1,
         .pSubpasses = &subpass,
     };
-
-    // TODO: Subpass dependencies?
 
     VK_CHECK(vkCreateRenderPass(m_Device, &info, nullptr, &m_RenderPass));
 
@@ -736,8 +791,9 @@ void RenderSystem::InitFramebuffers()
     VkFramebufferCreateInfo info = vkinit::FramebufferCreateInfo(m_RenderPass, m_Extent);
 
     for (SwapchainImageData& image : m_Images) {
-        VkImageView attachments[2] = { image.view, image.depthView };
-        info.attachmentCount = 2;
+        // TODO
+        VkImageView attachments[3] = { image.msaaColorView, image.view, image.depthView };
+        info.attachmentCount = 3;
         info.pAttachments = &attachments[0];
         VK_CHECK(vkCreateFramebuffer(m_Device, &info, nullptr, &image.framebuffer));
 
@@ -935,3 +991,7 @@ void RenderSystem::LoadShaderModule(const std::filesystem::path& path, VkShaderM
 
     *module = shaderModule;
 }
+
+size_t RenderSystem::Align(size_t size) {
+    return (size + m_MinimumUniformOffset - 1) & ~(m_MinimumUniformOffset - 1);
+};

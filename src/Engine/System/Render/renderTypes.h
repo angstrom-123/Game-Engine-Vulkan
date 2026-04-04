@@ -26,4 +26,6 @@ struct SwapchainImageData {
     VkFramebuffer framebuffer;
     AllocatedImage depthImage;
     VkImageView depthView;
+    AllocatedImage msaaColorImage;
+    VkImageView msaaColorView;
 };

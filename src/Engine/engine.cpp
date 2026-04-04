@@ -134,7 +134,8 @@ void Engine::CreateMaterial(const fs::path& texturePath, const fs::path& vertexS
     MaterialInfo materialInfo = {
         .vertexShader = vertexShaderPath,
         .fragmentShader = fragmentShaderPath,
-        .textureImage = textureImage
+        .textureImage = textureImage,
+        .hasTransparency = texture.hasTransparency
     };
     m_RenderSystem->CreateMaterial(materialInfo, material);
 }
@@ -187,7 +188,9 @@ void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::v
         mesh.vertexCount = s.indices.size();
         mesh.vertices = new Vertex[mesh.vertexCount];
         for (const auto& [index, triple] : s.indices | std::ranges::views::enumerate) {
-            mesh.vertices[index] = loader.GetVertex(triple);
+            Vertex vertex = loader.GetVertex(triple);
+            mesh.vertices[index] = vertex;
+            mesh.bounds.Update(vertex);
         }
         m_RenderSystem->AllocateMesh(mesh);
         m_ecs.AddComponent<Mesh>(e, mesh);

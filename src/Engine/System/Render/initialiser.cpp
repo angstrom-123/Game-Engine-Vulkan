@@ -12,7 +12,7 @@ vkinit::CommandBufferBeginInfo(VkCommandBufferUsageFlags flags)
 }
 
 VkRenderPassBeginInfo 
-vkinit::RenderPassBeginInfo(VkRenderPass pass, VkFramebuffer framebuffer, VkClearValue *clearValues, VkExtent2D extent)
+vkinit::RenderPassBeginInfo(VkRenderPass pass, VkFramebuffer framebuffer, VkClearValue *clearValues, uint32_t clearValueCount, VkExtent2D extent)
 {
     VkRect2D fullRect = {
         .offset = {0}, 
@@ -24,7 +24,7 @@ vkinit::RenderPassBeginInfo(VkRenderPass pass, VkFramebuffer framebuffer, VkClea
         .renderPass = pass,
         .framebuffer = framebuffer,
         .renderArea = fullRect,
-        .clearValueCount = 2,
+        .clearValueCount = clearValueCount,
         .pClearValues = clearValues,
     };
 }
@@ -179,10 +179,8 @@ vkinit::RasterizationStateCreateInfo(VkPolygonMode polygonMode)
         .depthClampEnable = VK_FALSE,
         .rasterizerDiscardEnable = VK_FALSE,
         .polygonMode = polygonMode,
-        // TODO
         .cullMode = VK_CULL_MODE_BACK_BIT,
         .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        // No depth bias
         .depthBiasEnable = VK_FALSE,
         .depthBiasConstantFactor = 0.0, 
         .depthBiasClamp = 0.0,
@@ -192,17 +190,16 @@ vkinit::RasterizationStateCreateInfo(VkPolygonMode polygonMode)
 }
 
 VkPipelineMultisampleStateCreateInfo 
-vkinit::MultisampleStateCreateInfo()
+vkinit::MultisampleStateCreateInfo(VkSampleCountFlagBits samples, bool enableA2C)
 {
     return (VkPipelineMultisampleStateCreateInfo) {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
         .pNext = nullptr,
-        // No multisampling (for MSAA, we need to support it in the renderpass too)
-        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
-        .sampleShadingEnable = VK_FALSE,
+        .rasterizationSamples = samples,
+        .sampleShadingEnable = (enableA2C) ? VK_TRUE : VK_FALSE,
         .minSampleShading = 1.0,
         .pSampleMask = nullptr,
-        .alphaToCoverageEnable = VK_FALSE,
+        .alphaToCoverageEnable = (enableA2C) ? VK_TRUE : VK_FALSE,
         .alphaToOneEnable = VK_FALSE,
     };
 }
@@ -212,7 +209,7 @@ vkinit::ColorBlendAttachmentState()
 {
     return (VkPipelineColorBlendAttachmentState) {
         .blendEnable = VK_FALSE,
-        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_A_BIT,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_A_BIT
     };
 }
 
@@ -224,7 +221,7 @@ vkinit::LayoutCreateInfo(VkPushConstantRange *pushConstant)
         .pNext = nullptr,
         .flags = 0,
         .pushConstantRangeCount = (pushConstant) ? 1u : 0u,
-        .pPushConstantRanges = pushConstant,
+        .pPushConstantRanges = pushConstant
     };
 }
 

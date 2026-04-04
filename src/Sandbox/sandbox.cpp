@@ -78,7 +78,7 @@ void Sandbox::EventCallback(Event event)
             INFO("Resized to " << event.windowWidth << "x" << event.windowHeight);
             break;
         case EVENT_MOUSE_PRESS:
-            INFO("Mouse pressed (button " << (int) event.mouseButton << ")");
+            INFO("Mouse pressed (button " << static_cast<int>(event.mouseButton) << ")");
             break;
         default:
             break;

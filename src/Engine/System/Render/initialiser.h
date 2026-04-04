@@ -7,7 +7,7 @@
 
 namespace vkinit {
     VkCommandBufferBeginInfo CommandBufferBeginInfo(VkCommandBufferUsageFlags flags = 0);
-    VkRenderPassBeginInfo RenderPassBeginInfo(VkRenderPass pass, VkFramebuffer framebuffer, VkClearValue *clearValues, VkExtent2D extent);
+    VkRenderPassBeginInfo RenderPassBeginInfo(VkRenderPass pass, VkFramebuffer framebuffer, VkClearValue *clearValues, uint32_t clearValueCount, VkExtent2D extent);
     VkFramebufferCreateInfo FramebufferCreateInfo(VkRenderPass pass, VkExtent2D extent);
     VkSubmitInfo SubmitInfo(FrameData *frame, SwapchainImageData *image, VkPipelineStageFlags *waitStage);
     VkSubmitInfo SubmitInfo(VkCommandBuffer *commandBuffer);
@@ -20,7 +20,7 @@ namespace vkinit {
     VkPipelineVertexInputStateCreateInfo VertexInputStateCreateInfo(std::vector<VkVertexInputBindingDescription> *bindings = nullptr, std::vector<VkVertexInputAttributeDescription> *attributes = nullptr);
     VkPipelineInputAssemblyStateCreateInfo InputAssemblyStateCreateInfo(VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
     VkPipelineRasterizationStateCreateInfo RasterizationStateCreateInfo(VkPolygonMode polygonMode);
-    VkPipelineMultisampleStateCreateInfo MultisampleStateCreateInfo();
+    VkPipelineMultisampleStateCreateInfo MultisampleStateCreateInfo(VkSampleCountFlagBits samples, bool enableA2C);
     VkPipelineColorBlendAttachmentState ColorBlendAttachmentState();
     VkPipelineLayoutCreateInfo LayoutCreateInfo(VkPushConstantRange *pushConstant = nullptr);
     VkDescriptorSetLayoutCreateInfo DescriptorSetLayoutCreateInfo(uint32_t binding, VkDescriptorType type, VkShaderStageFlags flags);

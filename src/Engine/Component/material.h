@@ -12,6 +12,7 @@ struct MaterialInfo {
     fs::path vertexShader;
     fs::path fragmentShader;
     AllocatedImage textureImage;
+    bool hasTransparency;
 };
 
 struct PushConstants {
@@ -29,6 +30,7 @@ struct FragmentUniforms {
 };
 
 struct Material {
+    bool hasTransparency;
     VkPipeline pipeline;
     VkPipelineLayout pipelineLayout;
     VkDescriptorSet descriptorSets[FRAMES_IN_FLIGHT];

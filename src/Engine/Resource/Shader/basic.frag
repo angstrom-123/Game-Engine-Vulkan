@@ -23,7 +23,9 @@ void main()
     float diffuse = max(dot(vNormal, lightDir), 0.0);
     float specular = pow(max(dot(vNormal, halfDir), 0.0), 16.0);
 
-    vec3 color = texture(tex, vUV).xyz * min(diffuse + specular + ambient, 1.0);
+    // Note: alpha channel used for A2C
+    vec4 color = texture(tex, vUV);
+    vec4 litColor = vec4(texture(tex, vUV).rgb * min(diffuse + specular + ambient, 1.0), color.a);
 
-    outFragColor = vec4(color, 1.0);
+    outFragColor = litColor;
 }

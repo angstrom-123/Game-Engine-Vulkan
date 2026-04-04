@@ -52,6 +52,7 @@ public:
 private:
     void Resize(ECS& ecs);
     void InitVulkan(struct GLFWwindow *window);
+    void InitMSAA(uint64_t requestedSamples);
     void InitSwapchain();
     void InitCommands();
     void InitDefaultRenderPass();
@@ -61,13 +62,16 @@ private:
     void InitUniformBuffers();
     void ImmediateSubmit(std::function<void (VkCommandBuffer commandBuffer)>&& function);
     void LoadShaderModule(const std::filesystem::path& path, VkShaderModule *module);
+    size_t Align(size_t size);
 
 private:
+    // For Drawing
     Entity m_Camera;
 
     // Flags
     bool m_IsInitialized;
     bool m_DidResize;
+    VkSampleCountFlagBits m_MSAASamples;
 
     // Counters
     size_t m_FrameNum;

@@ -8,6 +8,7 @@ public:
 
 public:
     bool corrupted;
+    bool hasTransparency;
     int width;
     int height;
     int channels;
