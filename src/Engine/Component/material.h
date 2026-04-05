@@ -31,12 +31,8 @@ struct FragmentUniforms {
 
 struct Material {
     bool hasTransparency;
-    VkPipeline pipeline;
-    VkPipelineLayout pipelineLayout;
-    VkDescriptorSet descriptorSets[FRAMES_IN_FLIGHT];
-    VkPushConstantRange defaultConstantRange;
-    PushConstants defaultConstants;
     AllocatedImage textureImage;
     VkImageView textureView;
     VkSampler textureSampler;
+    VkDescriptorSet descriptorSets[FRAMES_IN_FLIGHT];
 };

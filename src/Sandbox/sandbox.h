@@ -13,7 +13,6 @@ public:
 private:
     Entity m_Parent;
     std::vector<Entity> m_SponzaParts;
-    Entity m_Monkey;
 
     double m_LastTime;
     size_t m_LastFrame;

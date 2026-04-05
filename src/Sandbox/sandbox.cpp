@@ -38,13 +38,6 @@ void Sandbox::Init()
     for (Entity e : m_SponzaParts) {
         ecs.GetComponent<Transform>(e).InheritFrom(m_Parent);
     }
-
-    // Load a monkey head mesh.
-    // API demands a vector for the entities, but I know that this file contains only one object.
-    std::vector<Entity> tmp;
-    m_Engine->CreateMesh("src/Sandbox/Resource/Model/suzanne.obj", "src/Sandbox/Resource/Model/suzanne.mtl", tmp);
-    m_Monkey = tmp.front();
-    ecs.GetComponent<Transform>(m_Monkey).Translate(0.0, 0.0, -10.0);
 }
 
 void Sandbox::Frame(double deltaTime)
@@ -59,9 +52,6 @@ void Sandbox::Frame(double deltaTime)
     }
 
     ECS& ecs = m_Engine->GetECS();
-
-    // Spin the monkey!
-    ecs.GetComponent<Transform>(m_Monkey).Rotate(glm::radians(90.0 * deltaTime), Y_AXIS);
 
     // Control the camera
     m_CameraSystem->Update(ecs, m_Engine->GetKeysDown(), m_Engine->GetFrameMouseDelta(), deltaTime);

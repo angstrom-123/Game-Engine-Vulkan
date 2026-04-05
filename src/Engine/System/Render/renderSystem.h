@@ -88,6 +88,10 @@ private:
     VkRect2D m_Scissor;
     VkDescriptorSetLayout m_MaterialSetLayout;
     VkDeviceSize m_MinimumUniformOffset;
+    VkPipelineLayout m_PipelineLayout;
+    VkPipeline m_Pipeline;
+    VkPipeline m_TransparencyPipeline;
+    VkPushConstantRange m_PushConstantRange;
 
     struct VmaAllocator_T *m_Allocator;
 

@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
-#include <ranges>
 
 #include "Component/camera.h"
 #include "Geometry/frustum.h"
@@ -18,6 +17,7 @@
 
 #include <VkBootstrap/VkBootstrap.h>
 #include <GLFW/glfw3.h>
+#include <ranges>
 #include <vulkan/vulkan_core.h>
 #include <stb/stb_image.h>
 
@@ -51,8 +51,8 @@ void RenderSystem::Init(GLFWwindow *window, Config *config)
     InitDefaultRenderPass();
     InitFramebuffers();
     InitSyncStructures();
-    InitPipelines();
     InitUniformBuffers();
+    InitPipelines();
 
     m_IsInitialized = true;
 }
@@ -149,12 +149,17 @@ void RenderSystem::Draw(ECS& ecs)
         ASSERT(mesh.allocated && "Drawing unallocated mesh");
 
         Material& material = ecs.GetComponent<Material>(e);
-        material.defaultConstants.mvp = vp * model;
-        material.defaultConstants.model = model;
+        if (material.hasTransparency) {
+            vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_TransparencyPipeline);
+        } else {
+            vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline);
+        }
 
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, material.pipeline);
-
-        vkCmdPushConstants(frame.commandBuffer, material.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants), &material.defaultConstants.mvp);
+        PushConstants constants = {
+            .mvp = vp * model,
+            .model = model
+        };
+        vkCmdPushConstants(frame.commandBuffer, m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants), &constants);
 
         uint32_t vertexOffset = frame.descriptorOffset;
         frame.descriptorOffset += Align(sizeof(VertexUniforms));
@@ -175,7 +180,7 @@ void RenderSystem::Draw(ECS& ecs)
         memcpy(static_cast<char *>(frame.uniformBuffer.data) + fragmentOffset, &fragmentUniforms, sizeof(FragmentUniforms));
 
         uint32_t dynamicOffsets[2] = { vertexOffset, fragmentOffset };
-        vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, material.pipelineLayout, 0, 1, &material.descriptorSets[frameIndex], 2, dynamicOffsets);
+        vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineLayout, 0, 1, &material.descriptorSets[frameIndex], 2, dynamicOffsets);
 
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offset);
@@ -384,7 +389,7 @@ void RenderSystem::CreateMaterial(const MaterialInfo& info, Material& mat)
         vkDestroyImageView(m_Device, mat.textureView, nullptr);
         vkDestroySampler(m_Device, mat.textureSampler, nullptr);
     });
-
+    
     for (const auto& [index, frame] : m_Frames | std::ranges::views::enumerate) {
         VkDescriptorSetAllocateInfo allocInfo = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -394,7 +399,6 @@ void RenderSystem::CreateMaterial(const MaterialInfo& info, Material& mat)
             .pSetLayouts = &m_MaterialSetLayout,
         };
         VK_CHECK(vkAllocateDescriptorSets(m_Device, &allocInfo, &mat.descriptorSets[index]));
-
         VkDescriptorBufferInfo vertexBufferInfo = {
             .buffer = frame.uniformBuffer.buffer,
             .offset = 0,
@@ -442,48 +446,6 @@ void RenderSystem::CreateMaterial(const MaterialInfo& info, Material& mat)
         };
         vkUpdateDescriptorSets(m_Device, 3, &writes[0], 0, nullptr);
     }
-
-    // Push constants
-    mat.defaultConstantRange = {
-        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-        .offset = 0,
-        .size = sizeof(PushConstants),
-    };
-
-    // Pipeline
-    VkPipelineLayoutCreateInfo pipelineInfo = vkinit::LayoutCreateInfo(&mat.defaultConstantRange);
-    pipelineInfo.setLayoutCount = 1;
-    pipelineInfo.pSetLayouts = &m_MaterialSetLayout;
-    VK_CHECK(vkCreatePipelineLayout(m_Device, &pipelineInfo, nullptr, &mat.pipelineLayout)); 
-
-    m_MainDeletionQueue.PushFunction([=, this] { 
-        vkDestroyPipelineLayout(m_Device, mat.pipelineLayout, nullptr); 
-    });
-
-    PipelineBuilder builder;
-    VertexInputDesc inputDesc = Vertex::GetVertexDesc();
-    builder.SetVertexInput(vkinit::VertexInputStateCreateInfo(&inputDesc.bindings, &inputDesc.attributes))
-           .SetInputAssembly(vkinit::InputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
-           .SetRasterizer(vkinit::RasterizationStateCreateInfo(VK_POLYGON_MODE_FILL))
-           .SetMultisampling(vkinit::MultisampleStateCreateInfo(m_MSAASamples, info.hasTransparency))
-           .SetColorBlend(vkinit::ColorBlendAttachmentState())
-           .SetDepthStencil(vkinit::DepthStencilStateCreateInfo(true, true, VK_COMPARE_OP_LESS_OR_EQUAL))
-           .SetPipelineLayout(mat.pipelineLayout);
-
-    VkShaderModule vert, frag;
-    LoadShaderModule(info.vertexShader, &vert);
-    LoadShaderModule(info.fragmentShader, &frag);
-
-    builder.MakeShader(vkinit::ShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vert),
-                       vkinit::ShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, frag));
-    mat.pipeline = builder.BuildPipeline(m_Device, m_RenderPass, m_Viewport, m_Scissor);
-
-    m_MainDeletionQueue.PushFunction([=, this] { 
-        vkDestroyPipeline(m_Device, mat.pipeline, nullptr); 
-    });
-
-    vkDestroyShaderModule(m_Device, vert, nullptr);
-    vkDestroyShaderModule(m_Device, frag, nullptr);
 }
 
 void RenderSystem::Resize(ECS& ecs)
@@ -865,6 +827,54 @@ void RenderSystem::InitPipelines()
         .offset = { 0, 0 },
         .extent = m_Extent
     };
+
+    // Push constants
+    m_PushConstantRange = {
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .offset = 0,
+        .size = sizeof(PushConstants),
+    };
+
+    // Pipeline
+    VkPipelineLayoutCreateInfo pipelineInfo = vkinit::LayoutCreateInfo(&m_PushConstantRange);
+    pipelineInfo.setLayoutCount = 1;
+    pipelineInfo.pSetLayouts = &m_MaterialSetLayout;
+    VK_CHECK(vkCreatePipelineLayout(m_Device, &pipelineInfo, nullptr, &m_PipelineLayout)); 
+
+    m_MainDeletionQueue.PushFunction([=, this] { 
+        vkDestroyPipelineLayout(m_Device, m_PipelineLayout, nullptr); 
+    });
+
+    PipelineBuilder builder;
+
+    VkShaderModule vert, frag;
+    LoadShaderModule("src/Engine/Resource/Shader/basic.vert.spirv", &vert);
+    LoadShaderModule("src/Engine/Resource/Shader/basic.frag.spirv", &frag);
+
+    builder.MakeShader(vkinit::ShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vert),
+                       vkinit::ShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, frag));
+
+    VertexInputDesc inputDesc = Vertex::GetVertexDesc();
+    builder.SetVertexInput(vkinit::VertexInputStateCreateInfo(&inputDesc.bindings, &inputDesc.attributes))
+           .SetInputAssembly(vkinit::InputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
+           .SetRasterizer(vkinit::RasterizationStateCreateInfo(VK_POLYGON_MODE_FILL))
+           .SetMultisampling(vkinit::MultisampleStateCreateInfo(m_MSAASamples, false))
+           .SetColorBlend(vkinit::ColorBlendAttachmentState())
+           .SetDepthStencil(vkinit::DepthStencilStateCreateInfo(true, true, VK_COMPARE_OP_LESS_OR_EQUAL))
+           .SetPipelineLayout(m_PipelineLayout);
+
+    m_Pipeline = builder.BuildPipeline(m_Device, m_RenderPass, m_Viewport, m_Scissor);
+
+    builder.SetMultisampling(vkinit::MultisampleStateCreateInfo(m_MSAASamples, true));
+    m_TransparencyPipeline = builder.BuildPipeline(m_Device, m_RenderPass, m_Viewport, m_Scissor);
+
+    vkDestroyShaderModule(m_Device, vert, nullptr);
+    vkDestroyShaderModule(m_Device, frag, nullptr);
+
+    m_MainDeletionQueue.PushFunction([=, this] { 
+        vkDestroyPipeline(m_Device, m_Pipeline, nullptr); 
+        vkDestroyPipeline(m_Device, m_TransparencyPipeline, nullptr); 
+    });
 }
 
 void RenderSystem::InitUniformBuffers()
