@@ -77,9 +77,9 @@ private:
     AllocatedImage m_ArrayImage;
     VkImageView m_ArrayView;
     VkSampler m_ArraySampler;
-    uint32_t m_MaxArrayLayers = 128;
-    uint32_t m_ArrayLayerWidth = 2048;
-    uint32_t m_ArrayLayerHeight = 2048;
+    uint32_t m_MaxArrayLayers;
+    uint32_t m_ArrayLayerWidth;
+    uint32_t m_ArrayLayerHeight;
     std::queue<uint32_t> m_FreeLayers;
 
     // Global Descriptor
@@ -100,6 +100,7 @@ private:
     DeletionQueue m_DynamicDeletionQueue;
 
     // Data
+    uint32_t m_MipLevels;
     VkPresentModeKHR m_PresentMode;
     VkExtent2D m_Extent;
     VkViewport m_Viewport;
