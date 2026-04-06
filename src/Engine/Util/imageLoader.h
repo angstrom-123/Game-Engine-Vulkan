@@ -4,10 +4,10 @@
 
 class ImageData {
 public:
-    ImageData(const std::filesystem::path& filePath);
+    bool LoadImage(const std::filesystem::path& filePath, bool checkTransparency);
+    void Resize(int width, int height);
 
 public:
-    bool corrupted;
     bool hasTransparency;
     int width;
     int height;

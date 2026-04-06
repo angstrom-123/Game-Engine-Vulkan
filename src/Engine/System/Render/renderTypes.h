@@ -2,19 +2,18 @@
 
 #include "Util/allocator.h"
 
-static constexpr size_t MAX_DESCRIPTORS = 10;
 static constexpr size_t FRAMES_IN_FLIGHT = 3;
-static constexpr size_t MAX_MATERIALS = 256;
-static constexpr size_t MAX_UNIFORM_BUFFER_SIZE = 64 * 1024; // 64 KiB
+static constexpr size_t MAX_MATERIALS = 128;
 
 struct FrameData {
     VkFence renderFence;
     VkSemaphore acquireSemaphore;
     VkCommandPool commandPool;
     VkCommandBuffer commandBuffer;
-    AllocatedBuffer uniformBuffer;
     VkDescriptorPool descriptorPool;
-    size_t descriptorOffset;
+    VkDescriptorSet arrayDescriptorSet;
+    VkDescriptorSet descriptorSet;
+    AllocatedBuffer uniformBuffer;
 };
 
 struct SwapchainImageData {

@@ -31,7 +31,6 @@ public:
     void Cleanup();
     void EventCallback(Event event);
     static void EventHook(Event event, void *data);
-    // void Resized(int width, int height);
     double GetTime();
     void CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results);
 
@@ -43,9 +42,7 @@ public:
     ECS& GetECS() { return m_ecs; };
 
 private:
-    void CreateMaterial(Material& material);
-    void CreateMaterial(const fs::path& texturePath, Material& material);
-    void CreateMaterial(const fs::path& texturePath, const fs::path& vertexShaderPath, const fs::path& fragmentShaderPath, Material& material);
+    void CreateMaterial(const fs::path& ambient, const fs::path& diffuse, const fs::path& displacement, Material& material);
 
 private:
     App *m_App;
@@ -55,5 +52,4 @@ private:
 
     // Default entities, components, and systems, managed by the engine
     RenderSystem *m_RenderSystem;
-    Material m_DefaultMaterial;
 };

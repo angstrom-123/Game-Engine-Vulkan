@@ -33,12 +33,11 @@ constexpr uint32_t HASH_KS = HashString("Ks");
 constexpr uint32_t HASH_NS = HashString("Ns");
 constexpr uint32_t HASH_NI = HashString("Ni");
 constexpr uint32_t HASH_D = HashString("d");
-constexpr uint32_t HASH_MAP_D = HashString("map_d");
 constexpr uint32_t HASH_MAP_DISP = HashString("map_Disp");
 constexpr uint32_t HASH_MAP_KA = HashString("map_Ka");
 constexpr uint32_t HASH_MAP_KD = HashString("map_Kd");
 
-bool ObjLoader::LoadObj(const std::filesystem::path& objFilePath, const std::filesystem::path& mtlFilePath, std::unordered_map<std::string, MtlData>& materialData, std::vector<Shape>& results)
+bool ObjLoader::LoadObj(const fs::path& objFilePath, const fs::path& mtlFilePath, std::unordered_map<std::string, MtlData>& materialData, std::vector<Shape>& results)
 {
     std::ios::sync_with_stdio(false);
 
@@ -55,10 +54,13 @@ bool ObjLoader::LoadObj(const std::filesystem::path& objFilePath, const std::fil
         return false;
     }
 
+    fs::path basePath(mtlFilePath);
+    basePath = basePath.remove_filename();
+
     MtlData material;
     while (std::getline(mtlFile, line)) {
         if (line.empty()) continue;
-        ProcessLineMtl(iss, line, &material, materialData);
+        ProcessLineMtl(basePath, iss, line, &material, materialData);
     }
 
     mtlFile.close();
@@ -113,7 +115,7 @@ Vertex ObjLoader::GetVertex(IndexTriple index)
     };
 }
 
-void ObjLoader::ProcessLineMtl(std::istringstream& iss, const std::string& line, MtlData *mtl, std::unordered_map<std::string, MtlData>& results)
+void ObjLoader::ProcessLineMtl(const fs::path& basePath, std::istringstream& iss, const std::string& line, MtlData *mtl, std::unordered_map<std::string, MtlData>& results)
 {
     iss.clear();
     iss.str(line);
@@ -128,7 +130,11 @@ void ObjLoader::ProcessLineMtl(std::istringstream& iss, const std::string& line,
             if (iss >> materialName) {
                 if (!mtl->name.empty()) {
                     results.insert({mtl->name, *mtl});
-                    *mtl = (MtlData) {};
+                    *mtl = (MtlData) {
+                        .ambientTexture = "",
+                        .diffuseTexture = "",
+                        .displacementTexture = ""
+                    };
                 }
                 mtl->name = materialName;
             } else {
@@ -173,30 +179,33 @@ void ObjLoader::ProcessLineMtl(std::istringstream& iss, const std::string& line,
                 abort();
             }
             break;
-        case HASH_MAP_D:
-            if (!(iss >> mtl->alphaTexture)) {
-                ERROR("Failed to read alpha texture path");
-                abort();
-            }
-            break;
-        case HASH_MAP_DISP:
-            if (!(iss >> mtl->displacementTexture)) {
+        case HASH_MAP_DISP: {
+            std::string path;
+            if (!(iss >> path)) {
                 ERROR("Failed to read displacement texture path");
                 abort();
             }
+            mtl->displacementTexture = fs::path(basePath).append(path);
             break;
-        case HASH_MAP_KA:
-            if (!(iss >> mtl->ambientTexture)) {
+        }
+        case HASH_MAP_KA: {
+            std::string path;
+            if (!(iss >> path)) {
                 ERROR("Failed to read ambient texture path");
                 abort();
             }
+            mtl->ambientTexture = fs::path(basePath).append(path);
             break;
-        case HASH_MAP_KD: 
-            if (!(iss >> mtl->diffuseTexture)) {
-                ERROR("Failed to read diffuse texture path");
+        }
+        case HASH_MAP_KD: {
+            std::string path;
+            if (!(iss >> path)) {
+                ERROR("Failed to read displacement texture path");
                 abort();
             }
+            mtl->diffuseTexture = fs::path(basePath).append(path);
             break;
+        }
     };
 }
 

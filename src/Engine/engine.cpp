@@ -47,9 +47,6 @@ Engine::Engine(App *app, Config *config)
     m_ecs.SetSystemSignature<RenderSystem>(m_RenderSystem->GetSignature(m_ecs));
     m_RenderSystem->Init(m_Window, config);
 
-    // Instantiate Default Components
-    CreateMaterial(m_DefaultMaterial);
-
     // App
     m_App = app;
     m_App->SetEnginePointer(this);
@@ -58,9 +55,8 @@ Engine::Engine(App *app, Config *config)
     // Default Entities + Connection to default systems
     // NOTE: App is inited before this so that any systems created there pick up on these components
     Entity camera = m_ecs.CreateEntity();
-    m_ecs.AddComponent<Camera>(camera, Camera(glm::vec3(0.0), glm::vec2(config->windowWidth, config->windowHeight), glm::radians(60.0), 0.1, 1000.0));
+    m_ecs.AddComponent<Camera>(camera, Camera(glm::vec3(0.0), glm::vec2(config->windowWidth, config->windowHeight), glm::radians(60.0), 0.01, 1000.0));
     m_RenderSystem->SetCamera(camera);
-
 }
 
 void Engine::Run()
@@ -112,46 +108,48 @@ double Engine::GetTime()
     return glfwGetTime();
 }
 
-void Engine::CreateMaterial(Material& material)
+void Engine::CreateMaterial(const fs::path& ambient, const fs::path& diffuse, const fs::path& displacement, Material& material)
 {
-    CreateMaterial("src/Engine/Resource/Texture/default.png", 
-                   "src/Engine/Resource/Shader/basic.vert.spirv", 
-                   "src/Engine/Resource/Shader/basic.frag.spirv", material);
-}
-
-void Engine::CreateMaterial(const fs::path& texturePath, Material& material)
-{
-    CreateMaterial(texturePath, 
-                   "src/Engine/Resource/Shader/basic.vert.spirv", 
-                   "src/Engine/Resource/Shader/basic.frag.spirv", material);
-}
-
-void Engine::CreateMaterial(const fs::path& texturePath, const fs::path& vertexShaderPath, const fs::path& fragmentShaderPath, Material& material)
-{
-    INFO("Loading path: " << texturePath);
-    ImageData texture = ImageData(texturePath);
-    AllocatedImage textureImage = m_RenderSystem->AllocateImage(texture);
     MaterialInfo materialInfo = {
-        .vertexShader = vertexShaderPath,
-        .fragmentShader = fragmentShaderPath,
-        .textureImage = textureImage,
-        .hasTransparency = texture.hasTransparency
+        .ambientTextureData = nullptr,
+        .diffuseTextureData = nullptr,
+        .displacementTextureData = nullptr,
+        .hasTransparency = false
     };
+
+    ImageData ambientTexture;
+    if (!ambient.empty()) {
+        INFO("Loading image: " << ambient);
+        if (ambientTexture.LoadImage(ambient, false)) {
+            materialInfo.ambientTextureData = &ambientTexture;
+        }
+    }
+
+    // NOTE: Getting the alpha from diffuse texture, so we check transparency here
+    ImageData diffuseTexture;
+    if (!diffuse.empty()) {
+        INFO("Loading image: " << diffuse);
+        if (diffuseTexture.LoadImage(diffuse, true)) {
+            materialInfo.diffuseTextureData = &diffuseTexture;
+            materialInfo.hasTransparency = diffuseTexture.hasTransparency;
+        }
+    }
+
+    ImageData displacementTexture;
+    if (!displacement.empty()) {
+        INFO("Loading image: " << displacement);
+        if (displacementTexture.LoadImage(displacement, false)) {
+            materialInfo.displacementTextureData = &displacementTexture;
+        }
+    }
+
+    // If any textures are not present (or just not described in the mtl file)
+    // the renderer falls back to defaults.
     m_RenderSystem->CreateMaterial(materialInfo, material);
 }
 
 void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results)
 {
-    // Materials can be created from this by the engine 
-    // mtl file contains good things to have in the material struct.
-    // Perhaps I need another material data component?
-    //      - this one could be per-mesh
-    //      - automatically added with the material component? (defaulted out)
-    //      - required by renderer
-    //      - if meshes are only loaded with this api then user doesn't need to 
-    //        worry about adding any components themself,
-    //        they just provide the path to the stuff and its created automatically
-
     double startTime = GetTime();
 
     ObjLoader loader;
@@ -165,16 +163,9 @@ void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::v
     std::unordered_map<std::string, Material> materials;
 
     for (const auto& [name, data] : materialData) {
-        if (data.diffuseTexture.empty()) {
-            materials.insert({name, m_DefaultMaterial});
-        } else {
-            std::string texPath("src/Sandbox/Resource/Model/");
-            texPath.append(data.diffuseTexture);
-
-            Material mat;
-            CreateMaterial(texPath, mat);
-            materials.insert({name, mat});
-        }
+        Material mat;
+        CreateMaterial(data.ambientTexture, data.diffuseTexture, data.displacementTexture, mat);
+        materials.insert({name, mat});
     }
 
     // TODO: Optimise vertex size

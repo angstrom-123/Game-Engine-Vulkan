@@ -5,10 +5,12 @@
 #include <string>
 #include <vector>
 
-#include "Component/mesh.h"
+#include "Geometry/vertex.h"
 
 #include <glm/ext/vector_float2.hpp>
 #include <glm/ext/vector_float3.hpp>
+
+namespace fs = std::filesystem;
 
 union IndexTriple {
     struct {
@@ -34,19 +36,18 @@ struct MtlData {
     float dissolve;                    // d  [0, 1]     (some implementations use Tr, d = 1 - Tr)
     glm::vec3 transmissionFilter;      // Tf [0, 1]     ("Tf xyz" = ciexyz colorspace, "Tf spectral" = file, I'll support rgb only)
     float refractiveIndex;             // Ni [0, ...]
-    std::string ambientTexture;        // map_Ka
-    std::string diffuseTexture;        // map_Kd
-    std::string displacementTexture;   // map_Disp
-    std::string alphaTexture;          // map_d
+    fs::path ambientTexture;           // map_Ka
+    fs::path diffuseTexture;           // map_Kd
+    fs::path displacementTexture;      // map_Disp
 };
 
 class ObjLoader {
 public:
-    bool LoadObj(const std::filesystem::path& objFilePath, const std::filesystem::path& mtlFilePath, std::unordered_map<std::string, MtlData>& materialData, std::vector<Shape>& results);
+    bool LoadObj(const fs::path& objFilePath, const fs::path& mtlFilePath, std::unordered_map<std::string, MtlData>& materialData, std::vector<Shape>& results);
     Vertex GetVertex(IndexTriple index);
 
 private:
-    void ProcessLineMtl(std::istringstream& iss, const std::string& line, MtlData *material, std::unordered_map<std::string, MtlData>& results);
+    void ProcessLineMtl(const fs::path& basePath, std::istringstream& iss, const std::string& line, MtlData *material, std::unordered_map<std::string, MtlData>& results);
     void ProcessLineObj(std::istringstream& iss, const std::string& line, Shape *shape, std::unordered_map<std::string, MtlData>& materials, std::vector<Shape>& results);
 
 private:

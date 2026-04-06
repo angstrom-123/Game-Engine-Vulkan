@@ -1,38 +1,32 @@
 #pragma once
 
-#include "System/Render/renderTypes.h"
-#include "Util/allocator.h"
-#include <filesystem>
+#include "Util/imageLoader.h"
 #include <glm/mat4x4.hpp>
 #include <vulkan/vulkan_core.h>
 
-namespace fs = std::filesystem;
-
 struct MaterialInfo {
-    fs::path vertexShader;
-    fs::path fragmentShader;
-    AllocatedImage textureImage;
+    ImageData *ambientTextureData;
+    ImageData *diffuseTextureData;
+    ImageData *displacementTextureData;
     bool hasTransparency;
 };
 
 struct PushConstants {
-    glm::mat4x4 mvp;
     glm::mat4x4 model;
+    uint32_t ambientIndex;
+    uint32_t diffuseIndex;
+    uint32_t displacementIndex;
 };
 
-struct VertexUniforms {
-    glm::vec4 placeholder;
-};
-
-struct FragmentUniforms {
+struct GlobalUniforms {
+    glm::mat4x4 vp;
     glm::vec4 lightPos;
     glm::vec4 viewPos;
 };
 
 struct Material {
     bool hasTransparency;
-    AllocatedImage textureImage;
-    VkImageView textureView;
-    VkSampler textureSampler;
-    VkDescriptorSet descriptorSets[FRAMES_IN_FLIGHT];
+    uint32_t ambientTextureIndex;
+    uint32_t diffuseTextureIndex;
+    uint32_t displacementTextureIndex;
 };

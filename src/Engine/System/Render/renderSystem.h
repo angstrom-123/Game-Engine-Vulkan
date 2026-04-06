@@ -8,9 +8,7 @@
 #include "Component/mesh.h"
 #include "ECS/ecs.h"
 #include "Util/allocator.h"
-#include "Util/imageLoader.h"
 #include "config.h"
-
 #include "renderTypes.h"
 
 struct DeletionQueue {
@@ -59,14 +57,34 @@ private:
     void InitFramebuffers();
     void InitSyncStructures();
     void InitPipelines();
-    void InitUniformBuffers();
+    void InitGlobalDescriptor();
+    void InitTextureArray();
+    void InitArrayDescriptor();
     void ImmediateSubmit(std::function<void (VkCommandBuffer commandBuffer)>&& function);
     void LoadShaderModule(const std::filesystem::path& path, VkShaderModule *module);
+    uint32_t AllocateTextureArrayLayer(ImageData *imageData);
     size_t Align(size_t size);
 
 private:
     // For Drawing
     Entity m_Camera;
+    std::vector<Entity> m_DrawOrder;
+    uint32_t m_DefaultColorTextureIndex;
+    uint32_t m_DefaultDisplacementTextureIndex;
+
+    // Texture Array
+    VkDescriptorSetLayout m_ArrayDescriptorLayout;
+    AllocatedImage m_ArrayImage;
+    VkImageView m_ArrayView;
+    VkSampler m_ArraySampler;
+    uint32_t m_MaxArrayLayers = 128;
+    uint32_t m_ArrayLayerWidth = 2048;
+    uint32_t m_ArrayLayerHeight = 2048;
+    std::queue<uint32_t> m_FreeLayers;
+
+    // Global Descriptor
+    VkDeviceSize m_UniformAlignment;
+    VkDescriptorSetLayout m_DescriptorLayout;
 
     // Flags
     bool m_IsInitialized;
@@ -86,8 +104,6 @@ private:
     VkExtent2D m_Extent;
     VkViewport m_Viewport;
     VkRect2D m_Scissor;
-    VkDescriptorSetLayout m_MaterialSetLayout;
-    VkDeviceSize m_MinimumUniformOffset;
     VkPipelineLayout m_PipelineLayout;
     VkPipeline m_Pipeline;
     VkPipeline m_TransparencyPipeline;

@@ -1,11 +1,19 @@
 #version 450 
 
-layout (std140, binding = 1) uniform FragmentUniforms {
+layout (set = 0, binding = 0) uniform GlobalUniforms {
+    mat4 vp;
     vec4 lightPos;
     vec4 viewPos;
 } uniforms;
 
-layout (binding = 2) uniform sampler2D tex;
+layout (set = 1, binding = 0) uniform sampler2DArray uTexArray;
+
+layout (push_constant) uniform Constants {
+    mat4 model;
+    uint ambientIndex;
+    uint diffuseIndex;
+    uint displacementIndex;
+} constants;
 
 layout (location = 0) in vec3 vPosition;
 layout (location = 1) in vec3 vNormal;
@@ -24,8 +32,8 @@ void main()
     float specular = pow(max(dot(vNormal, halfDir), 0.0), 16.0);
 
     // Note: alpha channel used for A2C
-    vec4 color = texture(tex, vUV);
-    vec4 litColor = vec4(texture(tex, vUV).rgb * min(diffuse + specular + ambient, 1.0), color.a);
+    vec4 color = texture(uTexArray, vec3(vUV, constants.diffuseIndex));
+    vec4 litColor = vec4(color.rgb * min(diffuse + specular + ambient, 1.0), color.a);
 
     outFragColor = litColor;
 }
