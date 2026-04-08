@@ -38,7 +38,7 @@ struct MtlData {
     float refractiveIndex;             // Ni [0, ...]
     fs::path ambientTexture;           // map_Ka
     fs::path diffuseTexture;           // map_Kd
-    fs::path displacementTexture;      // map_Disp
+    fs::path normalTexture;            // map_Disp
 };
 
 class ObjLoader {

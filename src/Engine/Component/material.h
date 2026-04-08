@@ -4,18 +4,18 @@
 #include <glm/mat4x4.hpp>
 #include <vulkan/vulkan_core.h>
 
-struct MaterialInfo {
+struct MaterialTextureInfo {
     ImageData *ambientTextureData;
     ImageData *diffuseTextureData;
-    ImageData *displacementTextureData;
-    bool hasTransparency;
+    ImageData *normalTextureData;
 };
 
 struct PushConstants {
     glm::mat4x4 model;
+    float specularExponent;
     uint32_t ambientIndex;
     uint32_t diffuseIndex;
-    uint32_t displacementIndex;
+    uint32_t normalIndex;
 };
 
 struct GlobalUniforms {
@@ -26,7 +26,8 @@ struct GlobalUniforms {
 
 struct Material {
     bool hasTransparency;
+    float specularExponent;
     uint32_t ambientTextureIndex;
     uint32_t diffuseTextureIndex;
-    uint32_t displacementTextureIndex;
+    uint32_t normalTextureIndex;
 };

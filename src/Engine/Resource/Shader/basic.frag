@@ -6,34 +6,41 @@ layout (set = 0, binding = 0) uniform GlobalUniforms {
     vec4 viewPos;
 } uniforms;
 
-layout (set = 1, binding = 0) uniform sampler2DArray uTexArray;
+layout (set = 1, binding = 0) uniform sampler2DArray uColorTexArray;
+layout (set = 1, binding = 1) uniform sampler2DArray uDataTexArray;
 
 layout (push_constant) uniform Constants {
     mat4 model;
+    float specularExponent;
     uint ambientIndex;
     uint diffuseIndex;
-    uint displacementIndex;
+    uint normalIndex;
 } constants;
 
 layout (location = 0) in vec3 vPosition;
-layout (location = 1) in vec3 vNormal;
-layout (location = 2) in vec2 vUV;
+layout (location = 1) in vec2 vUV;
+layout (location = 2) in mat3 vTBN;
 
 layout (location = 0) out vec4 outFragColor;
 
 void main()
 {
+    vec3 normal = texture(uDataTexArray, vec3(vUV, constants.normalIndex)).rgb;
+    normal = normal * 2.0 - 1.0;
+    normal = normalize(vTBN * normal);
+
     vec3 lightDir = normalize(uniforms.lightPos.xyz - vPosition);
     vec3 viewDir = normalize(uniforms.viewPos.xyz - vPosition);
     vec3 halfDir = normalize(lightDir + viewDir);
 
-    float ambient = 0.3;
-    float diffuse = max(dot(vNormal, lightDir), 0.0);
-    float specular = pow(max(dot(vNormal, halfDir), 0.0), 16.0);
+    vec4 ambientMap = texture(uColorTexArray, vec3(vUV, constants.ambientIndex));
+    vec4 diffuseMap = texture(uColorTexArray, vec3(vUV, constants.diffuseIndex));
 
-    // Note: alpha channel used for A2C
-    vec4 color = texture(uTexArray, vec3(vUV, constants.diffuseIndex));
-    vec4 litColor = vec4(color.rgb * min(diffuse + specular + ambient, 1.0), color.a);
+    vec3 ambient = vec3(0.2);
+    vec3 diffuse = vec3(max(dot(normal, lightDir), 0.0));
+    vec3 specular = vec3(pow(max(dot(normal, halfDir), 0.0), constants.specularExponent * 4.0));
 
-    outFragColor = litColor;
+    vec3 result = (ambient + specular) * ambientMap.rgb + diffuse * diffuseMap.rgb;
+
+    outFragColor = vec4(result, ambientMap.a); // Alpha channel for A2C taken from ambient texture
 }

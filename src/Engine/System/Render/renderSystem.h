@@ -33,6 +33,17 @@ struct UploadContext {
     bool initialized;
 };
 
+struct TextureArray {
+    AllocatedImage image;
+    VkImageView view;
+    VkFormat format;
+    VkSampler sampler;
+    uint32_t layerCount;
+    uint32_t resolution;
+    uint32_t mipLevels;
+    std::queue<uint32_t> freeLayers;
+};
+
 class RenderSystem : public System {
 public:
     void Init(struct GLFWwindow *window, Config *config);
@@ -41,8 +52,7 @@ public:
     void Draw(ECS& ecs);
     void RequestResize();
     void AllocateMesh(Mesh& mesh);
-    AllocatedImage AllocateImage(ImageData& imageData);
-    void CreateMaterial(const MaterialInfo& info, Material& material);
+    void AllocateMaterialTextures(const MaterialTextureInfo& info, Material& material);
 
     Signature GetSignature(ECS& ecs) { return ecs.GetBit<Transform>() | ecs.GetBit<Mesh>() | ecs.GetBit<Material>(); };
     size_t GetFrameNumber() { return m_FrameNum; };
@@ -58,11 +68,10 @@ private:
     void InitSyncStructures();
     void InitPipelines();
     void InitGlobalDescriptor();
-    void InitTextureArray();
-    void InitArrayDescriptor();
     void ImmediateSubmit(std::function<void (VkCommandBuffer commandBuffer)>&& function);
-    void LoadShaderModule(const std::filesystem::path& path, VkShaderModule *module);
-    uint32_t AllocateTextureArrayLayer(ImageData *imageData);
+    void LoadShaderModule(const std::filesystem::path& path, VkShaderModule& module);
+    uint32_t CreateTextureArray(uint32_t resolution, uint32_t size, VkFormat format);
+    uint32_t AllocateTexture(ImageData *imageData, TextureArray& array);
     size_t Align(size_t size);
 
 private:
@@ -70,17 +79,15 @@ private:
     Entity m_Camera;
     std::vector<Entity> m_DrawOrder;
     uint32_t m_DefaultColorTextureIndex;
-    uint32_t m_DefaultDisplacementTextureIndex;
+    uint32_t m_DefaultNormalTextureIndex;
 
     // Texture Array
+    // TODO: Add multiple sizes of array
     VkDescriptorSetLayout m_ArrayDescriptorLayout;
-    AllocatedImage m_ArrayImage;
-    VkImageView m_ArrayView;
-    VkSampler m_ArraySampler;
-    uint32_t m_MaxArrayLayers;
-    uint32_t m_ArrayLayerWidth;
-    uint32_t m_ArrayLayerHeight;
-    std::queue<uint32_t> m_FreeLayers;
+    uint32_t m_MaxTextureArrays;
+    uint32_t m_ColorArrayIndex;
+    uint32_t m_DataArrayIndex;
+    std::vector<TextureArray> m_TextureArrays;
 
     // Global Descriptor
     VkDeviceSize m_UniformAlignment;
@@ -100,7 +107,6 @@ private:
     DeletionQueue m_DynamicDeletionQueue;
 
     // Data
-    uint32_t m_MipLevels;
     VkPresentModeKHR m_PresentMode;
     VkExtent2D m_Extent;
     VkViewport m_Viewport;

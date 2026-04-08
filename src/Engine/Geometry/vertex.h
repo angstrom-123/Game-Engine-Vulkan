@@ -10,10 +10,12 @@ struct VertexInputDesc {
     VkPipelineVertexInputStateCreateFlags flags = 0;
 };
 
+// TODO: Packing vertex struct (snorm, etc)
 struct Vertex {
     glm::vec3 position;
     glm::vec3 normal;
     glm::vec2 uv;
+    glm::vec4 tangent; // Calculate bitangent in vertex shader
 
     static VertexInputDesc GetVertexDesc()
     {
@@ -47,10 +49,17 @@ struct Vertex {
             .format = VK_FORMAT_R32G32_SFLOAT,
             .offset = offsetof(Vertex, uv)
         };
+        VkVertexInputAttributeDescription tangentAttr = {
+            .location = 3,
+            .binding = 0,
+            .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+            .offset = offsetof(Vertex, tangent)
+        };
 
         res.attributes.push_back(positionAttr);
         res.attributes.push_back(normalAttr);
         res.attributes.push_back(uvAttr);
+        res.attributes.push_back(tangentAttr);
 
         return res;
     }

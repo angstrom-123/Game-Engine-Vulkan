@@ -108,10 +108,14 @@ bool ObjLoader::LoadObj(const fs::path& objFilePath, const fs::path& mtlFilePath
 
 Vertex ObjLoader::GetVertex(IndexTriple index)
 {
+    glm::vec3 position = m_Positions[index.positionIndex - 1];
+    glm::vec3 normal = m_Normals[index.normalIndex - 1];
+    glm::vec2 uv = m_UVs[index.uvIndex - 1];
+
     return (Vertex) {
-        .position = m_Positions[index.positionIndex - 1],
-        .normal = m_Normals[index.normalIndex - 1],
-        .uv = m_UVs[index.uvIndex - 1]
+        .position = position,
+        .normal = normal,
+        .uv = uv,
     };
 }
 
@@ -133,7 +137,7 @@ void ObjLoader::ProcessLineMtl(const fs::path& basePath, std::istringstream& iss
                     *mtl = (MtlData) {
                         .ambientTexture = "",
                         .diffuseTexture = "",
-                        .displacementTexture = ""
+                        .normalTexture = ""
                     };
                 }
                 mtl->name = materialName;
@@ -182,10 +186,10 @@ void ObjLoader::ProcessLineMtl(const fs::path& basePath, std::istringstream& iss
         case HASH_MAP_DISP: {
             std::string path;
             if (!(iss >> path)) {
-                ERROR("Failed to read displacement texture path");
+                ERROR("Failed to read normal texture path");
                 abort();
             }
-            mtl->displacementTexture = fs::path(basePath).append(path);
+            mtl->normalTexture = fs::path(basePath).append(path);
             break;
         }
         case HASH_MAP_KA: {
@@ -200,7 +204,7 @@ void ObjLoader::ProcessLineMtl(const fs::path& basePath, std::istringstream& iss
         case HASH_MAP_KD: {
             std::string path;
             if (!(iss >> path)) {
-                ERROR("Failed to read displacement texture path");
+                ERROR("Failed to read diffuse texture path");
                 abort();
             }
             mtl->diffuseTexture = fs::path(basePath).append(path);

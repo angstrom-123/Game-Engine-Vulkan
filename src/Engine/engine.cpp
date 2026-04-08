@@ -108,44 +108,45 @@ double Engine::GetTime()
     return glfwGetTime();
 }
 
-void Engine::CreateMaterial(const fs::path& ambient, const fs::path& diffuse, const fs::path& displacement, Material& material)
+void Engine::CreateMaterial(const MtlData& data, Material& material)
 {
-    MaterialInfo materialInfo = {
+    material.specularExponent = data.specularExponent;
+
+    MaterialTextureInfo materialInfo = {
         .ambientTextureData = nullptr,
         .diffuseTextureData = nullptr,
-        .displacementTextureData = nullptr,
-        .hasTransparency = false
+        .normalTextureData = nullptr,
     };
 
     ImageData ambientTexture;
-    if (!ambient.empty()) {
-        INFO("Loading image: " << ambient);
-        if (ambientTexture.LoadImage(ambient, false)) {
+    if (!data.ambientTexture.empty()) {
+        INFO("Loading image: " << data.ambientTexture);
+        if (ambientTexture.LoadImage(data.ambientTexture, false)) {
             materialInfo.ambientTextureData = &ambientTexture;
         }
     }
 
     // NOTE: Getting the alpha from diffuse texture, so we check transparency here
     ImageData diffuseTexture;
-    if (!diffuse.empty()) {
-        INFO("Loading image: " << diffuse);
-        if (diffuseTexture.LoadImage(diffuse, true)) {
+    if (!data.diffuseTexture.empty()) {
+        INFO("Loading image: " << data.diffuseTexture);
+        if (diffuseTexture.LoadImage(data.diffuseTexture, true)) {
             materialInfo.diffuseTextureData = &diffuseTexture;
-            materialInfo.hasTransparency = diffuseTexture.hasTransparency;
+            material.hasTransparency = diffuseTexture.hasTransparency;
         }
     }
 
-    ImageData displacementTexture;
-    if (!displacement.empty()) {
-        INFO("Loading image: " << displacement);
-        if (displacementTexture.LoadImage(displacement, false)) {
-            materialInfo.displacementTextureData = &displacementTexture;
+    ImageData normalTexture;
+    if (!data.normalTexture.empty()) {
+        INFO("Loading image: " << data.normalTexture);
+        if (normalTexture.LoadImage(data.normalTexture, false)) {
+            materialInfo.normalTextureData = &normalTexture;
         }
     }
 
     // If any textures are not present (or just not described in the mtl file)
     // the renderer falls back to defaults.
-    m_RenderSystem->CreateMaterial(materialInfo, material);
+    m_RenderSystem->AllocateMaterialTextures(materialInfo, material);
 }
 
 void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results)
@@ -164,7 +165,7 @@ void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::v
 
     for (const auto& [name, data] : materialData) {
         Material mat;
-        CreateMaterial(data.ambientTexture, data.diffuseTexture, data.displacementTexture, mat);
+        CreateMaterial(data, mat);
         materials.insert({name, mat});
     }
 
@@ -182,6 +183,10 @@ void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::v
             Vertex vertex = loader.GetVertex(triple);
             mesh.vertices[index] = vertex;
             mesh.bounds.Update(vertex);
+
+            if ((index + 1) % 3 == 0) {
+                CalculateTangents(mesh.vertices[index - 2], mesh.vertices[index - 1], mesh.vertices[index]);
+            }
         }
         m_RenderSystem->AllocateMesh(mesh);
         m_ecs.AddComponent<Mesh>(e, mesh);
@@ -192,4 +197,25 @@ void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::v
     }
 
     INFO("Load took " << GetTime() - startTime << "s");
+}
+
+void Engine::CalculateTangents(Vertex& v1, Vertex& v2, Vertex& v3)
+{
+    glm::vec3 edge1 = v2.position - v1.position;
+    glm::vec3 edge2 = v3.position - v1.position;
+    glm::vec2 deltaUV1 = v2.uv - v1.uv;
+    glm::vec2 deltaUV2 = v3.uv - v1.uv;
+
+    float f = (deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y);
+    float fInv = 1.0 / f;
+    glm::vec4 tangent(
+        fInv * (deltaUV2.y * edge1.x - deltaUV1.y * edge2.x),
+        fInv * (deltaUV2.y * edge1.y - deltaUV1.y * edge2.y),
+        fInv * (deltaUV2.y * edge1.z - deltaUV1.y * edge2.z),
+        f < 0.0 ? -1.0 : 1.0
+    );
+
+    v1.tangent = tangent;
+    v2.tangent = tangent;
+    v3.tangent = tangent;
 }

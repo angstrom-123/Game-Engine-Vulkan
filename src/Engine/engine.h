@@ -3,6 +3,7 @@
 #include <filesystem>
 
 #include "System/Render/renderSystem.h"
+#include "Util/objLoader.h"
 #include "config.h"
 #include "ECS/ecs.h"
 #include "eventHandler.h"
@@ -42,7 +43,8 @@ public:
     ECS& GetECS() { return m_ecs; };
 
 private:
-    void CreateMaterial(const fs::path& ambient, const fs::path& diffuse, const fs::path& displacement, Material& material);
+    void CreateMaterial(const MtlData& data, Material& material);
+    void CalculateTangents(Vertex& v1, Vertex& v2, Vertex& v3);
 
 private:
     App *m_App;

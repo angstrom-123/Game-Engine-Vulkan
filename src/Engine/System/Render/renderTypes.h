@@ -3,7 +3,6 @@
 #include "Util/allocator.h"
 
 static constexpr size_t FRAMES_IN_FLIGHT = 3;
-static constexpr size_t MAX_MATERIALS = 128;
 
 struct FrameData {
     VkFence renderFence;
