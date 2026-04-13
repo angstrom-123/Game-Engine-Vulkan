@@ -47,11 +47,8 @@ struct DepthPushConstants {
 struct PushConstants {
     glm::mat4x4 model;
     float specularExponent;
-    uint32_t ambientArrayIndex;
     uint32_t ambientIndex;
-    uint32_t diffuseArrayIndex;
     uint32_t diffuseIndex;
-    uint32_t normalArrayIndex;
     uint32_t normalIndex;
     uint32_t tileSize;
     uint32_t tilesX;

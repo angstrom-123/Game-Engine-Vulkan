@@ -414,12 +414,9 @@ void RenderSystem::Update(ECS& ecs)
         PushConstants constants = {
             .model              = model,
             .specularExponent   = material.specularExponent,
-            .ambientArrayIndex  = material.ambientTexture.arrayID,
-            .ambientIndex       = material.ambientTexture.textureID,
-            .diffuseArrayIndex  = material.diffuseTexture.arrayID,
-            .diffuseIndex       = material.diffuseTexture.textureID,
-            .normalArrayIndex   = material.normalTexture.arrayID,
-            .normalIndex        = material.normalTexture.textureID,
+            .ambientIndex       = (material.ambientTexture.arrayID << 16) | material.ambientTexture.textureID,
+            .diffuseIndex       = (material.diffuseTexture.arrayID << 16) | material.diffuseTexture.textureID,
+            .normalIndex        = (material.normalTexture.arrayID << 16) | material.normalTexture.textureID,
             .tileSize           = TILE_SIZE,
             .tilesX             = m_TilesX,
             .tilesY             = m_TilesY,
@@ -454,12 +451,9 @@ void RenderSystem::Update(ECS& ecs)
         PushConstants constants = {
             .model              = model,
             .specularExponent   = material.specularExponent,
-            .ambientArrayIndex  = material.ambientTexture.arrayID,
-            .ambientIndex       = material.ambientTexture.textureID,
-            .diffuseArrayIndex  = material.diffuseTexture.arrayID,
-            .diffuseIndex       = material.diffuseTexture.textureID,
-            .normalArrayIndex   = material.normalTexture.arrayID,
-            .normalIndex        = material.normalTexture.textureID,
+            .ambientIndex       = (material.ambientTexture.arrayID << 16) | material.ambientTexture.textureID,
+            .diffuseIndex       = (material.diffuseTexture.arrayID << 16) | material.diffuseTexture.textureID,
+            .normalIndex        = (material.normalTexture.arrayID << 16) | material.normalTexture.textureID,
             .tileSize           = TILE_SIZE,
             .tilesX             = m_TilesX,
             .tilesY             = m_TilesY,
@@ -1414,17 +1408,14 @@ void RenderSystem::InitGlobalDescriptor()
     VK_CHECK(vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_DescriptorLayout));
 
     // Array descriptor set layout
-    VkDescriptorSetLayoutBinding bindings[TEXTURE_ARRAY_MAX_ENUM];
-    for (uint32_t i = 0; i < TEXTURE_ARRAY_MAX_ENUM; i++) {
-        bindings[i] = {
-            .binding = i,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-        };
-    }
-    layoutInfo.pBindings = bindings;
-    layoutInfo.bindingCount = TEXTURE_ARRAY_MAX_ENUM;
+    VkDescriptorSetLayoutBinding arrayBinding = {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = TEXTURE_ARRAY_MAX_ENUM,
+        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+    };
+    layoutInfo.pBindings = &arrayBinding;
+    layoutInfo.bindingCount = 1;
     VK_CHECK(vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_ArrayHandler.descriptorLayout));
     
     m_MainDeletionQueue.PushFunction([=, this] {

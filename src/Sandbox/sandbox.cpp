@@ -47,7 +47,7 @@ void Sandbox::Init()
     m_Parent = ecs.CreateEntity();
     ecs.GetComponent<Transform>(m_Parent).Scale(0.015)
                                          .Translate(0.0, -2.0, 0.0)
-                                         .Rotate(glm::radians(90.0), Y_AXIS);
+                                         .Rotate(glm::radians(-90.0), Y_AXIS);
 
     // Load sponza mesh (made of several objects with different textures)
     // Sponza is a VERY heavy file, as it contains 40+ large image textures, which each need to 

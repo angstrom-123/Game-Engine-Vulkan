@@ -2,6 +2,7 @@
 #include "System/Render/renderTypes.h"
 #include "Util/imageLoader.h"
 #include "Util/myAssert.h"
+#include "vulkan_core.h"
 
 void TextureArrayHandler::Init(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue graphicsQueue, CommandSubmitter& submitter, VmaAllocator allocator, FrameData *frames, TextureArraySizes& sizes)
 {
@@ -9,6 +10,11 @@ void TextureArrayHandler::Init(VkDevice device, VkPhysicalDevice physicalDevice,
     m_Arrays[TEXTURE_ARRAY_COLOR_2048].Init(device, graphicsQueue, submitter, allocator, 2048, sizes.color2048, VK_FORMAT_R8G8B8A8_SRGB);
     m_Arrays[TEXTURE_ARRAY_DATA_1024].Init(device, graphicsQueue, submitter, allocator, 1024, sizes.data1024, VK_FORMAT_R8G8B8A8_UNORM);
     m_Arrays[TEXTURE_ARRAY_DATA_2048].Init(device, graphicsQueue, submitter, allocator, 2048, sizes.data2048, VK_FORMAT_R8G8B8A8_UNORM);
+
+    m_ArrayOffsets[TEXTURE_ARRAY_COLOR_1024] = 0;
+    m_ArrayOffsets[TEXTURE_ARRAY_COLOR_2048] = sizes.color1024;
+    m_ArrayOffsets[TEXTURE_ARRAY_DATA_1024] = sizes.color1024 + sizes.color2048;
+    m_ArrayOffsets[TEXTURE_ARRAY_DATA_2048] = sizes.color1024 + sizes.color2048 + sizes.data1024;
 
     // Write descriptor sets for all the arrays at once
     VkDescriptorImageInfo imageInfos[TEXTURE_ARRAY_MAX_ENUM];
@@ -24,17 +30,18 @@ void TextureArrayHandler::Init(VkDevice device, VkPhysicalDevice physicalDevice,
     for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
         FrameData& frame = frames[i];
         for (uint32_t j = 0; j < TEXTURE_ARRAY_MAX_ENUM; j++) {
-            descriptorWrites[j] = {
+            VkWriteDescriptorSet write = {
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .pNext = nullptr,
                 .dstSet = frame.arrayDescriptorSet,
-                .dstBinding = j,
+                .dstBinding = 0,
+                .dstArrayElement = j,
                 .descriptorCount = 1,
                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 .pImageInfo = &imageInfos[j]
             };
+            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
         }
-        vkUpdateDescriptorSets(device, TEXTURE_ARRAY_MAX_ENUM, descriptorWrites, 0, nullptr);
     }
 
     ImageData whiteImage, normalImage;

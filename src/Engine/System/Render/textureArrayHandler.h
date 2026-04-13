@@ -37,5 +37,6 @@ private:
     TextureAllocation m_DefaultColorAllocation;
     TextureAllocation m_DefaultNormalAllocation;
     TextureArray m_Arrays[TEXTURE_ARRAY_MAX_ENUM];
+    uint32_t m_ArrayOffsets[TEXTURE_ARRAY_MAX_ENUM];
     std::unordered_map<std::string, TextureAllocation> m_AllocatedTextures;
 };

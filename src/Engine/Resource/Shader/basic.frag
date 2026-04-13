@@ -10,11 +10,10 @@ struct Light {
     uint shadowIndex;
 };
 
+#define TEXTURE_ARRAY_COUNT 4
+
 layout (set = 0, binding = 0) uniform GlobalUniforms { mat4 vp; } uniforms;
-layout (set = 1, binding = 0) uniform sampler2DArray uColorTexArray1024;
-layout (set = 1, binding = 1) uniform sampler2DArray uColorTexArray2048;
-layout (set = 1, binding = 2) uniform sampler2DArray uDataTexArray1024;
-layout (set = 1, binding = 3) uniform sampler2DArray uDataTexArray2048;
+layout (set = 1, binding = 0) uniform sampler2DArray uTextures[TEXTURE_ARRAY_COUNT];
 layout (set = 2, binding = 0) uniform Camera {
     mat4 view;
     mat4 projection;
@@ -27,11 +26,8 @@ layout (set = 2, binding = 3) readonly buffer TileCounts { uint counts[]; } tile
 layout (push_constant) uniform Constants {
     mat4 model;
     float specularExponent;
-    uint ambientArrayIndex;
     uint ambientIndex;
-    uint diffuseArrayIndex;
     uint diffuseIndex;
-    uint normalArrayIndex;
     uint normalIndex;
     uint tileSize;
     uint tilesX;
@@ -61,19 +57,12 @@ float SpotFactor(vec3 lightDir, vec3 spotDir, float inner, float outer)
     return smoothed;
 }
 
-vec4 GetTextureData(uint arrayIndex, uint textureIndex)
-{
-    if (arrayIndex == 0) return texture(uColorTexArray1024, vec3(vUV, textureIndex));
-    if (arrayIndex == 1) return texture(uColorTexArray2048, vec3(vUV, textureIndex));
-    if (arrayIndex == 2) return texture(uDataTexArray1024, vec3(vUV, textureIndex));
-    else                 return texture(uDataTexArray1024, vec3(vUV, textureIndex));
-}
-
 void main()
 {
-    vec4 ambientMap = GetTextureData(constants.ambientArrayIndex, constants.ambientIndex);
-    vec4 diffuseMap = GetTextureData(constants.diffuseArrayIndex, constants.diffuseIndex);
-    vec4 normalMap = GetTextureData(constants.normalArrayIndex, constants.normalIndex);
+    // Indices packed. 16 high bits = array index, 16 low bits = texture index
+    vec4 ambientMap = texture(uTextures[constants.ambientIndex >> 16], vec3(vUV, constants.ambientIndex & 0xFFFF));
+    vec4 diffuseMap = texture(uTextures[constants.diffuseIndex >> 16], vec3(vUV, constants.diffuseIndex & 0xFFFF));
+    vec4 normalMap = texture(uTextures[constants.normalIndex >> 16], vec3(vUV, constants.normalIndex & 0xFFFF));
 
     vec3 normal = normalMap.rgb * 2.0 - 1.0;
     normal = normalize(vTBN * normal);
