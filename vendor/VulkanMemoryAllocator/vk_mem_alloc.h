@@ -1,3 +1,7 @@
+#pragma clang diagnostic ignored "-Wunused-parameter"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wunused-variable"
+
 //
 // Copyright (c) 2017-2026 Advanced Micro Devices, Inc. All rights reserved.
 //

@@ -1,3 +1,5 @@
+#pragma clang diagnostic ignored "-Wunused-but-set-variable"
+
 /* stb_image_resize2 - v2.18 - public domain image resizing
 
    by Jeff Roberts (v2) and Jorge L Rodriguez

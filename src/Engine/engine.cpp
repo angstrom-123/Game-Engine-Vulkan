@@ -130,7 +130,7 @@ void Engine::CreateMaterial(const MtlData& data, Material& material)
     ImageData ambientTexture;
     if (!data.ambientTexture.empty()) {
         INFO("Loading image: " << data.ambientTexture);
-        if (ambientTexture.LoadImage(data.ambientTexture, false)) {
+        if (ambientTexture.LoadImage(data.ambientTexture, false, IMAGE_KIND_COLOR)) {
             materialInfo.ambientTextureData = &ambientTexture;
         }
     }
@@ -139,7 +139,7 @@ void Engine::CreateMaterial(const MtlData& data, Material& material)
     ImageData diffuseTexture;
     if (!data.diffuseTexture.empty()) {
         INFO("Loading image: " << data.diffuseTexture);
-        if (diffuseTexture.LoadImage(data.diffuseTexture, true)) {
+        if (diffuseTexture.LoadImage(data.diffuseTexture, true, IMAGE_KIND_COLOR)) {
             materialInfo.diffuseTextureData = &diffuseTexture;
             material.hasTransparency = diffuseTexture.hasTransparency;
         }
@@ -148,7 +148,7 @@ void Engine::CreateMaterial(const MtlData& data, Material& material)
     ImageData normalTexture;
     if (!data.normalTexture.empty()) {
         INFO("Loading image: " << data.normalTexture);
-        if (normalTexture.LoadImage(data.normalTexture, false)) {
+        if (normalTexture.LoadImage(data.normalTexture, false, IMAGE_KIND_NORMAL)) {
             materialInfo.normalTextureData = &normalTexture;
         }
     }
@@ -158,7 +158,6 @@ void Engine::CreateMaterial(const MtlData& data, Material& material)
     m_RenderSystem->AllocateMaterialTextures(materialInfo, material);
 }
 
-// TODO: Multiple meshes should be able to use same materials without duplication
 void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results)
 {
     double startTime = GetTime();

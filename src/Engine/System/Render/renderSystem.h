@@ -7,6 +7,8 @@
 #include "Component/material.h"
 #include "Component/mesh.h"
 #include "ECS/ecs.h"
+#include "System/Render/commandSubmitter.h"
+#include "System/Render/textureArrayHandler.h"
 #include "Util/allocator.h"
 #include "config.h"
 #include "renderTypes.h"
@@ -24,24 +26,6 @@ struct DeletionQueue {
         }
         deletors.clear();
     }
-};
-
-struct UploadContext {
-    VkFence uploadFence;
-    VkCommandPool commandPool;
-    VkCommandBuffer commandBuffer;
-    bool initialized;
-};
-
-struct TextureArray {
-    AllocatedImage image;
-    VkImageView view;
-    VkFormat format;
-    VkSampler sampler;
-    uint32_t layerCount;
-    uint32_t resolution;
-    uint32_t mipLevels;
-    std::queue<uint32_t> freeLayers;
 };
 
 class RenderSystem : public System {
@@ -76,26 +60,12 @@ private:
     void InitResolvePipeline();
     void InitMainPipelines();
     void InitGlobalDescriptor();
-    void ImmediateSubmit(std::function<void (VkCommandBuffer commandBuffer)>&& function);
     void LoadShaderModule(const std::filesystem::path& path, VkShaderModule& module);
-    uint32_t CreateTextureArray(uint32_t resolution, uint32_t size, VkFormat format);
-    uint32_t AllocateTexture(ImageData *imageData, TextureArray& array);
-    size_t Align(size_t size);
 
 private:
     // For Drawing
     Entity m_Camera;
     std::vector<Entity> m_DrawOrder;
-    uint32_t m_DefaultColorTextureIndex;
-    uint32_t m_DefaultNormalTextureIndex;
-
-    // Texture Array
-    // TODO: Add multiple sizes of array
-    VkDescriptorSetLayout m_ArrayDescriptorLayout;
-    uint32_t m_MaxTextureArrays;
-    uint32_t m_ColorArrayIndex;
-    uint32_t m_DataArrayIndex;
-    std::vector<TextureArray> m_TextureArrays;
 
     // Global Descriptor
     VkDescriptorSetLayout m_DescriptorLayout;
@@ -142,8 +112,8 @@ private:
     VkDescriptorSetLayout m_ResolveDescriptorLayout;
 
     struct VmaAllocator_T *m_Allocator;
-
-    UploadContext m_UploadContext;
+    CommandSubmitter m_Submitter;
+    TextureArrayHandler m_ArrayHandler;
 
     // Vulkan Primitives
     VkInstance m_Instance;

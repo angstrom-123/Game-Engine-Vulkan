@@ -1,5 +1,6 @@
 #pragma once
 
+#include "System/Render/textureArrayHandler.h"
 #include "Util/imageLoader.h"
 #include <glm/mat4x4.hpp>
 #include <vulkan/vulkan_core.h>
@@ -13,7 +14,7 @@ struct MaterialTextureInfo {
 struct Material {
     bool hasTransparency;
     float specularExponent;
-    uint32_t ambientTextureIndex;
-    uint32_t diffuseTextureIndex;
-    uint32_t normalTextureIndex;
+    TextureAllocation ambientTexture;
+    TextureAllocation diffuseTexture;
+    TextureAllocation normalTexture;
 };

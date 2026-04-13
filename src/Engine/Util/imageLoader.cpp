@@ -8,8 +8,10 @@
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include <stb/stb_image_resize2.h>
 
-bool ImageData::LoadImage(const std::filesystem::path& filePath, bool checkTransparency)
+bool ImageData::LoadImage(const std::filesystem::path& filePath, bool checkTransparency, ImageKind imageKind)
 {
+    path = filePath;
+
     stbi_set_flip_vertically_on_load(1);
     pixels = stbi_load(filePath.c_str(), &width, &height, &channels, STBI_rgb_alpha);
     if (!pixels) {
@@ -17,6 +19,7 @@ bool ImageData::LoadImage(const std::filesystem::path& filePath, bool checkTrans
     }
 
     hasTransparency = false;
+    kind = imageKind;
 
     if (channels < 4) return true;
     if (checkTransparency) {

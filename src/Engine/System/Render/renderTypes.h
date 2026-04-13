@@ -2,6 +2,25 @@
 
 #include "Util/allocator.h"
 #include "glm/ext/matrix_float4x4.hpp"
+#include "Util/logger.h"
+
+#ifdef DEBUG 
+    #define USE_VALIDATION_LAYERS VK_TRUE 
+    #define VK_CHECK(x)\
+        do {\
+            VkResult __err = x;\
+            if (__err) {\
+                ERROR("Vulkan error: " << (VkResult) __err);\
+                abort();\
+            }\
+        } while (0);
+#elifdef RELEASE
+    #define USE_VALIDATION_LAYERS VK_FALSE 
+    #define VK_CHECK(x) (void) x
+#else 
+    #error "DEBUG or RELEASE must be specified"
+#endif
+
 
 static constexpr size_t FRAMES_IN_FLIGHT = 3;
 static constexpr size_t MAX_LIGHTS = 1024;
@@ -28,8 +47,11 @@ struct DepthPushConstants {
 struct PushConstants {
     glm::mat4x4 model;
     float specularExponent;
+    uint32_t ambientArrayIndex;
     uint32_t ambientIndex;
+    uint32_t diffuseArrayIndex;
     uint32_t diffuseIndex;
+    uint32_t normalArrayIndex;
     uint32_t normalIndex;
     uint32_t tileSize;
     uint32_t tilesX;

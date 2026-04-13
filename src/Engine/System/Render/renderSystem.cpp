@@ -12,6 +12,7 @@
 #include "System/Render/initialiser.h"
 #include "System/Render/pipeline.h"
 #include "System/Render/renderTypes.h"
+#include "System/Render/textureArrayHandler.h"
 #include "Util/allocator.h"
 #include "Util/logger.h"
 #include "Util/imageLoader.h"
@@ -20,26 +21,8 @@
 
 #include <VkBootstrap/VkBootstrap.h>
 #include <GLFW/glfw3.h>
-#include <ranges>
 #include <vulkan/vulkan_core.h>
 #include <stb/stb_image.h>
-
-#ifdef DEBUG 
-    #define USE_VALIDATION_LAYERS VK_TRUE 
-    #define VK_CHECK(x)\
-        do {\
-            VkResult __err = x;\
-            if (__err) {\
-                ERROR("Vulkan error: " << (VkResult) __err);\
-                abort();\
-            }\
-        } while (0);
-#elifdef RELEASE
-    #define USE_VALIDATION_LAYERS VK_FALSE 
-    #define VK_CHECK(x) (void) x
-#else 
-    #error "DEBUG or RELEASE must be specified"
-#endif
 
 void RenderSystem::Init(GLFWwindow *window, Config *config)
 {
@@ -47,13 +30,12 @@ void RenderSystem::Init(GLFWwindow *window, Config *config)
     m_Extent.height = config->windowHeight;
     m_PresentMode = config->vsync ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
     m_DrawOrder.reserve(MAX_ENTITIES);
-    m_MaxTextureArrays = 2;
 
     InitVulkan(window);
     InitMSAA(config->msaaSamples);
     InitSwapchain();
-    InitGlobalDescriptor();
     InitCommands();
+    InitGlobalDescriptor();
     InitDefaultRenderPass();
     InitDepthRenderPass();
     InitFramebuffers();
@@ -67,13 +49,18 @@ void RenderSystem::Init(GLFWwindow *window, Config *config)
     InitResolvePipeline();
     InitMainPipelines();
 
-    ImageData whiteImage, normalImage;
-    whiteImage.LoadImage("src/Engine/Resource/Texture/white.png", false);
-    normalImage.LoadImage("src/Engine/Resource/Texture/normal.png", false);
-    m_ColorArrayIndex = CreateTextureArray(2048, 64, VK_FORMAT_R8G8B8A8_SRGB);
-    m_DataArrayIndex = CreateTextureArray(2048, 32, VK_FORMAT_R8G8B8A8_UNORM);
-    m_DefaultColorTextureIndex = AllocateTexture(&whiteImage, m_TextureArrays[m_ColorArrayIndex]);
-    m_DefaultNormalTextureIndex = AllocateTexture(&normalImage, m_TextureArrays[m_DataArrayIndex]);
+    // These sizes use ~2 GiB of memory
+    TextureArraySizes arraySizes = {
+        .color1024 = 128,
+        .color2048 = 32,
+        .data1024 = 128,
+        .data2048 = 32
+    };
+    m_ArrayHandler.Init(m_Device, m_PhysicalDevice, m_GraphicsQueue, m_Submitter, m_Allocator, m_Frames, arraySizes);
+    m_MainDeletionQueue.PushFunction([=, this] {
+        m_ArrayHandler.Cleanup(m_Device, m_Allocator);
+    });
+
 
     m_IsInitialized = true;
 }
@@ -116,7 +103,6 @@ void RenderSystem::Update(ECS& ecs)
     Frustum camFrustum = Frustum(camVP);
 
     // Split up opaque and translucent entities, and perform frustum culling 
-    // TODO: Cache the draw order
     int32_t entityCount = entities.size();
     int32_t frontPtr = 0;
     int32_t backPtr = entityCount - 1;
@@ -426,15 +412,18 @@ void RenderSystem::Update(ECS& ecs)
         Material& material = ecs.GetComponent<Material>(e);
 
         PushConstants constants = {
-            .model = model,
-            .specularExponent = material.specularExponent,
-            .ambientIndex = material.ambientTextureIndex,
-            .diffuseIndex = material.diffuseTextureIndex,
-            .normalIndex = material.normalTextureIndex,
-            .tileSize = TILE_SIZE,
-            .tilesX = m_TilesX,
-            .tilesY = m_TilesY,
-            .maxTileLights = MAX_TILE_LIGHTS,
+            .model              = model,
+            .specularExponent   = material.specularExponent,
+            .ambientArrayIndex  = material.ambientTexture.arrayID,
+            .ambientIndex       = material.ambientTexture.textureID,
+            .diffuseArrayIndex  = material.diffuseTexture.arrayID,
+            .diffuseIndex       = material.diffuseTexture.textureID,
+            .normalArrayIndex   = material.normalTexture.arrayID,
+            .normalIndex        = material.normalTexture.textureID,
+            .tileSize           = TILE_SIZE,
+            .tilesX             = m_TilesX,
+            .tilesY             = m_TilesY,
+            .maxTileLights      = MAX_TILE_LIGHTS,
         };
         vkCmdPushConstants(frame.commandBuffer, m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &constants);
 
@@ -463,15 +452,18 @@ void RenderSystem::Update(ECS& ecs)
         Material& material = ecs.GetComponent<Material>(e);
 
         PushConstants constants = {
-            .model = model,
-            .specularExponent = material.specularExponent,
-            .ambientIndex = material.ambientTextureIndex,
-            .diffuseIndex = material.diffuseTextureIndex,
-            .normalIndex = material.normalTextureIndex,
-            .tileSize = TILE_SIZE,
-            .tilesX = m_TilesX,
-            .tilesY = m_TilesY,
-            .maxTileLights = MAX_TILE_LIGHTS,
+            .model              = model,
+            .specularExponent   = material.specularExponent,
+            .ambientArrayIndex  = material.ambientTexture.arrayID,
+            .ambientIndex       = material.ambientTexture.textureID,
+            .diffuseArrayIndex  = material.diffuseTexture.arrayID,
+            .diffuseIndex       = material.diffuseTexture.textureID,
+            .normalArrayIndex   = material.normalTexture.arrayID,
+            .normalIndex        = material.normalTexture.textureID,
+            .tileSize           = TILE_SIZE,
+            .tilesX             = m_TilesX,
+            .tilesY             = m_TilesY,
+            .maxTileLights      = MAX_TILE_LIGHTS,
         };
         vkCmdPushConstants(frame.commandBuffer, m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &constants);
 
@@ -536,7 +528,7 @@ void RenderSystem::AllocateMesh(Mesh& mesh)
     VK_CHECK(vmaCreateBuffer(m_Allocator, &vertexBufferInfo, &allocInfo, &mesh.vertexBuffer.buffer, &mesh.vertexBuffer.allocation, nullptr));
 
     // Copy the buffer to the GPU
-    ImmediateSubmit([=](VkCommandBuffer commandBuffer) {
+    m_Submitter.ImmediateSubmit(m_Device, m_GraphicsQueue, [=](VkCommandBuffer commandBuffer) {
         VkBufferCopy copy = {
             .srcOffset = 0,
             .dstOffset = 0,
@@ -558,18 +550,15 @@ void RenderSystem::AllocateMesh(Mesh& mesh)
 
 void RenderSystem::AllocateMaterialTextures(const MaterialTextureInfo& info, Material& mat)
 {
-    mat.ambientTextureIndex = (info.ambientTextureData)
-            ? AllocateTexture(info.ambientTextureData, m_TextureArrays[m_ColorArrayIndex])
-            : m_DefaultColorTextureIndex;
-
-    mat.diffuseTextureIndex = (info.diffuseTextureData)
-            ? AllocateTexture(info.diffuseTextureData, m_TextureArrays[m_ColorArrayIndex])
-            : m_DefaultColorTextureIndex;
-
-    // NOTE: Normal texture is allocated to a special "data array" with a different image format
-    mat.normalTextureIndex = (info.normalTextureData)
-            ? AllocateTexture(info.normalTextureData, m_TextureArrays[m_DataArrayIndex])
-            : m_DefaultNormalTextureIndex;
+    mat.ambientTexture = (info.ambientTextureData) 
+                       ? m_ArrayHandler.AllocateTexture(m_Device, m_PhysicalDevice, m_GraphicsQueue, m_Submitter, m_Allocator, info.ambientTextureData)
+                       : m_ArrayHandler.GetFallbackTexture(info.ambientTextureData, IMAGE_KIND_COLOR);
+    mat.diffuseTexture = (info.diffuseTextureData) 
+                       ? m_ArrayHandler.AllocateTexture(m_Device, m_PhysicalDevice, m_GraphicsQueue, m_Submitter, m_Allocator, info.diffuseTextureData)
+                       : m_ArrayHandler.GetFallbackTexture(info.diffuseTextureData, IMAGE_KIND_COLOR);
+    mat.normalTexture = (info.normalTextureData) 
+                      ? m_ArrayHandler.AllocateTexture(m_Device, m_PhysicalDevice, m_GraphicsQueue, m_Submitter, m_Allocator, info.normalTextureData)
+                      : m_ArrayHandler.GetFallbackTexture(info.normalTextureData, IMAGE_KIND_NORMAL);
 }
 
 void RenderSystem::Resize(ECS& ecs)
@@ -591,28 +580,10 @@ void RenderSystem::Resize(ECS& ecs)
     for (FrameData& frame : m_Frames) {
         VK_CHECK(vkResetCommandBuffer(frame.commandBuffer, 0));
     }
-    vkDestroySwapchainKHR(m_Device, m_Swapchain, nullptr);
 
+    m_DynamicDeletionQueue.Flush();
     for (SwapchainImageData& image : m_Images) {
-        vkDestroySemaphore(m_Device, image.renderSemaphore, nullptr);
-        vkDestroyImageView(m_Device, image.view, nullptr);
-        vkDestroyFramebuffer(m_Device, image.framebuffer, nullptr);
-        vkDestroyFramebuffer(m_Device, image.depthFramebuffer, nullptr);
-        vkDestroyImageView(m_Device, image.depthView, nullptr);
-        vmaDestroyImage(m_Allocator, image.depthImage.image, image.depthImage.allocation);
-        vkDestroyImageView(m_Device, image.msaaColorView, nullptr);
-        vmaDestroyImage(m_Allocator, image.msaaColorImage.image, image.msaaColorImage.allocation);
-        vkDestroyImageView(m_Device, image.resolvedDepthView, nullptr);
-        vmaDestroyImage(m_Allocator, image.resolvedDepthImage.image, image.resolvedDepthImage.allocation);
         image.flightFence = VK_NULL_HANDLE;
-    }
-    for (FrameData& frame : m_Frames) {
-        vkDestroyFence(m_Device, frame.renderFence, nullptr);
-        vkDestroySemaphore(m_Device, frame.acquireSemaphore, nullptr);
-        vmaUnmapMemory(m_Allocator, frame.lightCulling.lightBuffer.allocation);
-        vmaDestroyBuffer(m_Allocator, frame.lightCulling.lightBuffer.buffer, frame.lightCulling.lightBuffer.allocation);
-        vmaDestroyBuffer(m_Allocator, frame.lightCulling.lightIndices.buffer, frame.lightCulling.lightIndices.allocation);
-        vmaDestroyBuffer(m_Allocator, frame.lightCulling.tileCounts.buffer, frame.lightCulling.tileCounts.allocation);
     }
 
     m_Extent = capabilities.currentExtent;
@@ -810,13 +781,9 @@ void RenderSystem::InitCommands()
         });
     }
 
-    VK_CHECK(vkCreateCommandPool(m_Device, &createInfo, nullptr, &m_UploadContext.commandPool));
-
-    VkCommandBufferAllocateInfo alloc_info = vkinit::CommandBufferAllocateInfo(m_UploadContext.commandPool);
-    VK_CHECK(vkAllocateCommandBuffers(m_Device, &alloc_info, &m_UploadContext.commandBuffer));
-
-    m_MainDeletionQueue.PushFunction([=, this] { 
-        vkDestroyCommandPool(m_Device, m_UploadContext.commandPool, nullptr); 
+    m_Submitter.Init(m_Device, m_GraphicsQueueFamily);
+    m_MainDeletionQueue.PushFunction([=, this] {
+        m_Submitter.Cleanup(m_Device);
     });
 }
 
@@ -903,7 +870,6 @@ void RenderSystem::InitFramebuffers()
         info.pAttachments = &attachments[0];
         VK_CHECK(vkCreateFramebuffer(m_Device, &info, nullptr, &image.framebuffer));
 
-        // TODO: Are the depth attachments being passed from the prepass to the main pass correctly?
         depthInfo.attachmentCount = 1;
         depthInfo.pAttachments = &image.depthView;
         VK_CHECK(vkCreateFramebuffer(m_Device, &depthInfo, nullptr, &image.depthFramebuffer));
@@ -1365,17 +1331,6 @@ void RenderSystem::InitSyncStructures()
             vkDestroySemaphore(m_Device, image.renderSemaphore, nullptr); 
         });
     }
-
-    if (!m_UploadContext.initialized) {
-        fenceInfo.flags = 0;
-        VK_CHECK(vkCreateFence(m_Device, &fenceInfo, nullptr, &m_UploadContext.uploadFence));
-
-        m_MainDeletionQueue.PushFunction([=, this] {
-            vkDestroyFence(m_Device, m_UploadContext.uploadFence, nullptr);
-        });
-
-        m_UploadContext.initialized = true;
-    }
 }
 
 void RenderSystem::InitMainPipelines()
@@ -1401,7 +1356,7 @@ void RenderSystem::InitMainPipelines()
         .offset = 0,
         .size = sizeof(PushConstants),
     };
-    VkDescriptorSetLayout layouts[3] = { m_DescriptorLayout, m_ArrayDescriptorLayout, m_LightCullingDescriptorLayout };
+    VkDescriptorSetLayout layouts[3] = { m_DescriptorLayout, m_ArrayHandler.descriptorLayout, m_LightCullingDescriptorLayout };
     VkPipelineLayoutCreateInfo pipelineInfo = vkinit::LayoutCreateInfo(&constantRange);
     pipelineInfo.setLayoutCount = 3;
     pipelineInfo.pSetLayouts = layouts;
@@ -1456,23 +1411,25 @@ void RenderSystem::InitGlobalDescriptor()
         .bindingCount = 1,
         .pBindings = &binding
     };
-    vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_DescriptorLayout);
+    VK_CHECK(vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_DescriptorLayout));
 
     // Array descriptor set layout
-    std::vector<VkDescriptorSetLayoutBinding> bindings(m_MaxTextureArrays);
-    for (const auto& [index, binding] : bindings | std::ranges::views::enumerate) {
-        binding.binding = index;
-        binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        binding.descriptorCount = 1;
-        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutBinding bindings[TEXTURE_ARRAY_MAX_ENUM];
+    for (uint32_t i = 0; i < TEXTURE_ARRAY_MAX_ENUM; i++) {
+        bindings[i] = {
+            .binding = i,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        };
     }
-    layoutInfo.pBindings = bindings.data();
-    layoutInfo.bindingCount = m_MaxTextureArrays;
-    vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_ArrayDescriptorLayout);
+    layoutInfo.pBindings = bindings;
+    layoutInfo.bindingCount = TEXTURE_ARRAY_MAX_ENUM;
+    VK_CHECK(vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_ArrayHandler.descriptorLayout));
     
     m_MainDeletionQueue.PushFunction([=, this] {
         vkDestroyDescriptorSetLayout(m_Device, m_DescriptorLayout, nullptr);
-        vkDestroyDescriptorSetLayout(m_Device, m_ArrayDescriptorLayout, nullptr);
+        vkDestroyDescriptorSetLayout(m_Device, m_ArrayHandler.descriptorLayout, nullptr);
     });
 
     VkBufferCreateInfo bufferInfo = {
@@ -1495,7 +1452,7 @@ void RenderSystem::InitGlobalDescriptor()
 
         VkDescriptorPoolSize poolSizes[2] = { 
             { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },
-            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, m_MaxTextureArrays }
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, TEXTURE_ARRAY_MAX_ENUM }
         };
         VkDescriptorPoolCreateInfo poolInfo = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -1536,27 +1493,9 @@ void RenderSystem::InitGlobalDescriptor()
         vkUpdateDescriptorSets(m_Device, 1, &write, 0, nullptr);
 
         // Allocate texture array descriptor set
-        allocInfo.pSetLayouts = &m_ArrayDescriptorLayout;
+        allocInfo.pSetLayouts = &m_ArrayHandler.descriptorLayout;
         VK_CHECK(vkAllocateDescriptorSets(m_Device, &allocInfo, &frame.arrayDescriptorSet));
     }
-}
-
-void RenderSystem::ImmediateSubmit(std::function<void (VkCommandBuffer commandBuffer)>&& function)
-{
-    VkCommandBufferBeginInfo beginInfo = vkinit::CommandBufferBeginInfo(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-    VK_CHECK(vkBeginCommandBuffer(m_UploadContext.commandBuffer, &beginInfo));
-
-    function(m_UploadContext.commandBuffer);
-
-    VK_CHECK(vkEndCommandBuffer(m_UploadContext.commandBuffer));
-
-    VkSubmitInfo submitInfo = vkinit::SubmitInfo(&m_UploadContext.commandBuffer);
-    VK_CHECK(vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_UploadContext.uploadFence));
-
-    VK_CHECK(vkWaitForFences(m_Device, 1, &m_UploadContext.uploadFence, VK_TRUE, UINT64_MAX));
-    VK_CHECK(vkResetFences(m_Device, 1, &m_UploadContext.uploadFence));
-
-    VK_CHECK(vkResetCommandPool(m_Device, m_UploadContext.commandPool, 0));
 }
 
 void RenderSystem::LoadShaderModule(const std::filesystem::path& path, VkShaderModule& module)
@@ -1593,296 +1532,4 @@ void RenderSystem::LoadShaderModule(const std::filesystem::path& path, VkShaderM
     delete[] buf;
 
     module = shaderModule;
-}
-
-uint32_t RenderSystem::CreateTextureArray(uint32_t resolution, uint32_t size, VkFormat format)
-{
-    TextureArray array;
-    array.resolution = resolution;
-    array.layerCount = size;
-    array.format = format;
-
-    array.mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(array.resolution, array.resolution)))) + 1;
-
-    for (uint32_t i = 0; i < array.layerCount; i++) {
-        array.freeLayers.push(i);
-    }
-
-    VkExtent3D extent = {
-        .width = array.resolution,
-        .height = array.resolution,
-        .depth = 1
-    };
-
-    VkImageCreateInfo imageInfo = vkinit::ImageCreateInfo(array.format, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, extent);
-    imageInfo.arrayLayers = array.layerCount;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    imageInfo.mipLevels = array.mipLevels;
-
-    VmaAllocationCreateInfo allocInfo = {
-        .usage = VMA_MEMORY_USAGE_GPU_ONLY
-    };
-    vmaCreateImage(m_Allocator, &imageInfo, &allocInfo, &array.image.image, &array.image.allocation, nullptr);
-
-    VkImageViewCreateInfo viewInfo = vkinit::ImageViewCreateInfo(array.format, array.image.image, VK_IMAGE_ASPECT_COLOR_BIT);
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-    viewInfo.subresourceRange.layerCount = array.layerCount;
-    viewInfo.subresourceRange.levelCount = array.mipLevels;
-    VK_CHECK(vkCreateImageView(m_Device, &viewInfo, nullptr, &array.view));
-
-    VkSamplerCreateInfo samplerInfo = {
-        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-        .pNext = nullptr,
-        .magFilter = VK_FILTER_LINEAR,
-        .minFilter = VK_FILTER_LINEAR,
-        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
-        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
-        .mipLodBias = 0.0,
-        .minLod = 0.0,
-        .maxLod = VK_LOD_CLAMP_NONE,
-    };
-    VK_CHECK(vkCreateSampler(m_Device, &samplerInfo, nullptr, &array.sampler));
-
-    // Transition whole array to shader read
-    ImmediateSubmit([=](VkCommandBuffer commandBuffer) {
-        VkImageSubresourceRange range = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = array.mipLevels,
-            .baseArrayLayer = 0,
-            .layerCount = array.layerCount
-        };
-        VkImageMemoryBarrier barrier = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcAccessMask = 0,
-            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            .image = array.image.image,
-            .subresourceRange = range,
-        };
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-    });
-
-    m_MainDeletionQueue.PushFunction([=, this] {
-        vkDestroySampler(m_Device, array.sampler, nullptr);
-        vkDestroyImageView(m_Device, array.view, nullptr);
-        vmaDestroyImage(m_Allocator, array.image.image, array.image.allocation);
-    });
-
-    uint32_t index = m_TextureArrays.size();
-    m_TextureArrays.push_back(array);
-
-    // NOTE: 2 loops because imageInfos needs a lifetime equal to descriptorWrites
-    std::vector<VkDescriptorImageInfo> imageInfos(m_TextureArrays.size());
-    for (uint32_t i = 0; i < imageInfos.size(); i++) {
-        imageInfos[i] = {
-            .sampler = m_TextureArrays[i].sampler,
-            .imageView = m_TextureArrays[i].view,
-            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-        };
-    }
-
-    std::vector<VkWriteDescriptorSet> descriptorWrites(m_TextureArrays.size());
-    for (FrameData& frame : m_Frames) {
-        for (uint32_t i = 0; i < descriptorWrites.size(); i++) {
-            descriptorWrites[i] = {
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .pNext = nullptr,
-                .dstSet = frame.arrayDescriptorSet,
-                .dstBinding = i,
-                .descriptorCount = 1,
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo = &imageInfos[i]
-            };
-        }
-        vkUpdateDescriptorSets(m_Device, descriptorWrites.size(), descriptorWrites.data(), 0, nullptr);
-    }
-
-    return index;
-}
-
-uint32_t RenderSystem::AllocateTexture(ImageData *imageData, TextureArray& array)
-{
-    ASSERT(array.freeLayers.size() > 0 && "Allocating too many texture array layers");
-    uint32_t layerIndex = array.freeLayers.front();
-    array.freeLayers.pop();
-
-    if (static_cast<uint32_t>(imageData->width) < array.resolution || static_cast<uint32_t>(imageData->width) < array.resolution) {
-        imageData->Resize(array.resolution, array.resolution);
-    }
-
-    ASSERT(imageData->width == static_cast<int>(array.resolution) && "Image width doesn't match array texture");
-    ASSERT(imageData->height == static_cast<int>(array.resolution) && "Image height doesn't match array texture");
-    ASSERT(imageData->channels == 4 && "Image has incorrect number of channels");
-
-    VkDeviceSize imageSize = imageData->width * imageData->height * imageData->channels;
-
-    // Staging buffer
-    VkBufferCreateInfo stagingBufferInfo = {
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .pNext = nullptr,
-        .size = imageSize,
-        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT
-    };
-    VmaAllocationCreateInfo allocInfo = {
-        .usage = VMA_MEMORY_USAGE_CPU_ONLY
-    };
-
-    AllocatedBuffer stagingBuffer;
-    VK_CHECK(vmaCreateBuffer(m_Allocator, &stagingBufferInfo, &allocInfo, &stagingBuffer.buffer, &stagingBuffer.allocation, nullptr));
-
-    vmaMapMemory(m_Allocator, stagingBuffer.allocation, &stagingBuffer.data);
-    memcpy(stagingBuffer.data, imageData->pixels, imageSize);
-    vmaUnmapMemory(m_Allocator, stagingBuffer.allocation);
-
-    // Clean up image data
-    stbi_image_free(imageData->pixels);
-
-    // Copy buffer to texture array gpu memory
-    ImmediateSubmit([=, this](VkCommandBuffer commandBuffer) {
-        VkImageSubresourceRange range = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = layerIndex,
-            .layerCount = 1
-        };
-
-        // Transition image to optimal layout for a data transfer
-        VkImageMemoryBarrier barrierToTransfer = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcAccessMask = 0,
-            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            .image = array.image.image,
-            .subresourceRange = range,
-        };
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrierToTransfer);
-
-        // Copy staging buffer to image
-        VkBufferImageCopy copy = {
-            .bufferOffset = 0,
-            .bufferRowLength = 0,
-            .bufferImageHeight = 0,
-            .imageSubresource = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel = 0,
-                .baseArrayLayer = layerIndex,
-                .layerCount = 1,
-            },
-            .imageExtent = { array.resolution, array.resolution, 1 }
-        };
-        vkCmdCopyBufferToImage(commandBuffer, stagingBuffer.buffer, array.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-
-        // Check for linear blit support (for mipmap creation)
-        VkFormatProperties properties;
-        vkGetPhysicalDeviceFormatProperties(m_PhysicalDevice, array.format, &properties);
-        if (!(properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
-            ERROR("Texture image format does not support linear blitting");
-            WARN("TODO: Implement alternative image resizing for mipmap generation");
-            abort();
-        }
-
-        // Generate mipmaps
-        VkImageMemoryBarrier mipmapBarrier = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = array.image.image,
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .levelCount = 1,
-                .baseArrayLayer = layerIndex,
-                .layerCount = 1,
-            },
-        };
-
-        // Transfer mip level 0 to transfer src
-        mipmapBarrier.subresourceRange.baseMipLevel = 0;
-        mipmapBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        mipmapBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        mipmapBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        mipmapBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &mipmapBarrier);
-
-        // Transfer all mip levels except level 0 to transfer destination
-        for (uint32_t i = 1; i < array.mipLevels; i++) {
-            mipmapBarrier.subresourceRange.baseMipLevel = i;
-            mipmapBarrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            mipmapBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            mipmapBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            mipmapBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &mipmapBarrier);
-        }
-        
-        int32_t mipWidth = array.resolution;
-        int32_t mipHeight = array.resolution;
-        for (uint32_t i = 1; i < array.mipLevels; i++) {
-            // Blit next mip level
-            VkImageBlit blit = {
-                .srcSubresource = {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .mipLevel = i - 1,
-                    .baseArrayLayer = layerIndex,
-                    .layerCount = 1
-                },
-                .srcOffsets = {
-                    { 0, 0, 0 },
-                    { mipWidth, mipHeight, 1 }
-                },
-                .dstSubresource = {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .mipLevel = i,
-                    .baseArrayLayer = layerIndex,
-                    .layerCount = 1
-                },
-                .dstOffsets = {
-                    { 0, 0, 0 },
-                    { mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1 }
-                },
-            };
-            vkCmdBlitImage(commandBuffer, array.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, array.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
-
-            // Wait for blit to finish and transfer to shader-readable
-            mipmapBarrier.subresourceRange.baseMipLevel = i - 1;
-            mipmapBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            mipmapBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-            mipmapBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            mipmapBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &mipmapBarrier);
-
-            // If not last mip level, transition current level to src, ready to blit to next
-            if (i < array.mipLevels - 1) {
-                mipmapBarrier.subresourceRange.baseMipLevel = i;
-                mipmapBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                mipmapBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                mipmapBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                mipmapBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &mipmapBarrier);
-            }
-
-            // Update dimensions for next level
-            if (mipWidth > 1) mipWidth /= 2;
-            if (mipHeight > 1) mipHeight /= 2;
-        }
-
-        // Transition final mip level to shader-readable
-        mipmapBarrier.subresourceRange.baseMipLevel = array.mipLevels - 1;
-        mipmapBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        mipmapBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        mipmapBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        mipmapBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &mipmapBarrier);
-    });
-
-    vmaDestroyBuffer(m_Allocator, stagingBuffer.buffer, stagingBuffer.allocation);
-
-    return layerIndex;
 }
