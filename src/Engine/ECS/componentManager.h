@@ -27,6 +27,15 @@ public:
         return m_RegisteredTypeBits[index];
     }
 
+    template<typename T> std::pair<uint32_t, T *> GetData()
+    {
+        std::type_index index = std::type_index(typeid(T));
+        ASSERT(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Getting bit of unregistered component");
+
+        ComponentArray<T> *array = (ComponentArray<T> *) m_ComponentArrays[index];
+        return std::pair<uint32_t, T *>(array->Size(), array->Data());
+    }
+
     template<typename T> void AddComponent(Entity entity, T component)
     {
         std::type_index index = std::type_index(typeid(T));

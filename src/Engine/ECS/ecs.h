@@ -76,6 +76,11 @@ public:
         return m_ComponentManager.GetBit<T>();
     }
 
+    template<typename T> std::pair<uint32_t, T *> GetData()
+    {
+        return m_ComponentManager.GetData<T>();
+    }
+
     template<typename T> T* RegisterSystem()
     {
         return m_SystemManager.RegisterSystem<T>();

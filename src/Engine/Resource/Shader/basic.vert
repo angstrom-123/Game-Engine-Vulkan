@@ -2,8 +2,6 @@
 
 layout (set = 0, binding = 0) uniform GlobalUniforms {
     mat4 vp;
-    vec4 lightPos;
-    vec4 viewPos;
 } uniforms;
 
 layout (push_constant) uniform Constants {
@@ -12,6 +10,10 @@ layout (push_constant) uniform Constants {
     uint ambientIndex;
     uint diffuseIndex;
     uint normalIndex;
+    uint tileSize;
+    uint tilesX;
+    uint tilesY;
+    uint maxTileLights;
 } constants;
 
 layout (location = 0) in vec3 aPosition;
@@ -33,10 +35,7 @@ void main()
     mat3 normalMatrix = inverse(transpose(mat3(constants.model)));
     vec3 T = normalize(normalMatrix * aTangent.xyz);
     vec3 N = normalize(normalMatrix * aNormal);
-    
-    // Re-orthogonalize T with respect to N
     T = normalize(T - dot(T, N) * N);
-    vec3 B = cross(N, T);
-
+    vec3 B = cross(T, N) * aTangent.w;
     vTBN = mat3(T, B, N);
 }

@@ -256,7 +256,6 @@ vkinit::ImageCreateInfo(VkFormat format, VkImageUsageFlags usage, VkExtent3D ext
         .mipLevels = 1,
         .arrayLayers = 1,
         .samples = VK_SAMPLE_COUNT_1_BIT,
-        // NOTE: this needs to be TILING_LINEAR to read/write from CPU (but it's a lot slower)
         .tiling = VK_IMAGE_TILING_OPTIMAL,
         .usage = usage
     };

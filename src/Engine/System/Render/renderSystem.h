@@ -49,7 +49,7 @@ public:
     void Init(struct GLFWwindow *window, Config *config);
     void SetCamera(Entity camera);
     void Cleanup();
-    void Draw(ECS& ecs);
+    void Update(ECS& ecs);
     void RequestResize();
     void AllocateMesh(Mesh& mesh);
     void AllocateMaterialTextures(const MaterialTextureInfo& info, Material& material);
@@ -66,7 +66,15 @@ private:
     void InitDefaultRenderPass();
     void InitFramebuffers();
     void InitSyncStructures();
-    void InitPipelines();
+    void InitResolveResources();
+    void InitLightCulling();
+    void InitResolve();
+    void InitLightCullingResources();
+    void InitDepthRenderPass();
+    void InitDepthPipeline();
+    void InitLightCullingPipeline();
+    void InitResolvePipeline();
+    void InitMainPipelines();
     void InitGlobalDescriptor();
     void ImmediateSubmit(std::function<void (VkCommandBuffer commandBuffer)>&& function);
     void LoadShaderModule(const std::filesystem::path& path, VkShaderModule& module);
@@ -90,7 +98,6 @@ private:
     std::vector<TextureArray> m_TextureArrays;
 
     // Global Descriptor
-    VkDeviceSize m_UniformAlignment;
     VkDescriptorSetLayout m_DescriptorLayout;
 
     // Flags
@@ -100,7 +107,6 @@ private:
 
     // Counters
     size_t m_FrameNum;
-    size_t m_AllocatedMaterials;
 
     // Cleanup
     DeletionQueue m_MainDeletionQueue;
@@ -111,10 +117,29 @@ private:
     VkExtent2D m_Extent;
     VkViewport m_Viewport;
     VkRect2D m_Scissor;
+
+    // Main Pipelines
     VkPipelineLayout m_PipelineLayout;
     VkPipeline m_Pipeline;
     VkPipeline m_TransparencyPipeline;
-    VkPushConstantRange m_PushConstantRange;
+
+    // Depth Pre-Pass Pipeline
+    VkPipelineLayout m_DepthPipelineLayout;
+    VkPipeline m_DepthPipeline;
+    VkRenderPass m_DepthRenderPass;
+
+    // Light Culling Compute Pipeline
+    uint32_t m_TilesX;
+    uint32_t m_TilesY;
+    VkPipelineLayout m_LightCullingPipelineLayout;
+    VkPipeline m_LightCullingPipeline;
+    VkDescriptorSetLayout m_LightCullingDescriptorLayout;;
+    VkSampler m_DepthSampler;
+
+    // Resolve Compute Pipeline
+    VkPipelineLayout m_ResolvePipelineLayout;
+    VkPipeline m_ResolvePipeline;
+    VkDescriptorSetLayout m_ResolveDescriptorLayout;
 
     struct VmaAllocator_T *m_Allocator;
 

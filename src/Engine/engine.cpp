@@ -1,7 +1,10 @@
 #include "engine.h"
+
+#include "System/Render/lightSystem.h"
 #include "Util/objLoader.h"
 #include "Util/imageLoader.h"
 #include "Component/camera.h"
+
 #include <ranges>
 
 #define VMA_IMPLEMENTATION
@@ -41,11 +44,15 @@ Engine::Engine(App *app, Config *config)
     m_ecs.RegisterComponent<Mesh>();
     m_ecs.RegisterComponent<Camera>();
     m_ecs.RegisterComponent<Material>();
+    m_ecs.RegisterComponent<Light>();
 
     // Default Systems
     m_RenderSystem = m_ecs.RegisterSystem<RenderSystem>();
     m_ecs.SetSystemSignature<RenderSystem>(m_RenderSystem->GetSignature(m_ecs));
     m_RenderSystem->Init(m_Window, config);
+
+    m_LightSystem = m_ecs.RegisterSystem<LightSystem>();
+    m_ecs.SetSystemSignature<LightSystem>(m_LightSystem->GetSignature(m_ecs));
 
     // App
     m_App = app;
@@ -68,7 +75,9 @@ void Engine::Run()
         double currTime = GetTime();
 
         m_App->Frame(currTime - lastTime);
-        m_RenderSystem->Draw(m_ecs);
+
+        m_LightSystem->Update(m_ecs);
+        m_RenderSystem->Update(m_ecs);
 
         lastTime = currTime;
 
@@ -149,6 +158,7 @@ void Engine::CreateMaterial(const MtlData& data, Material& material)
     m_RenderSystem->AllocateMaterialTextures(materialInfo, material);
 }
 
+// TODO: Multiple meshes should be able to use same materials without duplication
 void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results)
 {
     double startTime = GetTime();
@@ -196,7 +206,7 @@ void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::v
         m_ecs.AddComponent<Material>(e, mat);
     }
 
-    INFO("Load took " << GetTime() - startTime << "s");
+    INFO("Mesh load took " << GetTime() - startTime << "s");
 }
 
 void Engine::CalculateTangents(Vertex& v1, Vertex& v2, Vertex& v3)

@@ -1,0 +1,18 @@
+#version 450
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout (set = 0, binding = 0) uniform sampler2DMS uInputDepthTexture;
+layout (set = 0, binding = 1, r32f) uniform image2D uOutputDepth;
+
+void main()
+{
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    int samples = textureSamples(uInputDepthTexture);
+    float closest = 1.0;
+    for (int i = 0; i < samples; i++) {
+        float d = texelFetch(uInputDepthTexture, coord, i).r;
+        closest = min(closest, d);
+    }
+    imageStore(uOutputDepth, coord, vec4(closest, 0.0, 0.0, 1.0));
+}

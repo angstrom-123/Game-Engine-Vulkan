@@ -41,6 +41,12 @@ struct Transform {
         return *this;
     }
 
+    Transform& Translate(glm::vec3 position)
+    {
+        translation = position;
+        return *this;
+    }
+
     Transform& Translate(float x, float y, float z)
     {
         translation = glm::vec3(x, y, z);

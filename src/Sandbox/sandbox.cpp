@@ -1,11 +1,33 @@
 #include "sandbox.h"
+#include "glm/ext/vector_float3.hpp"
 
 #include <Engine/event.h>
 #include <Engine/Util/logger.h>
 #include <Engine/Component/transform.h>
 #include <Engine/Component/material.h>
+#include <Engine/Component/light.h>
 
 #include <glm/vec3.hpp>
+
+void PointLight(ECS& ecs, glm::vec3 position, glm::vec3 color, float intensity, float radius)
+{
+    Entity e = ecs.CreateEntity();
+    ecs.GetComponent<Transform>(e).Translate(position);
+    ecs.AddComponent(e, Light(POINT, color, intensity, radius));
+}
+
+void SpotLight(ECS& ecs, glm::vec3 position, glm::vec3 color, float intensity, float radius, glm::vec3 direction, float inner, float outer)
+{
+    Entity e = ecs.CreateEntity();
+    ecs.GetComponent<Transform>(e).Translate(position);
+    ecs.AddComponent(e, Light(SPOT, color, intensity, radius, direction, inner, outer));
+}
+
+void DirectionalLight(ECS& ecs, glm::vec3 color, float intensity, glm::vec3 direction)
+{
+    Entity e = ecs.CreateEntity();
+    ecs.AddComponent(e, Light(DIRECTIONAL, color, intensity, direction));
+}
 
 void Sandbox::Init()
 {
@@ -28,9 +50,14 @@ void Sandbox::Init()
                                          .Rotate(glm::radians(90.0), Y_AXIS);
 
     // Load sponza mesh (made of several objects with different textures)
-    // Sponza is a VERY heavy file, as it contains 20+ large image textures, which each need to 
+    // Sponza is a VERY heavy file, as it contains 40+ large image textures, which each need to 
     // be loaded individually, and applied to separate meshes (Could optimize with array textures)
     m_Engine->CreateMesh("src/Sandbox/Resource/Model/sponza.obj", "src/Sandbox/Resource/Model/sponza.mtl", m_SponzaParts);
+
+    // Add some lights using our helper
+    PointLight(ecs, glm::vec3(0.0, 0.0, 10.0), glm::vec3(1.0, 0.0, 0.0), 1.0, 7.5);
+    SpotLight(ecs, glm::vec3(0.0, 0.0, 0.0), glm::vec3(0.0, 1.0, 1.0), 4.0, 25.0, glm::vec3(0.0, 0.0, -1.0), glm::radians(15.0), glm::radians(30.0));
+    DirectionalLight(ecs, glm::vec3(1.0, 1.0, 1.0), 1.0, glm::vec3(0.5, -1.0, 0.0));
 
     // Parent the sponza mesh to an entity to control its transform.
     // This is useful for meshes loaded from a file containing several objects / groups so they 

@@ -2,6 +2,7 @@
 
 #include <filesystem>
 
+#include "System/Render/lightSystem.h"
 #include "System/Render/renderSystem.h"
 #include "Util/objLoader.h"
 #include "config.h"
@@ -54,4 +55,5 @@ private:
 
     // Default entities, components, and systems, managed by the engine
     RenderSystem *m_RenderSystem;
+    LightSystem *m_LightSystem;
 };

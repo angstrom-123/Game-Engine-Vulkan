@@ -53,6 +53,16 @@ public:
         return m_Components[m_EntityToIndex[entity]];
     }
 
+    T *Data()
+    {
+        return m_Components;
+    }
+
+    int32_t Size()
+    {
+        return m_Count;
+    }
+
     void EntityDestroyed(Entity entity) override
     {
         if (m_EntityToIndex.find(entity) != m_EntityToIndex.end()) {
