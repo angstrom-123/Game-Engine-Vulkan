@@ -15,14 +15,16 @@
             }\
         } while (0);
 #elifdef RELEASE
-    #define USE_VALIDATION_LAYERS VK_FALSE 
+    #define USE_VALIDATION_LAYERS VK_TRUE 
+    // #define USE_VALIDATION_LAYERS VK_FALSE 
     #define VK_CHECK(x) (void) x
 #else 
     #error "DEBUG or RELEASE must be specified"
 #endif
 
 
-static constexpr size_t FRAMES_IN_FLIGHT = 3;
+// static constexpr size_t FRAMES_IN_FLIGHT = 3;
+static constexpr size_t FRAMES_IN_FLIGHT = 2;
 static constexpr size_t MAX_LIGHTS = 1024;
 static constexpr size_t MAX_TILE_LIGHTS = 256;
 static constexpr size_t TILE_SIZE = 16; // Another common size is 32
@@ -87,6 +89,13 @@ struct FrameData {
     VkDescriptorSet descriptorSet;
     AllocatedBuffer uniformBuffer;
     LightCullingData lightCulling;
+
+#ifdef PROFILING
+    VkQueryPool queryPool;
+    uint32_t queryCount;
+    std::vector<uint64_t> queryTimestamps;
+#endif
+
 };
 
 struct SwapchainImageData {

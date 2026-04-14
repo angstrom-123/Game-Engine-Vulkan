@@ -4,6 +4,7 @@
 #include "Util/objLoader.h"
 #include "Util/imageLoader.h"
 #include "Component/camera.h"
+#include "Util/profiler.h"
 
 #include <ranges>
 
@@ -18,7 +19,7 @@ void GLFWErrorCb(int error, const char *desc)
     ERROR(desc);
 }
 
-Engine::Engine(App *app, Config *config)
+Engine::Engine(App *app, Config& config)
 {
     // Window
     glfwInit();
@@ -28,7 +29,7 @@ Engine::Engine(App *app, Config *config)
     glfwWindowHint(GLFW_FOCUSED, GLFW_TRUE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
     glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
-    m_Window = glfwCreateWindow(config->windowWidth, config->windowHeight, config->appName, nullptr, nullptr);
+    m_Window = glfwCreateWindow(config.windowWidth, config.windowHeight, config.appName, nullptr, nullptr);
 
     glfwSetErrorCallback(GLFWErrorCb);
 
@@ -36,23 +37,22 @@ Engine::Engine(App *app, Config *config)
     m_EventHandler.Init(m_Window);
     m_EventHandler.SetEventCallback(Engine::EventHook, this);
 
-    // ECS
-    m_ecs = ECS();
+    ECS& ecs = ECS::Get();
 
     // Register Components
-    m_ecs.RegisterComponent<Transform>();
-    m_ecs.RegisterComponent<Mesh>();
-    m_ecs.RegisterComponent<Camera>();
-    m_ecs.RegisterComponent<Material>();
-    m_ecs.RegisterComponent<Light>();
+    ecs.RegisterComponent<Transform>();
+    ecs.RegisterComponent<Mesh>();
+    ecs.RegisterComponent<Camera>();
+    ecs.RegisterComponent<Material>();
+    ecs.RegisterComponent<Light>();
 
     // Default Systems
-    m_RenderSystem = m_ecs.RegisterSystem<RenderSystem>();
-    m_ecs.SetSystemSignature<RenderSystem>(m_RenderSystem->GetSignature(m_ecs));
+    m_RenderSystem = ecs.RegisterSystem<RenderSystem>();
+    ecs.SetSystemSignature<RenderSystem>(m_RenderSystem->GetSignature());
     m_RenderSystem->Init(m_Window, config);
 
-    m_LightSystem = m_ecs.RegisterSystem<LightSystem>();
-    m_ecs.SetSystemSignature<LightSystem>(m_LightSystem->GetSignature(m_ecs));
+    m_LightSystem = ecs.RegisterSystem<LightSystem>();
+    ecs.SetSystemSignature<LightSystem>(m_LightSystem->GetSignature());
 
     // App
     m_App = app;
@@ -61,8 +61,8 @@ Engine::Engine(App *app, Config *config)
 
     // Default Entities + Connection to default systems
     // NOTE: App is inited before this so that any systems created there pick up on these components
-    Entity camera = m_ecs.CreateEntity();
-    m_ecs.AddComponent<Camera>(camera, Camera(glm::vec3(0.0), glm::vec2(config->windowWidth, config->windowHeight), glm::radians(60.0), 0.01, 1000.0));
+    Entity camera = ecs.CreateEntity();
+    ecs.AddComponent<Camera>(camera, Camera(glm::vec3(0.0), glm::vec2(config.windowWidth, config.windowHeight), glm::radians(60.0), 0.01, 1000.0));
     m_RenderSystem->SetCamera(camera);
 }
 
@@ -70,14 +70,16 @@ void Engine::Run()
 {
     double lastTime = GetTime();
     while (!glfwWindowShouldClose(m_Window)) {
+        PROFILER_PROFILE_SCOPE("Frame");
+
         glfwPollEvents();
 
         double currTime = GetTime();
 
         m_App->Frame(currTime - lastTime);
 
-        m_LightSystem->Update(m_ecs);
-        m_RenderSystem->Update(m_ecs);
+        m_LightSystem->Update();
+        m_RenderSystem->Update();
 
         lastTime = currTime;
 
@@ -178,11 +180,13 @@ void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::v
         materials.insert({name, mat});
     }
 
+    ECS& ecs = ECS::Get();
+
     // TODO: Optimise vertex size
     //       SNORM for the normals and uvs
     results.reserve(shapes.size());
     for (const Shape& s : shapes) {
-        Entity e = m_ecs.CreateEntity();
+        Entity e = ecs.CreateEntity();
 
         Mesh mesh;
         mesh.allocated = false;
@@ -198,11 +202,11 @@ void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::v
             }
         }
         m_RenderSystem->AllocateMesh(mesh);
-        m_ecs.AddComponent<Mesh>(e, mesh);
+        ecs.AddComponent<Mesh>(e, mesh);
         results.push_back(e);
 
         Material mat = materials[s.materialName];
-        m_ecs.AddComponent<Material>(e, mat);
+        ecs.AddComponent<Material>(e, mat);
     }
 
     INFO("Mesh load took " << GetTime() - startTime << "s");

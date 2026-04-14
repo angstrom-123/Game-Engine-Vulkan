@@ -1,5 +1,6 @@
 #include "Engine/engine.h"
 #include "Sandbox/sandbox.h"
+#include "Engine/Util/profiler.h"
 
 int main(int argc, const char *argv[]) {
     Config config = {
@@ -10,11 +11,15 @@ int main(int argc, const char *argv[]) {
         .msaaSamples = 4
     };
 
-    Sandbox *sandbox = new Sandbox();
-    Engine *engine = new Engine(sandbox, &config);
+    PROFILER_BEGIN_SESSION("Profiling_Session");
 
-    engine->Run();
-    engine->Cleanup();
+    Sandbox sandbox;
+    Engine engine(&sandbox, config);
+
+    engine.Run();
+    engine.Cleanup();
+
+    PROFILER_END_SESSION();
 
     return 0;
 }

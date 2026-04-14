@@ -6,7 +6,6 @@
 #include "System/Render/renderSystem.h"
 #include "Util/objLoader.h"
 #include "config.h"
-#include "ECS/ecs.h"
 #include "eventHandler.h"
 
 namespace fs = std::filesystem;
@@ -27,7 +26,7 @@ protected:
 
 class Engine {
 public:
-    Engine(App *app, Config *config); 
+    Engine(App *app, Config& config); 
     void Init();
     void Run();
     void Cleanup();
@@ -38,10 +37,9 @@ public:
 
     RenderSystem *GetRenderer() { return m_RenderSystem; };
     struct GLFWwindow *GetWindow() { return m_Window; };
-    size_t GetFrameNumber() { return m_RenderSystem->GetFrameNumber(); };
+    uint64_t GetFrameNumber() { return m_RenderSystem->GetFrameNumber(); };
     glm::vec2 GetFrameMouseDelta() { return m_EventHandler.mousePos - m_EventHandler.mousePosLastFrame; };
     bool *GetKeysDown() { return m_EventHandler.keysDown; };
-    ECS& GetECS() { return m_ecs; };
 
 private:
     void CreateMaterial(const MtlData& data, Material& material);
@@ -49,7 +47,6 @@ private:
 
 private:
     App *m_App;
-    ECS m_ecs;
     EventHandler m_EventHandler;
     struct GLFWwindow *m_Window;
 

@@ -18,21 +18,22 @@
 #include "Util/imageLoader.h"
 #include "Component/transform.h"
 #include "Component/material.h"
+#include "Util/profiler.h"
 
 #include <VkBootstrap/VkBootstrap.h>
 #include <GLFW/glfw3.h>
 #include <vulkan/vulkan_core.h>
 #include <stb/stb_image.h>
 
-void RenderSystem::Init(GLFWwindow *window, Config *config)
+void RenderSystem::Init(GLFWwindow *window, Config& config)
 {
-    m_Extent.width = config->windowWidth;
-    m_Extent.height = config->windowHeight;
-    m_PresentMode = config->vsync ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
+    m_Extent.width = config.windowWidth;
+    m_Extent.height = config.windowHeight;
+    m_PresentMode = config.vsync ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
     m_DrawOrder.reserve(MAX_ENTITIES);
 
     InitVulkan(window);
-    InitMSAA(config->msaaSamples);
+    InitMSAA(config.msaaSamples);
     InitSwapchain();
     InitCommands();
     InitGlobalDescriptor();
@@ -61,6 +62,52 @@ void RenderSystem::Init(GLFWwindow *window, Config *config)
         m_ArrayHandler.Cleanup(m_Device, m_Allocator);
     });
 
+#ifdef PROFILING 
+    std::string headings[6] = {
+        "Depth",
+        "Resolve",
+        "Culling",
+        "Opaque",
+        "Translucent",
+        "Total"
+    };
+    PROFILER_BEGIN_GPU_SESSION(headings, 6);
+
+    if (m_Properties.limits.timestampPeriod == 0 || !m_Properties.limits.timestampComputeAndGraphics) {
+        ERROR("Physical device doesn't support timestamps");
+
+        uint32_t propertyCount = 1;
+        VkQueueFamilyProperties graphicsQueueProperties;
+        vkGetPhysicalDeviceQueueFamilyProperties(m_PhysicalDevice, &propertyCount, &graphicsQueueProperties);
+        if (graphicsQueueProperties.timestampValidBits == 0) {
+            ERROR("Graphics queue doesn't support timestamps");
+        }
+
+        abort();
+    }
+
+    for (FrameData& frame : m_Frames) {
+        frame.queryCount = 10;
+
+        VkQueryPoolCreateInfo queryPoolInfo = {
+            .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
+            .pNext = nullptr,
+            .queryType = VK_QUERY_TYPE_TIMESTAMP,
+            .queryCount = frame.queryCount,
+        };
+        vkCreateQueryPool(m_Device, &queryPoolInfo, nullptr, &frame.queryPool);
+
+        frame.queryTimestamps.resize(frame.queryCount);
+
+        m_Submitter.ImmediateSubmit(m_Device, m_GraphicsQueue, [=](VkCommandBuffer commandBuffer) {
+            vkCmdResetQueryPool(commandBuffer, frame.queryPool, 0, frame.queryTimestamps.size());
+        });
+
+        m_MainDeletionQueue.PushFunction([=, this] {
+            vkDestroyQueryPool(m_Device, frame.queryPool, nullptr);
+        });
+    }
+#endif
 
     m_IsInitialized = true;
 }
@@ -86,12 +133,16 @@ void RenderSystem::Cleanup()
     }
 }
 
-void RenderSystem::Update(ECS& ecs)
+void RenderSystem::Update()
 {
+    PROFILER_PROFILE_SCOPE("RenderSystem::Update");
+
     if (m_DidResize) {
-        Resize(ecs);
+        Resize();
         m_DidResize = false;
     }
+
+    ECS& ecs = ECS::Get();
 
     Camera& cam = ecs.GetComponent<Camera>(m_Camera);
     Transform& camTransform = ecs.GetComponent<Transform>(m_Camera);
@@ -106,6 +157,9 @@ void RenderSystem::Update(ECS& ecs)
     int32_t entityCount = entities.size();
     int32_t frontPtr = 0;
     int32_t backPtr = entityCount - 1;
+
+    { PROFILER_PROFILE_SCOPE("Sort_Entities");
+
     for (const Entity e : entities) {
         // Frustum culling
         Mesh& mesh = ecs.GetComponent<Mesh>(e);
@@ -132,15 +186,19 @@ void RenderSystem::Update(ECS& ecs)
         }
     }
 
+    } // PROFILER_PROFILE_SCOPE("Sort_Entities");
+
     // ============== Acquire swapchain image and wait on fences ===============
 
+    uint32_t imageIndex;
     size_t frameIndex = m_FrameNum % FRAMES_IN_FLIGHT;
     FrameData &frame = m_Frames[frameIndex];
+
+    { PROFILER_PROFILE_SCOPE("Acquire_Swapchain_Image");
 
     VK_CHECK(vkWaitForFences(m_Device, 1, &frame.renderFence, VK_TRUE, UINT64_MAX));
     VK_CHECK(vkResetFences(m_Device, 1, &frame.renderFence));
 
-    uint32_t imageIndex;
     VkResult acquireErr = vkAcquireNextImageKHR(m_Device, m_Swapchain, UINT64_MAX, frame.acquireSemaphore, nullptr, &imageIndex);
     if (acquireErr == VK_ERROR_OUT_OF_DATE_KHR || acquireErr == VK_SUBOPTIMAL_KHR) {
         m_DidResize = true;
@@ -150,22 +208,35 @@ void RenderSystem::Update(ECS& ecs)
     } 
     VK_CHECK(acquireErr);
 
-    SwapchainImageData &image = m_Images[imageIndex];
-
     VK_CHECK(vkResetCommandBuffer(frame.commandBuffer, 0));
 
+    } // PROFILER_PROFILE_SCOPE("Acquire_Swapchain_Image");
+
+    SwapchainImageData &image = m_Images[imageIndex];
+
+    { PROFILER_PROFILE_SCOPE("Wait_For_Image_Fences");
     if (image.flightFence != VK_NULL_HANDLE && image.flightFence != frame.renderFence) {
         VK_CHECK(vkWaitForFences(m_Device, 1, &image.flightFence, VK_TRUE, UINT64_MAX));
     }
     image.flightFence = frame.renderFence;
 
+    } // PROFILER_PROFILE_SCOPE("Wait_For_Image_Fences");
+
     // ======================= Begin recording commands ========================
+
+    { PROFILER_PROFILE_SCOPE("Begin_Command_Buffer");
 
     VkCommandBufferBeginInfo beginInfo = vkinit::CommandBufferBeginInfo(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
     VK_CHECK(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo));
 
+#ifdef PROFILING 
+    vkCmdResetQueryPool(frame.commandBuffer, frame.queryPool, 0, frame.queryTimestamps.size());
+#endif
+
     vkCmdSetViewport(frame.commandBuffer, 0, 1, &m_Viewport);
     vkCmdSetScissor(frame.commandBuffer, 0, 1, &m_Scissor);
+
+    } // PROFILER_PROFILE_SCOPE("Begin_Command_Buffer");
 
     VkClearValue colorClear = { .color = {{ 0.5, 0.7, 1.0, 1.0 }} };
     VkClearValue resolveClear = { .color = {{ 0.0, 0.0, 0.0, 0.0 }} };
@@ -173,6 +244,10 @@ void RenderSystem::Update(ECS& ecs)
     VkClearValue clearValues[3] = { colorClear, resolveClear, depthClear };
 
     // ============================ Depth pre-pass =============================
+
+#ifdef PROFILING
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.queryPool, 0);
+#endif
 
     VkRenderPassBeginInfo depthPassInfo = vkinit::RenderPassBeginInfo(m_DepthRenderPass, image.depthFramebuffer, &depthClear, 1, m_Extent);
     vkCmdBeginRenderPass(frame.commandBuffer, &depthPassInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -202,10 +277,16 @@ void RenderSystem::Update(ECS& ecs)
 
     vkCmdEndRenderPass(frame.commandBuffer);
 
+#ifdef PROFILING
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.queryPool, 1);
+#endif
+
     // ========================= Depth Resolve (MSAA) ==========================
 
+    VkImageMemoryBarrier barrierToGeneral;
+
     // Transition resolved image to general for resolve
-    VkImageMemoryBarrier barrierToGeneral = {
+    barrierToGeneral = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .pNext = nullptr,
         .srcAccessMask = 0,
@@ -269,6 +350,10 @@ void RenderSystem::Update(ECS& ecs)
     };
     vkUpdateDescriptorSets(m_Device, 2, writes, 0, nullptr);
 
+#ifdef PROFILING
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, frame.queryPool, 2);
+#endif
+
     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_ResolvePipeline);
 
     vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_ResolvePipelineLayout, 0, 1, &frame.resolveDescriptorSet, 0, nullptr);
@@ -276,7 +361,12 @@ void RenderSystem::Update(ECS& ecs)
     const uint32_t GROUP_SIZE = 8;
     uint32_t groupsX = (m_Extent.width + GROUP_SIZE - 1) / GROUP_SIZE;
     uint32_t groupsY = (m_Extent.height + GROUP_SIZE - 1) / GROUP_SIZE;
+
     vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+
+#ifdef PROFILING
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, frame.queryPool, 3);
+#endif
 
     // Transition to readable by light culling
     VkImageMemoryBarrier barrierToReadable = {
@@ -313,7 +403,7 @@ void RenderSystem::Update(ECS& ecs)
     vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrierToAttachment);
 
     // ========================== Light Culling Pass ===========================
-    
+
     // Copy lights into the input buffer of the compute shader
     const auto [lightCount, lights] = ecs.GetData<Light>();
     ASSERT(lightCount < MAX_LIGHTS && "Light buffer overflow");
@@ -323,6 +413,28 @@ void RenderSystem::Update(ECS& ecs)
     const uint32_t c = m_TilesX * m_TilesY * sizeof(uint32_t);
     vkCmdFillBuffer(frame.commandBuffer, frame.lightCulling.lightIndices.buffer, 0, MAX_TILE_LIGHTS * c, 0);
     vkCmdFillBuffer(frame.commandBuffer, frame.lightCulling.tileCounts.buffer, 0, c, 0);
+
+    VkBufferMemoryBarrier fillBarriers[2] = {
+        {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .buffer = frame.lightCulling.lightIndices.buffer,
+            .offset = 0,
+            .size = VK_WHOLE_SIZE
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .buffer = frame.lightCulling.tileCounts.buffer,
+            .offset = 0,
+            .size = VK_WHOLE_SIZE
+        },
+    };
+    vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 2, fillBarriers, 0, nullptr);
 
     LightCullingPushConstants lightCullingConstants {
         .tileSize = TILE_SIZE,
@@ -336,6 +448,10 @@ void RenderSystem::Update(ECS& ecs)
         .screenHeight = m_Extent.height
     };
     vkCmdPushConstants(frame.commandBuffer, m_LightCullingPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(LightCullingPushConstants), &lightCullingConstants);
+
+#ifdef PROFILING
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, frame.queryPool, 4);
+#endif
 
     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_LightCullingPipeline);
 
@@ -366,6 +482,10 @@ void RenderSystem::Update(ECS& ecs)
 
     vkCmdDispatch(frame.commandBuffer, m_TilesX, m_TilesY, 1);
 
+#ifdef PROFILING
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, frame.queryPool, 5);
+#endif
+
     VkMemoryBarrier memoryBarrier = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
         .pNext = nullptr,
@@ -383,9 +503,13 @@ void RenderSystem::Update(ECS& ecs)
 
     // ========================= Opaque forward+ pass ==========================
 
+#ifdef PROFILING
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.queryPool, 6);
+#endif
+
     VkRenderPassBeginInfo passInfo = vkinit::RenderPassBeginInfo(m_RenderPass, image.framebuffer, &clearValues[0], 3, m_Extent);
     vkCmdBeginRenderPass(frame.commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
-    
+
     GlobalUniforms uniforms = {
         .vp = cam.projection * cam.view,
     };
@@ -397,7 +521,7 @@ void RenderSystem::Update(ECS& ecs)
     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline);
     for (int32_t i = 0; i < frontPtr; i++) {
         const Entity e = m_DrawOrder[i];
-        
+
         Mesh& mesh = ecs.GetComponent<Mesh>(e);
         Transform& transform = ecs.GetComponent<Transform>(e);
 
@@ -429,12 +553,20 @@ void RenderSystem::Update(ECS& ecs)
         vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
     }
 
+#ifdef PROFILING
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.queryPool, 7);
+#endif
+
     // ======================= Translucent forward+ pass =======================
+
+#ifdef PROFILING
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.queryPool, 8);
+#endif
 
     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_TransparencyPipeline);
     for (int32_t i = frontPtr; i < entityCount; i++) {
         const Entity e = m_DrawOrder[i];
-        
+
         Mesh& mesh = ecs.GetComponent<Mesh>(e);
         Transform& transform = ecs.GetComponent<Transform>(e);
 
@@ -468,7 +600,28 @@ void RenderSystem::Update(ECS& ecs)
 
     vkCmdEndRenderPass(frame.commandBuffer);
 
+#ifdef PROFILING
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.queryPool, 9);
+#endif
+
     VK_CHECK(vkEndCommandBuffer(frame.commandBuffer));
+
+#ifdef PROFILING 
+    vkGetQueryPoolResults(m_Device, frame.queryPool, 0, frame.queryTimestamps.size(), frame.queryTimestamps.size() * sizeof(uint64_t), frame.queryTimestamps.data(), sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+    float periodNS = m_Properties.limits.timestampPeriod;
+
+    float depthNS       = (frame.queryTimestamps[1] - frame.queryTimestamps[0]) * periodNS;
+    float resolveNS     = (frame.queryTimestamps[3] - frame.queryTimestamps[2]) * periodNS;
+    float cullingNS     = (frame.queryTimestamps[5] - frame.queryTimestamps[4]) * periodNS;
+    float opaqueNS      = (frame.queryTimestamps[7] - frame.queryTimestamps[6]) * periodNS;
+    float translucentNS = (frame.queryTimestamps[9] - frame.queryTimestamps[8]) * periodNS;
+    float gpuTimeNS     = (frame.queryTimestamps[9] - frame.queryTimestamps[0]) * periodNS;
+
+    float gpuValues[6] = { depthNS, resolveNS, cullingNS, opaqueNS, translucentNS, gpuTimeNS };
+    PROFILER_GPU_VALUES(gpuValues);
+#endif
+
+    // ========================== Submit and Present ===========================
 
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo submitInfo = vkinit::SubmitInfo(&frame, &image, &waitStage);
@@ -555,8 +708,12 @@ void RenderSystem::AllocateMaterialTextures(const MaterialTextureInfo& info, Mat
                       : m_ArrayHandler.GetFallbackTexture(info.normalTextureData, IMAGE_KIND_NORMAL);
 }
 
-void RenderSystem::Resize(ECS& ecs)
+void RenderSystem::Resize()
 {
+    PROFILER_PROFILE_SCOPE("RenderSystem::Resize");
+
+    ECS& ecs = ECS::Get();
+
     auto getCapabilities = (PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR) vkGetInstanceProcAddr(m_Instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
     VkSurfaceCapabilitiesKHR capabilities;
     VK_CHECK(getCapabilities(m_PhysicalDevice, m_Surface, &capabilities));
@@ -639,6 +796,7 @@ void RenderSystem::InitVulkan(GLFWwindow *window)
 
     m_Device = vkbDevice.device;
     m_PhysicalDevice = vkbDevice.physical_device;
+    vkGetPhysicalDeviceProperties(m_PhysicalDevice, &m_Properties);
 
     m_GraphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
     m_GraphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
@@ -655,9 +813,7 @@ void RenderSystem::InitVulkan(GLFWwindow *window)
 
 void RenderSystem::InitMSAA(uint64_t requestedSamples)
 {
-    VkPhysicalDeviceProperties properties;
-    vkGetPhysicalDeviceProperties(m_PhysicalDevice, &properties);
-    VkSampleCountFlags available = properties.limits.framebufferColorSampleCounts & properties.limits.framebufferDepthSampleCounts;
+    VkSampleCountFlags available = m_Properties.limits.framebufferColorSampleCounts & m_Properties.limits.framebufferDepthSampleCounts;
 
     if (available & VK_SAMPLE_COUNT_64_BIT) m_MSAASamples = VK_SAMPLE_COUNT_64_BIT;
     else if (available & VK_SAMPLE_COUNT_32_BIT) m_MSAASamples = VK_SAMPLE_COUNT_32_BIT;
@@ -703,6 +859,8 @@ void RenderSystem::InitSwapchain()
             vkDestroyImageView(m_Device, m_Images[i].view, nullptr); 
         });
     }
+
+    INFO("Using swapchain images: " << m_Images.size());
 
     m_DynamicDeletionQueue.PushFunction([=, this] { 
         vkDestroySwapchainKHR(m_Device, m_Swapchain, nullptr); 
@@ -817,7 +975,7 @@ void RenderSystem::InitDefaultRenderPass()
         .format = m_DepthFormat,
         .samples = m_MSAASamples,
         .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
         .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
         .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
         .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,

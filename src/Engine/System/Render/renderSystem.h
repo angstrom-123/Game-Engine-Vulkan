@@ -30,19 +30,19 @@ struct DeletionQueue {
 
 class RenderSystem : public System {
 public:
-    void Init(struct GLFWwindow *window, Config *config);
+    void Init(struct GLFWwindow *window, Config& config);
     void SetCamera(Entity camera);
     void Cleanup();
-    void Update(ECS& ecs);
+    void Update();
     void RequestResize();
     void AllocateMesh(Mesh& mesh);
     void AllocateMaterialTextures(const MaterialTextureInfo& info, Material& material);
 
-    Signature GetSignature(ECS& ecs) { return ecs.GetBit<Transform>() | ecs.GetBit<Mesh>() | ecs.GetBit<Material>(); };
-    size_t GetFrameNumber() { return m_FrameNum; };
+    Signature GetSignature() { return ECS::Get().GetBit<Transform>() | ECS::Get().GetBit<Mesh>() | ECS::Get().GetBit<Material>(); };
+    uint64_t GetFrameNumber() { return m_FrameNum; };
 
 private:
-    void Resize(ECS& ecs);
+    void Resize();
     void InitVulkan(struct GLFWwindow *window);
     void InitMSAA(uint64_t requestedSamples);
     void InitSwapchain();
@@ -76,7 +76,7 @@ private:
     VkSampleCountFlagBits m_MSAASamples;
 
     // Counters
-    size_t m_FrameNum;
+    uint64_t m_FrameNum;
 
     // Cleanup
     DeletionQueue m_MainDeletionQueue;
@@ -87,6 +87,7 @@ private:
     VkExtent2D m_Extent;
     VkViewport m_Viewport;
     VkRect2D m_Scissor;
+    VkPhysicalDeviceProperties m_Properties;
 
     // Main Pipelines
     VkPipelineLayout m_PipelineLayout;

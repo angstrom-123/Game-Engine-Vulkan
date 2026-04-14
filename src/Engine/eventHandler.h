@@ -12,7 +12,7 @@ public:
     void RecordFrame();
     
 public:
-    bool keysDown[GLFW_KEY_LAST];
+    bool keysDown[GLFW_KEY_LAST] = {0};
     glm::vec2 mousePos;
     glm::vec2 mousePosLastFrame;
     bool mouseLocked;

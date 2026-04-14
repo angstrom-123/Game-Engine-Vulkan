@@ -7,6 +7,9 @@ BUILD_TYPE	?= release
 ifeq ($(BUILD_TYPE), release)
 	FLAGS 		:= $(RELEASE_FLAGS)
 	BUILD_DIR	:= $(RELEASE_DIR)
+else ifeq ($(BUILD_TYPE), profiling)
+	FLAGS 		:= $(PROFILING_FLAGS)
+	BUILD_DIR	:= $(PROFILING_DIR)
 else
 	FLAGS 		:= $(DEBUG_FLAGS)
 	BUILD_DIR	:= $(DEBUG_DIR)
@@ -54,10 +57,14 @@ debug: $(TARGET)
 .PHONY: release 
 release: $(TARGET)
 
+.PHONY: profiling 
+profiling: $(TARGET)
+
 .PHONY: clean 
 clean:
 	@rm -r $(DEBUG_DIR) || true
 	@rm -r $(RELEASE_DIR) || true
+	@rm -r $(PROFILING_DIR) || true
 
 .PHONY: info
 info:

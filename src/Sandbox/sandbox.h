@@ -11,8 +11,9 @@ public:
     void Cleanup() override;
 
 private:
-    Entity m_Parent;
+    Entity m_SponzaParent;
     std::vector<Entity> m_SponzaParts;
+    Entity m_LightsParent;
 
     double m_LastTime;
     size_t m_LastFrame;

@@ -9,6 +9,13 @@
 
 class SystemManager {
 public:
+    ~SystemManager()
+    {
+        for (auto& [typeIndex, system] : m_Systems) {
+            delete system;
+        }
+    }
+
     template<typename T> T *RegisterSystem()
     {
         std::type_index index = std::type_index(typeid(T));

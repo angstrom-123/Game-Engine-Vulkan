@@ -1,6 +1,7 @@
 MAKE_DIR		:= $(PWD)
 
 RELEASE_DIR		:= $(MAKE_DIR)/bin/release
+PROFILING_DIR	:= $(MAKE_DIR)/bin/profiling
 DEBUG_DIR		:= $(MAKE_DIR)/bin/debug
 
 CC				:= clang++
@@ -26,10 +27,12 @@ DEBUG_FLAGS 	+= -fsanitize=address -fsanitize=undefined
 DEBUG_FLAGS 	+= -O0
 
 RELEASE_FLAGS 	:= -DRELEASE
-RELEASE_FLAGS   += -O2
-# RELEASE_FLAGS   += -O3
+RELEASE_FLAGS   += -O3
 
-export MAKE_DIR RELEASE_DIR DEBUG_DIR CC SHADERC LINKS C_FLAGS DEBUG_FLAGS RELEASE_FLAGS
+PROFILING_FLAGS := $(RELEASE_FLAGS) 
+PROFILING_FLAGS += -DPROFILING
+
+export MAKE_DIR RELEASE_DIR DEBUG_DIR PROFILING_DIR CC SHADERC LINKS C_FLAGS DEBUG_FLAGS RELEASE_FLAGS PROFILING_FLAGS
 
 .PHONY: shaders
 shaders:
@@ -46,6 +49,11 @@ debug: shaders
 release: shaders
 	@echo "COMPILING (release)"
 	@$(MAKE) -C src BUILD_TYPE=release release
+
+.PHONY: profiling 
+profiling: shaders
+	@echo "COMPILING (profiling)"
+	@$(MAKE) -C src BUILD_TYPE=profiling profiling
 
 .PHONY: compiledb
 compiledb: shaders

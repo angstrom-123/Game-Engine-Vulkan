@@ -1,4 +1,5 @@
 #include "defaultCameraSystem.h"
+#include "Util/profiler.h"
 #include "glm/ext/matrix_transform.hpp"
 #include "glm/ext/quaternion_common.hpp"
 #include "glm/ext/quaternion_float.hpp"
@@ -14,8 +15,9 @@ void DefaultCameraSystem::Init(float sensitivity, float speed)
     m_Speed = speed;
 }
 
-void DefaultCameraSystem::Update(ECS& ecs, bool *keysDown, glm::vec2 mouseDelta, double dt)
+void DefaultCameraSystem::Update(bool *keysDown, glm::vec2 mouseDelta, double dt)
 {
+    ECS& ecs = ECS::Get();
     for (Entity e : entities) {
         Camera& camera = ecs.GetComponent<Camera>(e);
         Transform& transform = ecs.GetComponent<Transform>(e);

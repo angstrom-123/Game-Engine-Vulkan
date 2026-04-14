@@ -8,6 +8,13 @@
 
 class ComponentManager {
 public:
+    ~ComponentManager()
+    {
+        for (auto& [typeIndex, array] : m_ComponentArrays) {
+            delete array;
+        }
+    }
+
     template<typename T> void RegisterComponent()
     {
         std::type_index index = std::type_index(typeid(T));
