@@ -5,9 +5,15 @@ a high quality 3D engine and game for personal use.
 
 ## External Libraries
 
-- STB (stb_image.h)
+- STB (stb_image.h, stb_image_resize2.h)
 - VMA
 - VkBootstrap
 - GLM
 - Vulkan SDK
 - GLFW
+
+## Screenshots
+
+### Sponza shadowmap + random lights
+
+<img width="1920" height="1080" alt="20260420_13h29m39s_grim" src="https://github.com/user-attachments/assets/c1b86ed8-6273-48d0-bbab-1d3d6f34122d" />
