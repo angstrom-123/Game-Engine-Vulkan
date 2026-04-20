@@ -24,27 +24,16 @@ layout (push_constant) uniform Constants {
     uint screenWidth;
     uint screenHeight;
 } constants;
-
 layout (set = 0, binding = 0) uniform Camera {
     mat4 view;
     mat4 projection;
     vec3 position;
 } camera;
-
 // Input Buffer
-layout (set = 0, binding = 1) readonly buffer LightBuffer { 
-    Light lights[]; 
-} lightBuffer;
-
+layout (set = 0, binding = 1) readonly buffer LightBuffer { Light lights[]; } lightBuffer;
 // Output Buffers
-layout (set = 0, binding = 2) buffer LightIndices {
-    uint indices[]; 
-} lightIndices;
-
-layout (set = 0, binding = 3) buffer TileCounts {
-    uint counts[]; 
-} tileCounts;
-
+layout (set = 0, binding = 2) buffer LightIndices { uint indices[]; } lightIndices;
+layout (set = 0, binding = 3) buffer TileCounts { uint counts[]; } tileCounts;
 layout (set = 0, binding = 4) uniform sampler2D uDepthTexture;
 
 shared vec4 sFrustumPlanes[6];

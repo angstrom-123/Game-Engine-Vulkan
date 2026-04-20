@@ -4,10 +4,17 @@
 #include "commandSubmitter.h"
 #include <deque>
 
+struct WritableTextureArrayCreateInfo {
+    uint32_t resolution;
+    uint32_t size;
+    VkFormat format;
+    bool useShadowSampler;
+};
+
 class WritableTextureArray {
 public:
     WritableTextureArray() = default;
-    void Init(VkDevice device, VkQueue graphicsQueue, VkRenderPass renderPass, CommandSubmitter& submitter, VmaAllocator allocator, uint32_t resolution, uint32_t size, VkFormat format);
+    void Init(VkDevice device, VkQueue graphicsQueue, VkRenderPass renderPass, CommandSubmitter& submitter, VmaAllocator allocator, const WritableTextureArrayCreateInfo& info);
     void Cleanup(VkDevice device, VmaAllocator allocator);
     uint32_t Allocate();
     void TransitionRemainingLayersToReadable(VkCommandBuffer commandBuffer);

@@ -233,8 +233,6 @@ void Engine::CreatePointLight(const LightCreateInfo& info, Entity& result)
 
 void Engine::CreateSpotLight(const LightCreateInfo& info, Entity& result)
 {
-    ASSERT(result == INVALID_HANDLE && "Overwriting existing entity");
-
     ECS& ecs = ECS::Get();
     Entity e = ecs.CreateEntity();
 
@@ -245,7 +243,7 @@ void Engine::CreateSpotLight(const LightCreateInfo& info, Entity& result)
     Light light = Light(SPOT, info.color, info.intensity, info.radius, info.innerConeRadians, info.outerConeRadians);
     if (info.shadowcaster) {
         light.direction.w = info.shadowBias;
-        Shadowcaster shadowcaster = Shadowcaster(PERSPECTIVE, info.outerConeRadians, 0.1, info.radius);
+        Shadowcaster shadowcaster = Shadowcaster(PERSPECTIVE, info.outerConeRadians * 2.0, 0.1, info.radius);
         m_RenderSystem->AllocateShadowcaster(light, shadowcaster);
         ecs.AddComponent<Shadowcaster>(e, shadowcaster);
     }

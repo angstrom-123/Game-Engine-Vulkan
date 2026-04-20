@@ -45,20 +45,20 @@ void Sandbox::Init()
     // Add a lot of random lights
     m_LightsParent = ecs.CreateEntity();
     srand(time(NULL));
-    for (uint32_t i = 0; i < 256; i++) {
-        Entity light = INVALID_HANDLE;
+    for (uint32_t i = 0; i < 128; i++) {
+        Entity point;
         LightCreateInfo pointLightInfo = {
             .position = glm::vec3(Random(-15.0, 15.0), Random(-5.0, 25.0), Random(-15.0, 15.0)),
             .color = glm::vec3(Random(0.0, 1.0), Random(0.0, 1.0), Random(0.0, 1.0)),
             .intensity = Random(0.5, 1.5),
             .radius = Random(1.0, 7.0)
         };
-        m_Engine->CreatePointLight(pointLightInfo, light);
-        ecs.GetComponent<Transform>(light).InheritFrom(m_LightsParent);
+        m_Engine->CreatePointLight(pointLightInfo, point);
+        ecs.GetComponent<Transform>(point).InheritFrom(m_LightsParent);
     }
 
-    Entity light = INVALID_HANDLE;
-    LightCreateInfo lightInfo = {
+    Entity sun;
+    LightCreateInfo sunLightInfo = {
         .position           = glm::vec3(0.0),
         .color              = glm::vec3(1.0),
         .direction          = glm::vec3(0.6, -1.0, 0.2),
@@ -72,7 +72,21 @@ void Sandbox::Init()
         .projectionBottom   = -40.0,
         .projectionTop      = 40.0
     };
-    m_Engine->CreateDirectionalLight(lightInfo, light);
+    m_Engine->CreateDirectionalLight(sunLightInfo, sun);
+
+    Entity spot;
+    LightCreateInfo spotLightInfo = {
+        .position           = glm::vec3(0.0, 6.0, 0.0),
+        .color              = glm::vec3(1.0, 0.0, 1.0),
+        .direction          = glm::vec3(-1.0, 0.0, 0.3),
+        .intensity          = 1.0,
+        .radius             = 20.0,
+        .innerConeRadians   = glm::radians(20.0),
+        .outerConeRadians   = glm::radians(45.0),
+        .shadowcaster       = true,
+        .shadowBias         = 0.005,
+    };
+    m_Engine->CreateSpotLight(spotLightInfo, spot);
 }
 
 void Sandbox::Frame(double deltaTime)
@@ -94,7 +108,7 @@ void Sandbox::Frame(double deltaTime)
     // Control the camera
     m_CameraSystem->Update(m_Engine->GetKeysDown(), m_Engine->GetFrameMouseDelta(), deltaTime);
 
-    // Move all the lights around
+    // Move all the point lights around
     float offsetX = std::sin(static_cast<float>(m_Engine->GetFrameNumber()) / 60.0) * 5.0;
     float offsetY = std::cos(static_cast<float>(m_Engine->GetFrameNumber()) / 60.0) * 5.0;
     float offsetZ = std::cos(static_cast<float>(m_Engine->GetFrameNumber() + 47) / 45.0) * 5.0;

@@ -14,6 +14,7 @@
 #include "System/Render/pipeline.h"
 #include "System/Render/renderTypes.h"
 #include "System/Render/textureArrayHandler.h"
+#include "System/Render/writableTextureArray.h"
 #include "Util/allocator.h"
 #include "Util/logger.h"
 #include "Util/imageLoader.h"
@@ -23,6 +24,7 @@
 
 #include <VkBootstrap/VkBootstrap.h>
 #include <GLFW/glfw3.h>
+#include <random>
 #include <vulkan/vulkan_core.h>
 #include <stb/stb_image.h>
 
@@ -80,6 +82,7 @@ void RenderSystem::Init(GLFWwindow *window, Config& config)
     InitResolveResources();
     InitLightCullingResources();
     InitShadowResources();
+    InitSSAOResources();
     // Pipelines
     InitMainPipelines();
     InitDepthPipeline();
@@ -516,14 +519,6 @@ void RenderSystem::Update()
     };
     vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
 
-    // Transition resolved image back to general for submit
-    // TODO: Can I set this as final layout to not need an explicit transition here?
-    barrierToGeneral.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    barrierToGeneral.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    barrierToGeneral.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    barrierToGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrierToGeneral);
-
     // ========================== Shadowcaster pass ============================
 
     frame.shadowArray.TransitionFromReadableToAttachment(frame.commandBuffer);
@@ -581,7 +576,7 @@ void RenderSystem::Update()
     VkWriteDescriptorSet write = {
         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
         .pNext = nullptr,
-        .dstSet = frame.arrayDescriptorSet,
+        .dstSet = frame.textureDescriptorSet,
         .dstBinding = 1,
         .descriptorCount = 1,
         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -605,12 +600,10 @@ void RenderSystem::Update()
     VkRenderPassBeginInfo passInfo = vkinit::RenderPassBeginInfo(m_RenderPass, image.framebuffer, &clearValues[0], 3, m_Extent);
     vkCmdBeginRenderPass(frame.commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-    GlobalUniforms uniforms = {
-        .vp = cam.projection * cam.view,
-    };
-    memcpy(frame.uniformBuffer.data, &uniforms, sizeof(GlobalUniforms));
+    // Set uniform vp matrix
+    memcpy(static_cast<char *>(frame.uniformBuffer.data) + offsetof(GlobalUniforms, vp), &camVP, sizeof(glm::mat4x4));
 
-    VkDescriptorSet sets[3] = { frame.descriptorSet, frame.arrayDescriptorSet, frame.lightCulling.descriptorSet };
+    VkDescriptorSet sets[3] = { frame.descriptorSet, frame.textureDescriptorSet, frame.lightCulling.descriptorSet };
     vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineLayout, 0, 3, sets, 0, nullptr);
 
     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline);
@@ -637,6 +630,8 @@ void RenderSystem::Update()
             .tilesX             = m_TilesX,
             .tilesY             = m_TilesY,
             .maxTileLights      = MAX_TILE_LIGHTS,
+            .screenWidth        = m_Extent.width,
+            .screenHeight       = m_Extent.height
         };
         vkCmdPushConstants(frame.commandBuffer, m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &constants);
 
@@ -677,6 +672,8 @@ void RenderSystem::Update()
             .tilesX             = m_TilesX,
             .tilesY             = m_TilesY,
             .maxTileLights      = MAX_TILE_LIGHTS,
+            .screenWidth        = m_Extent.width,
+            .screenHeight       = m_Extent.height
         };
         vkCmdPushConstants(frame.commandBuffer, m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &constants);
 
@@ -690,6 +687,13 @@ void RenderSystem::Update()
 #ifdef PROFILING
     vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.queryPool, 11);
 #endif
+
+    // Transition resolved depth image back to general for submit
+    barrierToGeneral.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrierToGeneral.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrierToGeneral.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrierToGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrierToGeneral);
 
     VK_CHECK(vkEndCommandBuffer(frame.commandBuffer));
 
@@ -1134,8 +1138,15 @@ void RenderSystem::InitFramebuffers()
 
 void RenderSystem::InitShadowResources()
 {
+    WritableTextureArrayCreateInfo info = {
+        .resolution = SHADOWMAP_RESOLUTION,
+        .size = MAX_SHADOWCASTERS,
+        .format = VK_FORMAT_D32_SFLOAT,
+        .useShadowSampler = true
+    };
+
     for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
-        m_Frames[i].shadowArray.Init(m_Device, m_GraphicsQueue, m_ShadowRenderPass, m_Submitter, m_Allocator, SHADOWMAP_RESOLUTION, MAX_SHADOWCASTERS, VK_FORMAT_D32_SFLOAT);
+        m_Frames[i].shadowArray.Init(m_Device, m_GraphicsQueue, m_ShadowRenderPass, m_Submitter, m_Allocator, info);
         m_MainDeletionQueue.PushFunction([=, this] {
             m_Frames[i].shadowArray.Cleanup(m_Device, m_Allocator);
         });
@@ -1189,7 +1200,7 @@ void RenderSystem::InitLightCullingDescriptor()
         .binding = 4,
         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         .descriptorCount = 1,
-        .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT
+        .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
     };
     for (uint32_t i = 1; i < 4; i++) {
         bindings[i] = {
@@ -1433,10 +1444,6 @@ void RenderSystem::InitShadowRenderPass()
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        // .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        // .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        // .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        // .stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE,
         .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     };
@@ -1487,7 +1494,7 @@ void RenderSystem::InitShadowPipeline()
 
     VertexInputDesc inputDesc = Vertex::GetDepthVertexDesc();
     VkPipelineRasterizationStateCreateInfo rasterizerInfo = vkinit::RasterizationStateCreateInfo(VK_POLYGON_MODE_FILL);
-    rasterizerInfo.cullMode = VK_CULL_MODE_FRONT_BIT;
+    rasterizerInfo.cullMode = VK_CULL_MODE_FRONT_BIT; // Helps with Peter-Panning
     builder.SetVertexInput(vkinit::VertexInputStateCreateInfo(&inputDesc.bindings, &inputDesc.attributes))
            .SetInputAssembly(vkinit::InputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
            .SetRasterizer(rasterizerInfo)
@@ -1724,6 +1731,149 @@ void RenderSystem::InitMainPipelines()
     });
 }
 
+void RenderSystem::InitSSAOResources()
+{
+    // Generate SSAO kernel
+    std::uniform_real_distribution<float> randomFloats(0.0, 1.0);
+    std::default_random_engine generator;
+    std::vector<glm::vec4> ssaoKernel = std::vector<glm::vec4>(SSAO_SAMPLES);
+    for (uint32_t i = 0; i < SSAO_SAMPLES; i++) {
+        // Hemisphere around kernel centre
+        glm::vec3 sample = {
+            randomFloats(generator) * 2.0 - 1.0,
+            randomFloats(generator) * 2.0 - 1.0,
+            randomFloats(generator)
+        };
+        sample = glm::normalize(sample);
+        sample *= randomFloats(generator);
+
+        float scale = static_cast<float>(i) / static_cast<float>(SSAO_SAMPLES);
+
+        // Lerp
+        float a = 0.1;
+        float b = 1.0;
+        float f = scale * scale;
+        scale = a + f * (b - a);
+
+        // Bias samples closer to kernel centre
+        sample *= scale;
+
+        ssaoKernel[i] = glm::vec4(sample, 0.0); // padded for alignment
+    }
+
+    // Set SSAO kernel
+    for (FrameData& frame : m_Frames) {
+        memcpy(static_cast<char *>(frame.uniformBuffer.data) + offsetof(GlobalUniforms, ssaoKernel), ssaoKernel.data(), ssaoKernel.size() * sizeof(glm::vec4));
+    }
+
+    // Generate random SSAO noise image 
+    std::vector<glm::vec3> ssaoNoise = std::vector<glm::vec3>(16);
+    for (uint32_t i = 0; i < 16; i++) {
+        glm::vec3 noise = {
+            randomFloats(generator) * 2.0 - 1.0,
+            randomFloats(generator) * 2.0 - 1.0,
+            0.0
+        };
+        ssaoNoise[i] = noise;
+    }
+
+    VkExtent3D extent = { 4, 4, 1 };
+    VkImageCreateInfo imageInfo = vkinit::ImageCreateInfo(VK_FORMAT_R16G16B16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, extent);
+    VmaAllocationCreateInfo allocInfo = {
+        .usage = VMA_MEMORY_USAGE_GPU_ONLY
+    };
+    vmaCreateImage(m_Allocator, &imageInfo, &allocInfo, &m_SSAONoiseImage.image, &m_SSAONoiseImage.allocation, nullptr);
+
+    AllocatedBuffer stagingBuffer;
+    VkBufferCreateInfo stagingBufferInfo = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .pNext = nullptr,
+        .size = 4 * 4 * sizeof(glm::vec3),
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+    };
+    VmaAllocationCreateInfo stagingBufferAllocInfo = {
+        .usage = VMA_MEMORY_USAGE_CPU_ONLY
+    };
+    VK_CHECK(vmaCreateBuffer(m_Allocator, &stagingBufferInfo, &stagingBufferAllocInfo, &stagingBuffer.buffer, &stagingBuffer.allocation, nullptr));
+
+    vmaMapMemory(m_Allocator, stagingBuffer.allocation, &stagingBuffer.data);
+    memcpy(stagingBuffer.data, ssaoNoise.data(), 4 * 4 * sizeof(glm::vec3));
+    vmaUnmapMemory(m_Allocator, stagingBuffer.allocation);
+
+    m_Submitter.ImmediateSubmit(m_Device, m_GraphicsQueue, [=, this](VkCommandBuffer commandBuffer) {
+        VkImageMemoryBarrier barrier = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .image = m_SSAONoiseImage.image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .levelCount = 1,
+                .layerCount = 1
+            }
+        };
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        VkBufferImageCopy region = {
+            .imageSubresource = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .layerCount = 1,
+            },
+            .imageExtent = extent,
+        };
+        vkCmdCopyBufferToImage(commandBuffer, stagingBuffer.buffer, m_SSAONoiseImage.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    });
+    vmaDestroyBuffer(m_Allocator, stagingBuffer.buffer, stagingBuffer.allocation);
+
+    VkImageViewCreateInfo viewInfo = vkinit::ImageViewCreateInfo(VK_FORMAT_R16G16B16_SFLOAT, m_SSAONoiseImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
+    VK_CHECK(vkCreateImageView(m_Device, &viewInfo, nullptr, &m_SSAONoiseView));
+
+    VkSamplerCreateInfo samplerInfo = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .pNext = nullptr,
+        .magFilter = VK_FILTER_LINEAR,
+        .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+    };
+    VK_CHECK(vkCreateSampler(m_Device, &samplerInfo, nullptr, &m_SSAONoiseSampler));
+
+    VkDescriptorImageInfo descriptorImageInfo = {
+        .sampler = m_SSAONoiseSampler,
+        .imageView = m_SSAONoiseView,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    };
+    for (FrameData& frame : m_Frames) {
+        VkWriteDescriptorSet write = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = frame.textureDescriptorSet,
+            .dstBinding = 2,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &descriptorImageInfo,
+        };
+        vkUpdateDescriptorSets(m_Device, 1, &write, 0, nullptr);
+    }
+
+    m_MainDeletionQueue.PushFunction([=, this] {
+        vkDestroyImageView(m_Device, m_SSAONoiseView, nullptr);
+        vmaDestroyImage(m_Allocator, m_SSAONoiseImage.image, m_SSAONoiseImage.allocation);
+        vkDestroySampler(m_Device, m_SSAONoiseSampler, nullptr);
+    });
+}
+
 void RenderSystem::InitGlobalDescriptor()
 {
     // Global descriptor set layout
@@ -1742,7 +1892,7 @@ void RenderSystem::InitGlobalDescriptor()
     VK_CHECK(vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_DescriptorLayout));
 
     // Array descriptor set layout
-    VkDescriptorSetLayoutBinding arrayBindings[2] = {
+    VkDescriptorSetLayoutBinding arrayBindings[3] = {
         {
             .binding = 0,
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -1755,9 +1905,15 @@ void RenderSystem::InitGlobalDescriptor()
             .descriptorCount = 1,
             .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
         },
+        {
+            .binding = 2,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+        },
     };
     layoutInfo.pBindings = arrayBindings;
-    layoutInfo.bindingCount = 2;
+    layoutInfo.bindingCount = 3;
     VK_CHECK(vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_ArrayHandler.descriptorLayout));
     
     m_MainDeletionQueue.PushFunction([=, this] {
@@ -1785,7 +1941,7 @@ void RenderSystem::InitGlobalDescriptor()
 
         VkDescriptorPoolSize poolSizes[2] = { 
             { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },
-            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, TEXTURE_ARRAY_MAX_ENUM + 1 } // + 1 for the shadow array
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, TEXTURE_ARRAY_MAX_ENUM + 2 } // + 1 for the shadow array, + 1 for ssao noise
         };
         VkDescriptorPoolCreateInfo poolInfo = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -1809,6 +1965,7 @@ void RenderSystem::InitGlobalDescriptor()
         };
         VK_CHECK(vkAllocateDescriptorSets(m_Device, &allocInfo, &frame.descriptorSet));
         
+        // Write uniform buffer descriptor set
         VkDescriptorBufferInfo bufferInfo = {
             .buffer = frame.uniformBuffer.buffer,
             .offset = 0,
@@ -1827,7 +1984,7 @@ void RenderSystem::InitGlobalDescriptor()
 
         // Allocate texture array descriptor set
         allocInfo.pSetLayouts = &m_ArrayHandler.descriptorLayout;
-        VK_CHECK(vkAllocateDescriptorSets(m_Device, &allocInfo, &frame.arrayDescriptorSet));
+        VK_CHECK(vkAllocateDescriptorSets(m_Device, &allocInfo, &frame.textureDescriptorSet));
     }
 }
 

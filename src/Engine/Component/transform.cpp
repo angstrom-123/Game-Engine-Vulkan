@@ -18,7 +18,7 @@ void Transform::InheritFrom(Entity parent)
 Transform& Transform::Rotate(float radians, const glm::vec3& axis)
 {
     glm::quat q = glm::angleAxis(radians, glm::normalize(axis));
-    rotation = q * rotation;
+    rotation = q * glm::quat(1.0, 0.0, 0.0, 0.0);
     return *this;
 }
 

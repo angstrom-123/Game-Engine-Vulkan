@@ -62,6 +62,7 @@ private:
     void InitLightCullingDescriptor();
     void InitLightCullingResources();
     void InitLightCullingPipeline();
+    void InitSSAOResources();
     void InitShadowRenderPass();
     void InitShadowResources();
     void InitShadowPipeline();
@@ -93,6 +94,14 @@ private:
     VkViewport m_Viewport;
     VkRect2D m_Scissor;
     VkPhysicalDeviceProperties m_Properties;
+    struct VmaAllocator_T *m_Allocator;
+    CommandSubmitter m_Submitter;
+    TextureArrayHandler m_ArrayHandler;
+
+    // SSAO 
+    AllocatedImage m_SSAONoiseImage;
+    VkImageView m_SSAONoiseView;
+    VkSampler m_SSAONoiseSampler;
 
     // Function Pointers
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR m_GetSurfaceCapabilities;
@@ -128,10 +137,6 @@ private:
     VkPipelineLayout m_ResolvePipelineLayout;
     VkPipeline m_ResolvePipeline;
     VkDescriptorSetLayout m_ResolveDescriptorLayout;
-
-    struct VmaAllocator_T *m_Allocator;
-    CommandSubmitter m_Submitter;
-    TextureArrayHandler m_ArrayHandler;
 
     // Vulkan Primitives
     VkInstance m_Instance;

@@ -4,11 +4,11 @@
 #include "Util/myAssert.h"
 #include "vulkan_core.h"
 
-void WritableTextureArray::Init(VkDevice device, VkQueue graphicsQueue, VkRenderPass renderPass, CommandSubmitter& submitter, VmaAllocator allocator, uint32_t resolution, uint32_t size, VkFormat format)
+void WritableTextureArray::Init(VkDevice device, VkQueue graphicsQueue, VkRenderPass renderPass, CommandSubmitter& submitter, VmaAllocator allocator, const WritableTextureArrayCreateInfo& info)
 {
-    m_Resolution = resolution;
-    m_LayerCount = size;
-    m_Format = format;
+    m_Resolution = info.resolution;
+    m_LayerCount = info.size;
+    m_Format = info.format;
     m_LayerViews.reserve(m_LayerCount);
     m_LayerFramebuffers.reserve(m_LayerCount);
 
@@ -54,8 +54,9 @@ void WritableTextureArray::Init(VkDevice device, VkQueue graphicsQueue, VkRender
         .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
         .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
         .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
-        .compareEnable = VK_FALSE,
-        .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE, // TODO: Check if this should be black
+        .compareEnable = info.useShadowSampler ? VK_TRUE : VK_FALSE,
+        .compareOp = info.useShadowSampler ? VK_COMPARE_OP_GREATER : VK_COMPARE_OP_ALWAYS,
+        .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE,
         .unnormalizedCoordinates = VK_FALSE,
     };
     VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_Sampler));

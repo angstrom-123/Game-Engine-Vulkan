@@ -24,12 +24,13 @@
     #error "DEBUG or RELEASE must be specified"
 #endif
 
-static constexpr size_t FRAMES_IN_FLIGHT = 2;
-static constexpr size_t MAX_LIGHTS = 1024;
-static constexpr size_t MAX_SHADOWCASTERS = 8;
-static constexpr uint32_t SHADOWMAP_RESOLUTION = 2048;
-static constexpr size_t MAX_TILE_LIGHTS = 256;
-static constexpr size_t TILE_SIZE = 16; // Another common size is 32
+static const size_t FRAMES_IN_FLIGHT = 2;
+static const size_t MAX_LIGHTS = 512;
+static const size_t MAX_SHADOWCASTERS = 8;
+static const uint32_t SHADOWMAP_RESOLUTION = 2048;
+static const size_t MAX_TILE_LIGHTS = 128;
+static const size_t TILE_SIZE = 16;
+static const size_t SSAO_SAMPLES = 16;
 
 struct LightCullingPushConstants {
     uint32_t tileSize;
@@ -58,10 +59,13 @@ struct PushConstants {
     uint32_t tilesX;
     uint32_t tilesY;
     uint32_t maxTileLights;
+    uint32_t screenWidth;
+    uint32_t screenHeight;
 };
 
 struct GlobalUniforms {
     glm::mat4x4 vp;
+    glm::vec4 ssaoKernel[SSAO_SAMPLES];
 };
 
 struct CameraUniforms {
@@ -86,7 +90,7 @@ struct FrameData {
     VkCommandBuffer commandBuffer;
 
     VkDescriptorPool descriptorPool;
-    VkDescriptorSet arrayDescriptorSet;
+    VkDescriptorSet textureDescriptorSet;
     VkDescriptorSet resolveDescriptorSet;
     VkDescriptorSet descriptorSet;
     AllocatedBuffer uniformBuffer;

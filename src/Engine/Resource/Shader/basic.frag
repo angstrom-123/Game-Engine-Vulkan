@@ -1,5 +1,7 @@
 #version 450 
 
+#define SSAO_SAMPLES 16
+
 struct Light {
     vec4 position;      // xyz + light type  - all                 (0: Point, 1: Spot, 2: Directional)
     vec4 color;         // rgb + intensity   - all
@@ -11,9 +13,14 @@ struct Light {
     mat4 lightVP;       //                   - spot / directional
 };
 
-layout (set = 0, binding = 0) uniform GlobalUniforms { mat4 vp; } uniforms;
+layout (set = 0, binding = 0) uniform GlobalUniforms { 
+    mat4 vp; 
+    vec4 ssaoKernel[SSAO_SAMPLES];
+} uniforms;
 layout (set = 1, binding = 0) uniform sampler2DArray uTextures[4];
-layout (set = 1, binding = 1) uniform sampler2DArray uShadowmaps;
+// layout (set = 1, binding = 1) uniform sampler2DArray uShadowmaps;
+layout (set = 1, binding = 1) uniform sampler2DArrayShadow uShadowmaps;
+layout (set = 1, binding = 2) uniform sampler2D uNoiseTexture;
 layout (set = 2, binding = 0) uniform Camera {
     mat4 view;
     mat4 projection;
@@ -22,6 +29,7 @@ layout (set = 2, binding = 0) uniform Camera {
 layout (set = 2, binding = 1) readonly buffer LightBuffer { Light lights[]; } lightBuffer;
 layout (set = 2, binding = 2) readonly buffer TileIndices { uint indices[]; } tileIndices;
 layout (set = 2, binding = 3) readonly buffer TileCounts { uint counts[]; } tileCounts;
+layout (set = 2, binding = 4) uniform sampler2D uDepthTexture;
 
 layout (push_constant) uniform Constants {
     mat4 model;
@@ -33,6 +41,8 @@ layout (push_constant) uniform Constants {
     uint tilesX;
     uint tilesY;
     uint maxTileLights;
+    uint screenWidth;
+    uint screenHeight;
 } constants;
 
 layout (location = 0) in vec3 vPosition;
@@ -61,8 +71,10 @@ float SpotFactor(vec3 lightDir, vec3 spotDir, float inner, float outer)
 // For spot / directional lights
 float CalculateShadow(Light light, vec3 normal, vec3 lightDir)
 {
+    // In case of non-shadowcasting lights
     if (light.shadowIndex == 0xFFFFFFFF) return 0.0;
 
+    // Depth reconstruction and sampling
     float bias = light.direction.w;
     bias = max(bias * 10.0 * (1.0 - dot(normal, lightDir)), bias);
     vec4 positionLightspace = light.lightVP * vec4(vPosition, 1.0);
@@ -70,20 +82,65 @@ float CalculateShadow(Light light, vec3 normal, vec3 lightDir)
     float currentDepth = projectionCoords.z;
     projectionCoords = projectionCoords * 0.5 + 0.5;
 
+    // PCF
     float shadow = 0.0;
     vec2 texelSize = 1.0 / vec2(textureSize(uShadowmaps, 0));
     for (int x = -1; x <= 1; x++) {
         for (int y = -1; y <= 1; y++) {
             vec2 coordOffset = texelSize * vec2(x, y);
-            float pcfDepth = texture(uShadowmaps, vec3(projectionCoords.xy + coordOffset, light.shadowIndex)).r;
-            shadow += currentDepth - bias > pcfDepth ? 1.0 : 0.0;
+            vec4 shadowCoord = vec4(projectionCoords.xy + coordOffset, light.shadowIndex, currentDepth - bias);
+            shadow += texture(uShadowmaps, shadowCoord);
         }
     }
     shadow /= 9.0;
-    return shadow;
 
-    // float sampledDepth = texture(uShadowmaps, vec3(projectionCoords.xy, light.shadowIndex)).r;
-    // return (currentDepth - bias) > sampledDepth ? 1.0 : 0.0;
+    return shadow;
+}
+
+vec3 ReconstructViewPosition(vec2 uv, float depth, mat4 projection)
+{
+    vec4 clipPos = vec4(uv * 2.0 - 1.0, depth, 1.0);
+    vec4 viewPos = inverse(projection) * clipPos;
+    return viewPos.xyz / viewPos.w;
+}
+
+float SSAO(vec3 normal)
+{
+    const vec2 screenResolution = vec2(constants.screenWidth, constants.screenHeight);
+    const float bias = 0.025;
+    const float radius = 1.0;
+    const vec2 noiseScale = screenResolution / 2.0;
+
+    vec2 uv = gl_FragCoord.xy / screenResolution;
+    float depth = texture(uDepthTexture, uv).r;
+    vec3 viewPos = ReconstructViewPosition(uv, depth, camera.projection);
+    vec3 randomVec = texture(uNoiseTexture, uv * noiseScale).xyz;
+    vec3 viewNormal = mat3(camera.view) * normal;
+
+    vec3 tangent = normalize(randomVec - viewNormal * dot(randomVec, viewNormal));
+    vec3 bitangent = cross(viewNormal, tangent);
+    mat3 TBN = mat3(tangent, bitangent, viewNormal);
+
+    float occlusion = 0.0;
+    for (uint i = 0; i < SSAO_SAMPLES; i++) {
+        vec3 samplePos = TBN * uniforms.ssaoKernel[i].xyz;
+        samplePos = viewPos + samplePos * radius;
+
+        vec4 offset = camera.projection * vec4(samplePos, 1.0);
+        offset.xyz /= offset.w;
+        offset.xyz = offset.xyz * 0.5 + 0.5;
+
+        float sampleDepth = texture(uDepthTexture, offset.xy).r;
+        vec3 sampleViewPos = ReconstructViewPosition(offset.xy, sampleDepth, camera.projection);
+        float sampleZ = sampleViewPos.z;
+
+        float rangeCheck = abs(viewPos.z - sampleZ) < radius ? 1.0 : 0.0;
+
+        occlusion += (sampleZ >= samplePos.z + bias ? 1.0 : 0.0) * rangeCheck;
+    }
+
+    occlusion = 1.0 - (occlusion / float(SSAO_SAMPLES));
+    return occlusion;
 }
 
 void main()
@@ -93,7 +150,7 @@ void main()
     vec4 diffuseMap = texture(uTextures[constants.diffuseIndex >> 16], vec3(vUV, constants.diffuseIndex & 0xFFFF));
     vec4 normalMap = texture(uTextures[constants.normalIndex >> 16], vec3(vUV, constants.normalIndex & 0xFFFF));
 
-    vec3 normal = normalMap.rgb * 2.0 - 1.0;
+    vec3 normal = normalMap.xyz * 2.0 - 1.0;
     normal = normalize(vTBN * normal);
 
     // Retrieve tile data
@@ -147,7 +204,7 @@ void main()
         specularTotal += specularContribution;
     }
 
-    vec3 ambient = vec3(0.2) * ambientMap.rgb;
+    vec3 ambient = vec3(0.2) * ambientMap.rgb * SSAO(normal);
     vec3 diffuse = diffuseTotal * diffuseMap.rgb;
     vec3 specular = specularTotal * ambientMap.rgb;
     vec3 result = ambient + diffuse + specular;

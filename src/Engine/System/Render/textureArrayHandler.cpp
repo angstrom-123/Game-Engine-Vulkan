@@ -27,7 +27,7 @@ void TextureArrayHandler::Init(VkDevice device, VkPhysicalDevice physicalDevice,
             VkWriteDescriptorSet write = {
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .pNext = nullptr,
-                .dstSet = frame.arrayDescriptorSet,
+                .dstSet = frame.textureDescriptorSet,
                 .dstBinding = 0,
                 .dstArrayElement = j,
                 .descriptorCount = 1,

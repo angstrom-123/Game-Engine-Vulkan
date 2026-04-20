@@ -2,6 +2,7 @@
 
 layout (set = 0, binding = 0) uniform GlobalUniforms {
     mat4 vp;
+    vec4 ssaoKernel[64];
 } uniforms;
 
 layout (push_constant) uniform Constants {
@@ -14,6 +15,8 @@ layout (push_constant) uniform Constants {
     uint tilesX;
     uint tilesY;
     uint maxTileLights;
+    uint screenWidth;
+    uint screenHeight;
 } constants;
 
 layout (location = 0) in vec3 aPosition;
