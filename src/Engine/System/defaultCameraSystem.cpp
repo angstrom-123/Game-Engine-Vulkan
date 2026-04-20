@@ -1,11 +1,13 @@
 #include "defaultCameraSystem.h"
 #include "Util/profiler.h"
-#include "glm/ext/matrix_transform.hpp"
-#include "glm/ext/quaternion_common.hpp"
-#include "glm/ext/quaternion_float.hpp"
+
 #include "glm/ext/quaternion_trigonometric.hpp"
+#include "glm/gtc/quaternion.hpp"
+
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include "glm/ext/matrix_transform.hpp"
+
 #include <GLFW/glfw3.h>
-#include <algorithm>
 
 static constexpr float MAX_PITCH = 89.9;
 
@@ -17,6 +19,8 @@ void DefaultCameraSystem::Init(float sensitivity, float speed)
 
 void DefaultCameraSystem::Update(bool *keysDown, glm::vec2 mouseDelta, double dt)
 {
+    PROFILER_PROFILE_SCOPE("DefaultCameraSystem::Update");
+
     ECS& ecs = ECS::Get();
     for (Entity e : entities) {
         Camera& camera = ecs.GetComponent<Camera>(e);

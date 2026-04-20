@@ -28,14 +28,14 @@ namespace profiling {
             m_OutputStream << "[";
         }
 
-        void BeginGpuSession(const std::string headings[], uint32_t count)
+        void BeginGpuSession(const std::string *headings, uint32_t count)
         {
             m_GpuOutputStream.open("gpu_results.txt");
             m_GpuHeadings = new std::string[count];
             m_GpuHeadingCount = count;
             for (uint32_t i = 0; i < count; i++) {
                 m_GpuHeadings[i] = std::string(headings[i]);
-                m_OutputStream << headings[i] << ",";
+                m_OutputStream << m_GpuHeadings[i] << ", ";
             }
             m_GpuOutputStream << std::endl;
         }
@@ -69,7 +69,7 @@ namespace profiling {
                 return;
             }
             for (uint32_t i = 0; i < m_GpuHeadingCount; i++) {
-                m_GpuOutputStream << valuesNS[i] * 1e-6f << ",";
+                m_GpuOutputStream << valuesNS[i] * 1e-6f << ", ";
             }
             m_GpuOutputStream << std::endl;
         }

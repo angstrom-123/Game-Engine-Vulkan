@@ -1,8 +1,10 @@
 #pragma once
 
+#include "System/Render/writableTextureArray.h"
 #include "Util/allocator.h"
 #include "glm/ext/matrix_float4x4.hpp"
 #include "Util/logger.h"
+#include "vulkan_core.h"
 
 #ifdef DEBUG 
     #define USE_VALIDATION_LAYERS VK_TRUE 
@@ -22,10 +24,10 @@
     #error "DEBUG or RELEASE must be specified"
 #endif
 
-
-// static constexpr size_t FRAMES_IN_FLIGHT = 3;
 static constexpr size_t FRAMES_IN_FLIGHT = 2;
 static constexpr size_t MAX_LIGHTS = 1024;
+static constexpr size_t MAX_SHADOWCASTERS = 8;
+static constexpr uint32_t SHADOWMAP_RESOLUTION = 2048;
 static constexpr size_t MAX_TILE_LIGHTS = 256;
 static constexpr size_t TILE_SIZE = 16; // Another common size is 32
 
@@ -89,6 +91,7 @@ struct FrameData {
     VkDescriptorSet descriptorSet;
     AllocatedBuffer uniformBuffer;
     LightCullingData lightCulling;
+    WritableTextureArray shadowArray;
 
 #ifdef PROFILING
     VkQueryPool queryPool;

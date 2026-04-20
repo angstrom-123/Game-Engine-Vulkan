@@ -1,15 +1,17 @@
 #include "lightSystem.h"
+#include "System/Render/renderTypes.h"
 #include "Util/profiler.h"
 
 void LightSystem::Update()
 {
     PROFILER_PROFILE_SCOPE("LightSystem::Update");
 
+    ASSERT(entities.size() <= MAX_LIGHTS && "Too many lights");
+
     ECS& ecs = ECS::Get();
 
     for (const Entity e : entities) {
         Transform& transform = ecs.GetComponent<Transform>(e);
-
         Light& light = ecs.GetComponent<Light>(e);
 
         glm::vec3 position = transform.translation;

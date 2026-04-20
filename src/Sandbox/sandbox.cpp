@@ -1,4 +1,6 @@
 #include "sandbox.h"
+#include "ECS/ecsTypes.h"
+#include "glm/trigonometric.hpp"
 
 #include <Engine/event.h>
 #include <Engine/Util/logger.h>
@@ -9,49 +11,6 @@
 
 #include <cstdlib>
 #include <glm/vec3.hpp>
-
-Entity PointLight(glm::vec3 position, glm::vec3 color, float intensity, float radius)
-{
-    ECS& ecs = ECS::Get();
-    Entity e = ecs.CreateEntity();
-
-    ecs.GetComponent<Transform>(e).Translate(position);
-    ecs.AddComponent(e, Light(POINT, color, intensity, radius));
-
-    return e;
-}
-
-Entity SpotLight(glm::vec3 position, glm::vec3 color, float intensity, float radius, glm::vec3 direction, float inner, float outer)
-{
-    ECS& ecs = ECS::Get();
-    Entity e = ecs.CreateEntity();
-
-    direction = glm::normalize(direction);
-    glm::vec3 base = glm::vec3(0.0, 0.0, 1.0);
-    glm::vec3 axis = glm::cross(base, direction);
-    float angle = glm::acos(glm::dot(base, direction));
-
-    ecs.GetComponent<Transform>(e).Translate(position).Rotate(angle, axis);
-    ecs.AddComponent(e, Light(SPOT, color, intensity, radius, inner, outer));
-
-    return e;
-}
-
-Entity DirectionalLight(glm::vec3 color, float intensity, glm::vec3 direction)
-{
-    ECS& ecs = ECS::Get();
-    Entity e = ecs.CreateEntity();
-
-    direction = glm::normalize(direction);
-    glm::vec3 base = glm::vec3(0.0, 0.0, 1.0);
-    glm::vec3 axis = glm::cross(base, direction);
-    float angle = glm::acos(glm::dot(base, direction));
-
-    ecs.GetComponent<Transform>(e).Rotate(angle, axis);
-    ecs.AddComponent(e, Light(DIRECTIONAL, color, intensity));
-
-    return e;
-}
 
 float Random(float min, float max)
 {
@@ -73,37 +32,47 @@ void Sandbox::Init()
     ecs.SetSystemSignature<DefaultCameraSystem>(m_CameraSystem->GetSignature());
     m_CameraSystem->Init();
 
-    m_SponzaParent = ecs.CreateEntity();
-    ecs.GetComponent<Transform>(m_SponzaParent).Scale(0.015).Translate(0.0, -2.0, 0.0).Rotate(glm::radians(-90.0), Y_AXIS);
-
     // Load sponza mesh (made of several objects with different textures)
     // Sponza is a VERY heavy file, as it contains 40+ large image textures, which each need to 
     // be loaded individually, and applied to separate meshes (Could optimize with array textures)
+    m_SponzaParent = ecs.CreateEntity();
+    ecs.GetComponent<Transform>(m_SponzaParent).Scale(0.015).Translate(0.0, -2.0, 0.0).Rotate(glm::radians(-90.0), Y_AXIS);
     m_Engine->CreateMesh("src/Sandbox/Resource/Model/sponza.obj", "src/Sandbox/Resource/Model/sponza.mtl", m_SponzaParts);
-
-    // Add a lot of random lights
-    m_LightsParent = ecs.CreateEntity();
-
-    srand(time(NULL));
-    for (uint32_t i = 0; i < 256; i++) {
-
-        glm::vec3 randomPosition = glm::vec3(Random(-15.0, 15.0), Random(-5.0, 25.0), Random(-15.0, 15.0));
-        glm::vec3 randomColor = glm::vec3(Random(0.0, 1.0), Random(0.0, 1.0), Random(0.0, 1.0));
-        float randomIntensity = Random(0.5, 1.5);
-        float randomRadius = Random(1.0, 7.0);
-
-        Entity light = PointLight(randomPosition, randomColor, randomIntensity, randomRadius);
-        ecs.GetComponent<Transform>(light).InheritFrom(m_LightsParent);
-    }
-
-    DirectionalLight(glm::vec3(1.0), 1.0, glm::vec3(0.1, -1.0, 0.1));
-
-    // Parent the sponza mesh to an entity to control its transform.
-    // This is useful for meshes loaded from a file containing several objects / groups so they 
-    // can all be transformed at once.
     for (Entity e : m_SponzaParts) {
         ecs.GetComponent<Transform>(e).InheritFrom(m_SponzaParent);
     }
+
+    // Add a lot of random lights
+    m_LightsParent = ecs.CreateEntity();
+    srand(time(NULL));
+    for (uint32_t i = 0; i < 256; i++) {
+        Entity light = INVALID_HANDLE;
+        LightCreateInfo pointLightInfo = {
+            .position = glm::vec3(Random(-15.0, 15.0), Random(-5.0, 25.0), Random(-15.0, 15.0)),
+            .color = glm::vec3(Random(0.0, 1.0), Random(0.0, 1.0), Random(0.0, 1.0)),
+            .intensity = Random(0.5, 1.5),
+            .radius = Random(1.0, 7.0)
+        };
+        m_Engine->CreatePointLight(pointLightInfo, light);
+        ecs.GetComponent<Transform>(light).InheritFrom(m_LightsParent);
+    }
+
+    Entity light = INVALID_HANDLE;
+    LightCreateInfo lightInfo = {
+        .position           = glm::vec3(0.0),
+        .color              = glm::vec3(1.0),
+        .direction          = glm::vec3(0.6, -1.0, 0.2),
+        .intensity          = 1.0,
+        .radius             = 60.0,
+        .distance           = 40.0,
+        .shadowcaster       = true,
+        .shadowBias         = 0.005,
+        .projectionLeft     = -40.0,
+        .projectionRight    = 40.0,
+        .projectionBottom   = -40.0,
+        .projectionTop      = 40.0
+    };
+    m_Engine->CreateDirectionalLight(lightInfo, light);
 }
 
 void Sandbox::Frame(double deltaTime)
@@ -126,9 +95,10 @@ void Sandbox::Frame(double deltaTime)
     m_CameraSystem->Update(m_Engine->GetKeysDown(), m_Engine->GetFrameMouseDelta(), deltaTime);
 
     // Move all the lights around
-    float factorX = std::sin(static_cast<float>(m_Engine->GetFrameNumber()) / 60.0) * 5.0;
-    float factorY = std::cos(static_cast<float>(m_Engine->GetFrameNumber()) / 60.0) * 5.0;
-    ecs.GetComponent<Transform>(m_LightsParent).Translate(factorX, factorY, factorY);
+    float offsetX = std::sin(static_cast<float>(m_Engine->GetFrameNumber()) / 60.0) * 5.0;
+    float offsetY = std::cos(static_cast<float>(m_Engine->GetFrameNumber()) / 60.0) * 5.0;
+    float offsetZ = std::cos(static_cast<float>(m_Engine->GetFrameNumber() + 47) / 45.0) * 5.0;
+    ecs.GetComponent<Transform>(m_LightsParent).Translate(offsetX, offsetY, offsetZ);
 }
 
 void Sandbox::EventCallback(Event event)

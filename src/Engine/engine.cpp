@@ -1,6 +1,7 @@
 #include "engine.h"
 
-#include "System/Render/lightSystem.h"
+#include "Component/shadowcaster.h"
+#include "System/lightSystem.h"
 #include "Util/objLoader.h"
 #include "Util/imageLoader.h"
 #include "Component/camera.h"
@@ -45,6 +46,7 @@ Engine::Engine(App *app, Config& config)
     ecs.RegisterComponent<Camera>();
     ecs.RegisterComponent<Material>();
     ecs.RegisterComponent<Light>();
+    ecs.RegisterComponent<Shadowcaster>();
 
     // Default Systems
     m_RenderSystem = ecs.RegisterSystem<RenderSystem>();
@@ -53,6 +55,9 @@ Engine::Engine(App *app, Config& config)
 
     m_LightSystem = ecs.RegisterSystem<LightSystem>();
     ecs.SetSystemSignature<LightSystem>(m_LightSystem->GetSignature());
+
+    m_ShadowSystem = ecs.RegisterSystem<ShadowSystem>();
+    ecs.SetSystemSignature<ShadowSystem>(m_ShadowSystem->GetSignature());
 
     // App
     m_App = app;
@@ -79,6 +84,7 @@ void Engine::Run()
         m_App->Frame(currTime - lastTime);
 
         m_LightSystem->Update();
+        m_ShadowSystem->Update();
         m_RenderSystem->Update();
 
         lastTime = currTime;
@@ -210,6 +216,69 @@ void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::v
     }
 
     INFO("Mesh load took " << GetTime() - startTime << "s");
+}
+
+void Engine::CreatePointLight(const LightCreateInfo& info, Entity& result)
+{
+    ASSERT(result == INVALID_HANDLE && "Overwriting existing entity");
+
+    ECS& ecs = ECS::Get();
+    Entity e = ecs.CreateEntity();
+
+    ecs.GetComponent<Transform>(e).Translate(info.position);
+    ecs.AddComponent(e, Light(POINT, info.color, info.intensity, info.radius));
+
+    result = e;
+}
+
+void Engine::CreateSpotLight(const LightCreateInfo& info, Entity& result)
+{
+    ASSERT(result == INVALID_HANDLE && "Overwriting existing entity");
+
+    ECS& ecs = ECS::Get();
+    Entity e = ecs.CreateEntity();
+
+    glm::vec3 base = glm::vec3(0.0, 0.0, 1.0);
+    glm::vec3 axis = glm::cross(base, -glm::normalize(info.direction));
+    float angle = glm::acos(glm::dot(base, -glm::normalize(info.direction)));
+
+    Light light = Light(SPOT, info.color, info.intensity, info.radius, info.innerConeRadians, info.outerConeRadians);
+    if (info.shadowcaster) {
+        light.direction.w = info.shadowBias;
+        Shadowcaster shadowcaster = Shadowcaster(PERSPECTIVE, info.outerConeRadians, 0.1, info.radius);
+        m_RenderSystem->AllocateShadowcaster(light, shadowcaster);
+        ecs.AddComponent<Shadowcaster>(e, shadowcaster);
+    }
+
+    ecs.AddComponent<Light>(e, light);
+    ecs.GetComponent<Transform>(e).Translate(info.position).Rotate(angle, axis);
+
+    result = e;
+}
+
+void Engine::CreateDirectionalLight(const LightCreateInfo& info, Entity& result)
+{
+    ASSERT(result == INVALID_HANDLE && "Overwriting existing entity");
+
+    ECS& ecs = ECS::Get();
+    Entity e = ecs.CreateEntity();
+
+    glm::vec3 base = glm::vec3(0.0, 0.0, 1.0);
+    glm::vec3 axis = glm::cross(base, -glm::normalize(info.direction));
+    float angle = glm::acos(glm::dot(base, -glm::normalize(info.direction)));
+
+    Light light = Light(DIRECTIONAL, info.color, info.intensity);
+    if (info.shadowcaster) {
+        light.direction.w = info.shadowBias;
+        Shadowcaster shadowcaster = Shadowcaster(ORTHOGRAPHIC, info.projectionLeft, info.projectionRight, info.projectionBottom, info.projectionTop, 0.1, info.radius);
+        m_RenderSystem->AllocateShadowcaster(light, shadowcaster);
+        ecs.AddComponent<Shadowcaster>(e, shadowcaster);
+    }
+
+    ecs.AddComponent<Light>(e, light);
+    ecs.GetComponent<Transform>(e).Rotate(angle, axis).Translate(info.position - glm::normalize(info.direction) * info.distance);
+
+    result = e;
 }
 
 void Engine::CalculateTangents(Vertex& v1, Vertex& v2, Vertex& v3)

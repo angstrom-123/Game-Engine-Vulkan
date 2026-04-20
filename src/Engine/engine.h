@@ -2,8 +2,9 @@
 
 #include <filesystem>
 
-#include "System/Render/lightSystem.h"
+#include "System/lightSystem.h"
 #include "System/Render/renderSystem.h"
+#include "System/shadowSystem.h"
 #include "Util/objLoader.h"
 #include "config.h"
 #include "eventHandler.h"
@@ -34,6 +35,9 @@ public:
     static void EventHook(Event event, void *data);
     double GetTime();
     void CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results);
+    void CreatePointLight(const LightCreateInfo& info, Entity& result);
+    void CreateSpotLight(const LightCreateInfo& info, Entity& result);
+    void CreateDirectionalLight(const LightCreateInfo& info, Entity& result);
 
     RenderSystem *GetRenderer() { return m_RenderSystem; };
     struct GLFWwindow *GetWindow() { return m_Window; };
@@ -53,4 +57,5 @@ private:
     // Default entities, components, and systems, managed by the engine
     RenderSystem *m_RenderSystem;
     LightSystem *m_LightSystem;
+    ShadowSystem *m_ShadowSystem;
 };

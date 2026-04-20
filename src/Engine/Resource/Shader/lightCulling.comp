@@ -9,7 +9,8 @@ struct Light {
     float radius;       // spot / point
     float innerCone;    // spot
     float outerCone;    // spot
-    uint shadowIndex;
+    uint shadowIndex;   // spot / directional
+    mat4 lightVP;       // spot / directional
 };
 
 layout (push_constant) uniform Constants {
@@ -159,7 +160,8 @@ void main()
             if (type == 1) {
                 // For spot lights we move the bounding sphere to a better position
                 vec3 dir = light.direction.xyz;
-                centre = light.position.xyz + dir * (radius * 0.5);
+                // centre = light.position.xyz + dir * (radius * 0.5);
+                centre = light.position.xyz - dir * (radius * 0.5);
                 radius *= 0.5;
             }
 

@@ -36,6 +36,12 @@ public:
         m_SystemManager.EntityDestroyed(entity);
     }
 
+    template<typename T> bool HasComponent(Entity entity)
+    {
+        uint64_t bit = GetBit<T>();
+        return (m_EntityManager.GetSignature(entity) & bit) == bit;
+    }
+
     template<typename T> void RegisterComponent()
     {
         m_ComponentManager.RegisterComponent<T>();

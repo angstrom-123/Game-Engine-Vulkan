@@ -7,6 +7,7 @@
 
 #include "Component/light.h"
 #include "Component/camera.h"
+#include "Component/shadowcaster.h"
 #include "ECS/ecsTypes.h"
 #include "Geometry/frustum.h"
 #include "System/Render/initialiser.h"
@@ -25,53 +26,86 @@
 #include <vulkan/vulkan_core.h>
 #include <stb/stb_image.h>
 
+// TODO: Subpasses 
+//       - Should optimise some of the horrible transitions I am doing 
+//       - Perhaps the depth pass can be a subpass?
+
 void RenderSystem::Init(GLFWwindow *window, Config& config)
 {
-    m_Extent.width = config.windowWidth;
-    m_Extent.height = config.windowHeight;
     m_PresentMode = config.vsync ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
     m_DrawOrder.reserve(MAX_ENTITIES);
 
+    // Viewport and scissor rect for on-screen passes
+    m_Extent.width = config.windowWidth;
+    m_Extent.height = config.windowHeight;
+    m_Viewport = {
+        .width = static_cast<float>(m_Extent.width),
+        .height = static_cast<float>(m_Extent.height),
+        .minDepth = 0.0,
+        .maxDepth = 1.0
+    };
+    m_Scissor = {
+        .extent = m_Extent
+    };
+
+    // Viewport and scissor rect for offscreen shadowmap passes
+    m_ShadowExtent.width = SHADOWMAP_RESOLUTION;
+    m_ShadowExtent.height = SHADOWMAP_RESOLUTION;
+    m_ShadowViewport = {
+        .width = static_cast<float>(m_ShadowExtent.width),
+        .height = static_cast<float>(m_ShadowExtent.height),
+        .minDepth = 0.0,
+        .maxDepth = 1.0
+    };
+    m_ShadowScissor = {
+        .offset = { 0, 0 },
+        .extent = m_ShadowExtent
+    };
+
+    // Primitives and vulkan core structures
     InitVulkan(window);
     InitMSAA(config.msaaSamples);
     InitSwapchain();
     InitCommands();
-    InitGlobalDescriptor();
-    InitDefaultRenderPass();
-    InitDepthRenderPass();
-    InitFramebuffers();
     InitSyncStructures();
-    InitLightCulling();
-    InitResolve();
-    InitLightCullingResources();
+    // Render passes
+    InitMainRenderPass();
+    InitDepthRenderPass();
+    InitShadowRenderPass();
+    // Descriptor sets
+    InitGlobalDescriptor();
+    InitResolveDescriptor();
+    InitLightCullingDescriptor();
+    // Dynamic Resources 
     InitResolveResources();
-    InitDepthPipeline();
-    InitLightCullingPipeline();
-    InitResolvePipeline();
+    InitLightCullingResources();
+    InitShadowResources();
+    // Pipelines
     InitMainPipelines();
+    InitDepthPipeline();
+    InitResolvePipeline();
+    InitLightCullingPipeline();
+    InitShadowPipeline();
+    // Framebuffers
+    InitFramebuffers();
 
-    // These sizes use ~2 GiB of memory
+    // Shadowmaps are stored in a texture array but are managed differently to these arrays
+    // since these arrays are readonly, and the shadowmap array is writable
     TextureArraySizes arraySizes = {
-        .color1024 = 128,
-        .color2048 = 32,
-        .data1024 = 128,
-        .data2048 = 32
+        .color1024 = 128,   // 1024*1024*128*4 = 512 MiB
+        .color2048 = 32,    // 2048*2048*32*4  = 512 MiB
+        .data1024 = 128,    // 1024*1024*128*4 = 512 MiB
+        .data2048 = 32,     // 2048*2048*32*4  = 512 MiB
     };
     m_ArrayHandler.Init(m_Device, m_PhysicalDevice, m_GraphicsQueue, m_Submitter, m_Allocator, m_Frames, arraySizes);
     m_MainDeletionQueue.PushFunction([=, this] {
         m_ArrayHandler.Cleanup(m_Device, m_Allocator);
     });
 
+    // Set up gpu profiling with vulkan timestamps
 #ifdef PROFILING 
-    std::string headings[6] = {
-        "Depth",
-        "Resolve",
-        "Culling",
-        "Opaque",
-        "Translucent",
-        "Total"
-    };
-    PROFILER_BEGIN_GPU_SESSION(headings, 6);
+    std::string headings[6] = { "Depth", "Resolve", "Culling", "Shadow", "Opaque", "Translucent", "Total" };
+    PROFILER_BEGIN_GPU_SESSION(headings, 7);
 
     if (m_Properties.limits.timestampPeriod == 0 || !m_Properties.limits.timestampComputeAndGraphics) {
         ERROR("Physical device doesn't support timestamps");
@@ -107,9 +141,7 @@ void RenderSystem::Init(GLFWwindow *window, Config& config)
             vkDestroyQueryPool(m_Device, frame.queryPool, nullptr);
         });
     }
-#endif
-
-    m_IsInitialized = true;
+#endif // PROFILING
 }
 
 void RenderSystem::SetCamera(Entity camera)
@@ -119,18 +151,16 @@ void RenderSystem::SetCamera(Entity camera)
 
 void RenderSystem::Cleanup() 
 {
-    if (m_IsInitialized) {
-        VK_CHECK(vkDeviceWaitIdle(m_Device));
+    VK_CHECK(vkDeviceWaitIdle(m_Device));
 
-        m_MainDeletionQueue.Flush();
-        m_DynamicDeletionQueue.Flush();
+    m_MainDeletionQueue.Flush();
+    m_DynamicDeletionQueue.Flush();
 
-        vmaDestroyAllocator(m_Allocator);
-        vkDestroyDevice(m_Device, nullptr);
-        vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr);
-        vkb::destroy_debug_utils_messenger(m_Instance, m_DebugMessenger);
-        vkDestroyInstance(m_Instance, nullptr);
-    }
+    vmaDestroyAllocator(m_Allocator);
+    vkDestroyDevice(m_Device, nullptr);
+    vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr);
+    vkb::destroy_debug_utils_messenger(m_Instance, m_DebugMessenger);
+    vkDestroyInstance(m_Instance, nullptr);
 }
 
 void RenderSystem::Update()
@@ -164,10 +194,7 @@ void RenderSystem::Update()
         // Frustum culling
         Mesh& mesh = ecs.GetComponent<Mesh>(e);
         Transform& transform = ecs.GetComponent<Transform>(e);
-        glm::mat4x4 model = transform.ModelMatrix();
-        if (transform.inherit != INVALID_HANDLE) {
-            model = ecs.GetComponent<Transform>(transform.inherit).ModelMatrix() * model;
-        }
+        glm::mat4x4 model = transform.GlobalModelMatrix();
         CentreExtents centreExtents = CentreExtents(mesh.bounds);
         if (camFrustum.Intersects(centreExtents.WorldSpace(model))) {
             // Add to draw list (front for opaque, back for transparent)
@@ -187,6 +214,11 @@ void RenderSystem::Update()
     }
 
     } // PROFILER_PROFILE_SCOPE("Sort_Entities");
+
+    VkClearValue colorClear = { .color = {{ 0.5, 0.7, 1.0, 1.0 }} };
+    VkClearValue resolveClear = { .color = {{ 0.0, 0.0, 0.0, 0.0 }} };
+    VkClearValue depthClear = { .depthStencil = { .depth = 1.0f } };
+    VkClearValue clearValues[3] = { colorClear, resolveClear, depthClear };
 
     // ============== Acquire swapchain image and wait on fences ===============
 
@@ -238,11 +270,6 @@ void RenderSystem::Update()
 
     } // PROFILER_PROFILE_SCOPE("Begin_Command_Buffer");
 
-    VkClearValue colorClear = { .color = {{ 0.5, 0.7, 1.0, 1.0 }} };
-    VkClearValue resolveClear = { .color = {{ 0.0, 0.0, 0.0, 0.0 }} };
-    VkClearValue depthClear = { .depthStencil = { .depth = 1.0f } };
-    VkClearValue clearValues[3] = { colorClear, resolveClear, depthClear };
-
     // ============================ Depth pre-pass =============================
 
 #ifdef PROFILING
@@ -260,10 +287,7 @@ void RenderSystem::Update()
 
         Mesh& mesh = ecs.GetComponent<Mesh>(e);
         Transform& transform = ecs.GetComponent<Transform>(e);
-        glm::mat4x4 model = transform.ModelMatrix();
-        if (transform.inherit != INVALID_HANDLE) {
-            model = ecs.GetComponent<Transform>(transform.inherit).ModelMatrix() * model;
-        }
+        glm::mat4x4 model = transform.GlobalModelMatrix();
 
         DepthPushConstants constants = {
             .model = model,
@@ -283,10 +307,8 @@ void RenderSystem::Update()
 
     // ========================= Depth Resolve (MSAA) ==========================
 
-    VkImageMemoryBarrier barrierToGeneral;
-
     // Transition resolved image to general for resolve
-    barrierToGeneral = {
+    VkImageMemoryBarrier barrierToGeneral = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .pNext = nullptr,
         .srcAccessMask = 0,
@@ -495,17 +517,90 @@ void RenderSystem::Update()
     vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
 
     // Transition resolved image back to general for submit
+    // TODO: Can I set this as final layout to not need an explicit transition here?
     barrierToGeneral.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     barrierToGeneral.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     barrierToGeneral.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     barrierToGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
     vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrierToGeneral);
 
-    // ========================= Opaque forward+ pass ==========================
+    // ========================== Shadowcaster pass ============================
+
+    frame.shadowArray.TransitionFromReadableToAttachment(frame.commandBuffer);
+
+    const auto [shadowcasterCount, shadowcasters] = ecs.GetData<Shadowcaster>();
+
+    vkCmdSetViewport(frame.commandBuffer, 0, 1, &m_ShadowViewport);
+    vkCmdSetScissor(frame.commandBuffer, 0, 1, &m_ShadowScissor);
 
 #ifdef PROFILING
     vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.queryPool, 6);
 #endif
+
+    for (uint32_t i = 0; i < shadowcasterCount; i++) {
+        Shadowcaster shadowcaster = shadowcasters[i];
+        ASSERT(shadowcaster.shadowIndex < MAX_SHADOWCASTERS && "Rendering shadowmap for unallocated shadowcaster");
+
+        VkFramebuffer framebuffer = frame.shadowArray.GetLayerFramebuffer(shadowcaster.shadowIndex);
+        VkRenderPassBeginInfo shadowPassInfo = vkinit::RenderPassBeginInfo(m_ShadowRenderPass, framebuffer, &depthClear, 1, m_ShadowExtent);
+        vkCmdBeginRenderPass(frame.commandBuffer, &shadowPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ShadowPipeline);
+
+        // Only draw opaque entities to depth buffer from the light's perspective
+        // TODO: Frustum culling on the light's matrix
+        for (const Entity e : entities) {
+            if (ecs.GetComponent<Material>(e).hasTransparency) continue;
+
+            Mesh& mesh = ecs.GetComponent<Mesh>(e);
+            Transform& transform = ecs.GetComponent<Transform>(e);
+            glm::mat4x4 model = transform.GlobalModelMatrix();
+
+            DepthPushConstants constants = {
+                .model = model,
+                .vp = shadowcaster.projection * shadowcaster.view
+            };
+            vkCmdPushConstants(frame.commandBuffer, m_ShadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(DepthPushConstants), &constants);
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offset);
+            vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
+        }
+
+        vkCmdEndRenderPass(frame.commandBuffer);
+    }
+
+    // Transition any shadowcaster layers that weren't used to shader read only
+    frame.shadowArray.TransitionRemainingLayersToReadable(frame.commandBuffer);
+
+    // Write descriptor set for whole shadowmap array
+    VkDescriptorImageInfo imageInfo = {
+        .sampler = frame.shadowArray.GetSampler(),
+        .imageView = frame.shadowArray.GetView(),
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+    VkWriteDescriptorSet write = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = nullptr,
+        .dstSet = frame.arrayDescriptorSet,
+        .dstBinding = 1,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &imageInfo
+    };
+    vkUpdateDescriptorSets(m_Device, 1, &write, 0, nullptr);
+
+#ifdef PROFILING
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.queryPool, 7);
+#endif
+
+    // ========================= Opaque forward+ pass ==========================
+
+#ifdef PROFILING
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.queryPool, 8);
+#endif
+
+    vkCmdSetViewport(frame.commandBuffer, 0, 1, &m_Viewport);
+    vkCmdSetScissor(frame.commandBuffer, 0, 1, &m_Scissor);
 
     VkRenderPassBeginInfo passInfo = vkinit::RenderPassBeginInfo(m_RenderPass, image.framebuffer, &clearValues[0], 3, m_Extent);
     vkCmdBeginRenderPass(frame.commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
@@ -526,10 +621,7 @@ void RenderSystem::Update()
         Transform& transform = ecs.GetComponent<Transform>(e);
 
         // Apply local transform and any inherited transform
-        glm::mat4x4 model = transform.ModelMatrix();
-        if (transform.inherit != INVALID_HANDLE) {
-            model = ecs.GetComponent<Transform>(transform.inherit).ModelMatrix() * model;
-        }
+        glm::mat4x4 model = transform.GlobalModelMatrix();
 
         ASSERT(mesh.allocated && "Drawing unallocated mesh");
 
@@ -554,13 +646,13 @@ void RenderSystem::Update()
     }
 
 #ifdef PROFILING
-    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.queryPool, 7);
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.queryPool, 9);
 #endif
 
     // ======================= Translucent forward+ pass =======================
 
 #ifdef PROFILING
-    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.queryPool, 8);
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.queryPool, 10);
 #endif
 
     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_TransparencyPipeline);
@@ -569,12 +661,7 @@ void RenderSystem::Update()
 
         Mesh& mesh = ecs.GetComponent<Mesh>(e);
         Transform& transform = ecs.GetComponent<Transform>(e);
-
-        // Apply local transform and any inherited transform
-        glm::mat4x4 model = transform.ModelMatrix();
-        if (transform.inherit != INVALID_HANDLE) {
-            model = ecs.GetComponent<Transform>(transform.inherit).ModelMatrix() * model;
-        }
+        glm::mat4x4 model = transform.GlobalModelMatrix();
 
         ASSERT(mesh.allocated && "Drawing unallocated mesh");
 
@@ -601,7 +688,7 @@ void RenderSystem::Update()
     vkCmdEndRenderPass(frame.commandBuffer);
 
 #ifdef PROFILING
-    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.queryPool, 9);
+    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.queryPool, 11);
 #endif
 
     VK_CHECK(vkEndCommandBuffer(frame.commandBuffer));
@@ -613,11 +700,12 @@ void RenderSystem::Update()
     float depthNS       = (frame.queryTimestamps[1] - frame.queryTimestamps[0]) * periodNS;
     float resolveNS     = (frame.queryTimestamps[3] - frame.queryTimestamps[2]) * periodNS;
     float cullingNS     = (frame.queryTimestamps[5] - frame.queryTimestamps[4]) * periodNS;
-    float opaqueNS      = (frame.queryTimestamps[7] - frame.queryTimestamps[6]) * periodNS;
-    float translucentNS = (frame.queryTimestamps[9] - frame.queryTimestamps[8]) * periodNS;
-    float gpuTimeNS     = (frame.queryTimestamps[9] - frame.queryTimestamps[0]) * periodNS;
+    float shadowNS      = (frame.queryTimestamps[7] - frame.queryTimestamps[6]) * periodNS;
+    float opaqueNS      = (frame.queryTimestamps[9] - frame.queryTimestamps[8]) * periodNS;
+    float translucentNS = (frame.queryTimestamps[11] - frame.queryTimestamps[10]) * periodNS;
+    float gpuTimeNS     = (frame.queryTimestamps[11] - frame.queryTimestamps[0]) * periodNS;
 
-    float gpuValues[6] = { depthNS, resolveNS, cullingNS, opaqueNS, translucentNS, gpuTimeNS };
+    float gpuValues[6] = { depthNS, resolveNS, cullingNS, shadowNS, opaqueNS, translucentNS, gpuTimeNS };
     PROFILER_GPU_VALUES(gpuValues);
 #endif
 
@@ -708,24 +796,36 @@ void RenderSystem::AllocateMaterialTextures(const MaterialTextureInfo& info, Mat
                       : m_ArrayHandler.GetFallbackTexture(info.normalTextureData, IMAGE_KIND_NORMAL);
 }
 
+void RenderSystem::AllocateShadowcaster(Light& light, Shadowcaster& shadowcaster)
+{
+    // All frames must have the same index, so we allocate from each and test equality
+    uint32_t index = UINT32_MAX;
+    for (FrameData& frame : m_Frames) {
+        uint32_t frameIndex = frame.shadowArray.Allocate();
+        ASSERT(index == UINT32_MAX || index == frameIndex && "Shadowmap index is different across frames");
+        index = frameIndex;
+    }
+    light.shadowIndex = index; 
+    shadowcaster.shadowIndex = index;
+}
+
 void RenderSystem::Resize()
 {
     PROFILER_PROFILE_SCOPE("RenderSystem::Resize");
 
     ECS& ecs = ECS::Get();
 
-    auto getCapabilities = (PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR) vkGetInstanceProcAddr(m_Instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+    // Check if the resize is valid
     VkSurfaceCapabilitiesKHR capabilities;
-    VK_CHECK(getCapabilities(m_PhysicalDevice, m_Surface, &capabilities));
+    VK_CHECK(m_GetSurfaceCapabilities(m_PhysicalDevice, m_Surface, &capabilities));
 
-    if (capabilities.currentExtent.width == 0 || capabilities.currentExtent.height == 0 || capabilities.currentExtent.width == UINT32_MAX || capabilities.currentExtent.height == UINT32_MAX) {
+    uint32_t w = capabilities.currentExtent.width;
+    uint32_t h = capabilities.currentExtent.height;
+    if (w == 0 || h == 0 || w == UINT32_MAX || h == UINT32_MAX || (w == m_Extent.width && h == m_Extent.height)) {
         return;
     }
 
-    if (capabilities.currentExtent.width == m_Extent.width && capabilities.currentExtent.height == m_Extent.height) {
-        return;
-    }
-
+    // Recreate all required structures
     VK_CHECK(vkDeviceWaitIdle(m_Device));
 
     for (FrameData& frame : m_Frames) {
@@ -733,6 +833,7 @@ void RenderSystem::Resize()
     }
 
     m_DynamicDeletionQueue.Flush();
+
     for (SwapchainImageData& image : m_Images) {
         image.flightFence = VK_NULL_HANDLE;
     }
@@ -741,8 +842,6 @@ void RenderSystem::Resize()
     m_Viewport.width = static_cast<float>(m_Extent.width);
     m_Viewport.height = static_cast<float>(m_Extent.height);
     m_Scissor.extent = m_Extent;
-
-    m_DynamicDeletionQueue.Clear();
 
     InitSwapchain();
     InitResolveResources();
@@ -809,6 +908,8 @@ void RenderSystem::InitVulkan(GLFWwindow *window)
         .instance = m_Instance,
     };
     vmaCreateAllocator(&allocInfo, &m_Allocator);
+
+    m_GetSurfaceCapabilities = (PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR) vkGetInstanceProcAddr(m_Instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
 }
 
 void RenderSystem::InitMSAA(uint64_t requestedSamples)
@@ -872,9 +973,7 @@ void RenderSystem::InitSwapchain()
         .depth = 1
     };
 
-    m_DepthFormat = VK_FORMAT_D32_SFLOAT;
-
-    VkImageCreateInfo depthImageInfo = vkinit::ImageCreateInfo(m_DepthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, depthExtent);
+    VkImageCreateInfo depthImageInfo = vkinit::ImageCreateInfo(VK_FORMAT_D32_SFLOAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, depthExtent);
     depthImageInfo.samples = m_MSAASamples;
     VmaAllocationCreateInfo depthImageAllocInfo = {
         .usage = VMA_MEMORY_USAGE_GPU_ONLY,
@@ -884,7 +983,7 @@ void RenderSystem::InitSwapchain()
     for (SwapchainImageData& image : m_Images) {
         vmaCreateImage(m_Allocator, &depthImageInfo, &depthImageAllocInfo, &image.depthImage.image, &image.depthImage.allocation, nullptr);
 
-        VkImageViewCreateInfo depthViewInfo = vkinit::ImageViewCreateInfo(m_DepthFormat, image.depthImage.image, VK_IMAGE_ASPECT_DEPTH_BIT);
+        VkImageViewCreateInfo depthViewInfo = vkinit::ImageViewCreateInfo(VK_FORMAT_D32_SFLOAT, image.depthImage.image, VK_IMAGE_ASPECT_DEPTH_BIT);
         VK_CHECK(vkCreateImageView(m_Device, &depthViewInfo, nullptr, &image.depthView));
 
         m_DynamicDeletionQueue.PushFunction([=, this] {
@@ -939,7 +1038,7 @@ void RenderSystem::InitCommands()
     });
 }
 
-void RenderSystem::InitDefaultRenderPass()
+void RenderSystem::InitMainRenderPass()
 {
     VkAttachmentDescription colorAttachment = {
         .format = m_SwapchainFormat,
@@ -972,7 +1071,7 @@ void RenderSystem::InitDefaultRenderPass()
     };
 
     VkAttachmentDescription depthAttachment = {
-        .format = m_DepthFormat,
+        .format = VK_FORMAT_D32_SFLOAT,
         .samples = m_MSAASamples,
         .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
         .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
@@ -1033,6 +1132,16 @@ void RenderSystem::InitFramebuffers()
     }
 }
 
+void RenderSystem::InitShadowResources()
+{
+    for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
+        m_Frames[i].shadowArray.Init(m_Device, m_GraphicsQueue, m_ShadowRenderPass, m_Submitter, m_Allocator, SHADOWMAP_RESOLUTION, MAX_SHADOWCASTERS, VK_FORMAT_D32_SFLOAT);
+        m_MainDeletionQueue.PushFunction([=, this] {
+            m_Frames[i].shadowArray.Cleanup(m_Device, m_Allocator);
+        });
+    };
+}
+
 void RenderSystem::InitResolveResources()
 {
     VkExtent3D extent = { m_Extent.width, m_Extent.height, 1 };
@@ -1054,7 +1163,7 @@ void RenderSystem::InitResolveResources()
     }
 }
 
-void RenderSystem::InitLightCulling()
+void RenderSystem::InitLightCullingDescriptor()
 {
     VkSamplerCreateInfo samplerInfo = {
         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -1168,7 +1277,7 @@ void RenderSystem::InitLightCulling()
     }
 }
 
-void RenderSystem::InitResolve()
+void RenderSystem::InitResolveDescriptor()
 {
     VkDescriptorSetLayoutBinding bindings[2] = {
         {
@@ -1316,10 +1425,92 @@ void RenderSystem::InitLightCullingResources()
     }
 }
 
+// NOTE: Shadow render pass and pipeline is same as depth but with MSAA disabled
+void RenderSystem::InitShadowRenderPass()
+{
+    VkAttachmentDescription depthAttachment = {
+        .format = VK_FORMAT_D32_SFLOAT,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        // .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        // .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        // .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        // .stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        .finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    };
+    VkAttachmentReference depthRef = {
+        .attachment = 0,
+        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+
+    VkSubpassDescription subpass = {
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .colorAttachmentCount = 0,
+        .pDepthStencilAttachment = &depthRef
+    };
+
+    VkRenderPassCreateInfo info = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = 1,
+        .pAttachments = &depthAttachment,
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+    };
+
+    VK_CHECK(vkCreateRenderPass(m_Device, &info, nullptr, &m_ShadowRenderPass));
+
+    m_MainDeletionQueue.PushFunction([=, this] { 
+        vkDestroyRenderPass(m_Device, m_ShadowRenderPass, nullptr); 
+    });
+}
+
+void RenderSystem::InitShadowPipeline()
+{
+    VkPushConstantRange constantRange = {
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .offset = 0,
+        .size = sizeof(DepthPushConstants),
+    };
+    VkPipelineLayoutCreateInfo pipelineInfo = vkinit::LayoutCreateInfo(&constantRange);
+    VK_CHECK(vkCreatePipelineLayout(m_Device, &pipelineInfo, nullptr, &m_ShadowPipelineLayout)); 
+
+    PipelineBuilder builder;
+
+    VkShaderModule vert, frag;
+    LoadShaderModule("src/Engine/Resource/Shader/depth.vert.spirv", vert);
+    LoadShaderModule("src/Engine/Resource/Shader/depth.frag.spirv", frag);
+
+    builder.MakeShader(vkinit::ShaderStageCreateInfo(VK_SHADER_STAGE_VERTEX_BIT, vert),
+                       vkinit::ShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, frag));
+
+    VertexInputDesc inputDesc = Vertex::GetDepthVertexDesc();
+    VkPipelineRasterizationStateCreateInfo rasterizerInfo = vkinit::RasterizationStateCreateInfo(VK_POLYGON_MODE_FILL);
+    rasterizerInfo.cullMode = VK_CULL_MODE_FRONT_BIT;
+    builder.SetVertexInput(vkinit::VertexInputStateCreateInfo(&inputDesc.bindings, &inputDesc.attributes))
+           .SetInputAssembly(vkinit::InputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
+           .SetRasterizer(rasterizerInfo)
+           .SetMultisampling(vkinit::MultisampleStateCreateInfo(VK_SAMPLE_COUNT_1_BIT, false))
+           .SetColorBlend(vkinit::ColorBlendAttachmentState())
+           .SetDepthStencil(vkinit::DepthStencilStateCreateInfo(true, true, VK_COMPARE_OP_LESS_OR_EQUAL))
+           .SetPipelineLayout(m_ShadowPipelineLayout);
+
+    m_ShadowPipeline = builder.BuildPipeline(m_Device, m_ShadowRenderPass, m_ShadowViewport, m_ShadowScissor);
+
+    vkDestroyShaderModule(m_Device, vert, nullptr);
+    vkDestroyShaderModule(m_Device, frag, nullptr);
+
+    m_MainDeletionQueue.PushFunction([=, this] { 
+        vkDestroyPipelineLayout(m_Device, m_ShadowPipelineLayout, nullptr); 
+        vkDestroyPipeline(m_Device, m_ShadowPipeline, nullptr); 
+    });
+}
+
 void RenderSystem::InitDepthRenderPass()
 {
     VkAttachmentDescription depthAttachment = {
-        .format = m_DepthFormat,
+        .format = VK_FORMAT_D32_SFLOAT,
         .samples = m_MSAASamples,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -1487,21 +1678,6 @@ void RenderSystem::InitSyncStructures()
 
 void RenderSystem::InitMainPipelines()
 {
-    // Build viewport and scissor
-    m_Viewport = {
-        .x = 0.0,
-        .y = 0.0,
-        .width = static_cast<float>(m_Extent.width),
-        .height = static_cast<float>(m_Extent.height),
-        .minDepth = 0.0,
-        .maxDepth = 1.0
-    };
-
-    m_Scissor = {
-        .offset = { 0, 0 },
-        .extent = m_Extent
-    };
-
     // Pipeline
     VkPushConstantRange constantRange = {
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -1566,14 +1742,22 @@ void RenderSystem::InitGlobalDescriptor()
     VK_CHECK(vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_DescriptorLayout));
 
     // Array descriptor set layout
-    VkDescriptorSetLayoutBinding arrayBinding = {
-        .binding = 0,
-        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .descriptorCount = TEXTURE_ARRAY_MAX_ENUM,
-        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+    VkDescriptorSetLayoutBinding arrayBindings[2] = {
+        {
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = TEXTURE_ARRAY_MAX_ENUM,
+            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        },
+        {
+            .binding = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        },
     };
-    layoutInfo.pBindings = &arrayBinding;
-    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = arrayBindings;
+    layoutInfo.bindingCount = 2;
     VK_CHECK(vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_ArrayHandler.descriptorLayout));
     
     m_MainDeletionQueue.PushFunction([=, this] {
@@ -1601,7 +1785,7 @@ void RenderSystem::InitGlobalDescriptor()
 
         VkDescriptorPoolSize poolSizes[2] = { 
             { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1 },
-            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, TEXTURE_ARRAY_MAX_ENUM }
+            { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, TEXTURE_ARRAY_MAX_ENUM + 1 } // + 1 for the shadow array
         };
         VkDescriptorPoolCreateInfo poolInfo = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,

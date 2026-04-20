@@ -11,11 +11,6 @@ void TextureArrayHandler::Init(VkDevice device, VkPhysicalDevice physicalDevice,
     m_Arrays[TEXTURE_ARRAY_DATA_1024].Init(device, graphicsQueue, submitter, allocator, 1024, sizes.data1024, VK_FORMAT_R8G8B8A8_UNORM);
     m_Arrays[TEXTURE_ARRAY_DATA_2048].Init(device, graphicsQueue, submitter, allocator, 2048, sizes.data2048, VK_FORMAT_R8G8B8A8_UNORM);
 
-    m_ArrayOffsets[TEXTURE_ARRAY_COLOR_1024] = 0;
-    m_ArrayOffsets[TEXTURE_ARRAY_COLOR_2048] = sizes.color1024;
-    m_ArrayOffsets[TEXTURE_ARRAY_DATA_1024] = sizes.color1024 + sizes.color2048;
-    m_ArrayOffsets[TEXTURE_ARRAY_DATA_2048] = sizes.color1024 + sizes.color2048 + sizes.data1024;
-
     // Write descriptor sets for all the arrays at once
     VkDescriptorImageInfo imageInfos[TEXTURE_ARRAY_MAX_ENUM];
     for (uint32_t i = 0; i < TEXTURE_ARRAY_MAX_ENUM; i++) {
@@ -26,7 +21,6 @@ void TextureArrayHandler::Init(VkDevice device, VkPhysicalDevice physicalDevice,
         };
     }
 
-    VkWriteDescriptorSet descriptorWrites[TEXTURE_ARRAY_MAX_ENUM];
     for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
         FrameData& frame = frames[i];
         for (uint32_t j = 0; j < TEXTURE_ARRAY_MAX_ENUM; j++) {

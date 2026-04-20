@@ -2,5 +2,6 @@ bin/
 compile_commands.json
 results.tracing.json
 gpu_results.txt
+renderdoc_settings.cap
 .git/
 .cache/

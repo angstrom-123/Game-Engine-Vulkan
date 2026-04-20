@@ -1,10 +1,13 @@
 #include "textureArray.h"
 
-#include "Util/logger.h"
-#include "System/Render/initialiser.h"
-#include "Util/myAssert.h"
 #include <cmath>
 #include <cstring>
+
+#include "initialiser.h"
+#include "Util/logger.h"
+#include "Util/myAssert.h"
+
+#include <vulkan/vulkan_core.h>
 
 void TextureArray::Init(VkDevice device, VkQueue graphicsQueue, CommandSubmitter& submitter, VmaAllocator allocator, uint32_t resolution, uint32_t size, VkFormat format)
 {
