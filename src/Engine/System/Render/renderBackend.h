@@ -5,6 +5,7 @@
 
 #include <vulkan/vulkan_core.h>
 
+#include "ECS/ecs.h"
 #include "config.h"
 #include "commandSubmitter.h"
 #include "renderTypes.h"
@@ -35,7 +36,7 @@ class RenderBackend {
 public:
     void Init(struct GLFWwindow *window, Config& config);
     void Cleanup();
-    void Draw(Entity camera, std::set<Entity>& entities);
+    void Draw(ECS *ecs, Entity camera, std::set<Entity>& entities);
     void RequestResize(Entity camera);
     void AllocateMesh(Mesh& mesh);
     void AllocateMaterialTextures(const MaterialTextureInfo& info, Material& material);
@@ -65,7 +66,7 @@ private:
     void InitShadowRenderPass();
     void InitShadowResources();
     void InitShadowPipeline();
-    void Resize(Entity camera);
+    void Resize(ECS *ecs, Entity camera);
     void LoadShaderModule(const std::filesystem::path& path, VkShaderModule& module);
 
 private:

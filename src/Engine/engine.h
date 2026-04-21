@@ -8,35 +8,24 @@
 #include "Util/objLoader.h"
 #include "config.h"
 #include "eventHandler.h"
+#include "scene.h"
 
 namespace fs = std::filesystem;
 
-class Engine;
-
-class App {
-public:
-    virtual void Init(Config& config) = 0;
-    virtual void Frame(double deltaTime) = 0;
-    virtual void Cleanup() = 0;
-    virtual void EventCallback(Event event) = 0;
-    void SetEnginePointer(Engine *engine) { m_Engine = engine; };
-
-protected:
-    Engine *m_Engine;
-};
-
 class Engine {
 public:
-    Engine(App *app, Config& config); 
+    Engine(Config& config); 
     void Run();
+    void SwitchScene(SceneHandle scene);
+    void AddScene(Scene *scene);
     void Cleanup();
     void EventCallback(Event event);
     static void EventHook(Event event, void *data);
     double GetTime();
-    void CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results);
-    void CreatePointLight(const LightCreateInfo& info, Entity& result);
-    void CreateSpotLight(const LightCreateInfo& info, Entity& result);
-    void CreateDirectionalLight(const LightCreateInfo& info, Entity& result);
+    void CreateMesh(ECS *ecs, const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results);
+    void CreatePointLight(ECS *ecs, const LightCreateInfo& info, Entity& result);
+    void CreateSpotLight(ECS *ecs, const LightCreateInfo& info, Entity& result);
+    void CreateDirectionalLight(ECS *ecs, const LightCreateInfo& info, Entity& result);
 
     RenderBackend *GetRenderBackend() { return m_RenderBackend; };
     struct GLFWwindow *GetWindow() { return m_Window; };
@@ -49,13 +38,10 @@ private:
     void CalculateTangents(Vertex& v1, Vertex& v2, Vertex& v3);
 
 private:
-    App *m_App;
     EventHandler m_EventHandler;
     struct GLFWwindow *m_Window;
-
     RenderBackend *m_RenderBackend;
-    // Default entities, components, and systems, managed by the engine
-    // RenderSystem *m_RenderSystem;
-    // LightSystem *m_LightSystem;
-    // ShadowSystem *m_ShadowSystem;
+    int32_t m_MaxScenes;
+    std::vector<Scene *> m_Scenes;
+    SceneHandle m_ActiveScene;
 };

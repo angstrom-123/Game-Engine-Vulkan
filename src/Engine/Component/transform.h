@@ -12,6 +12,8 @@
 #define Y_AXIS glm::vec3(0.0, 1.0, 0.0)
 #define Z_AXIS glm::vec3(0.0, 0.0, -1.0)
 
+class ECS;
+
 struct Transform {
     glm::vec3 translation;
     glm::quat rotation;
@@ -25,5 +27,5 @@ struct Transform {
     Transform& Translate(const glm::vec3& translation);
     Transform& Translate(float x, float y, float z);
     glm::mat4x4 LocalModelMatrix();
-    glm::mat4x4 GlobalModelMatrix();
+    glm::mat4x4 GlobalModelMatrix(ECS *ecs);
 };

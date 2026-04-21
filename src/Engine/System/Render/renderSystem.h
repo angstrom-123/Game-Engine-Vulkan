@@ -7,11 +7,11 @@
 
 class RenderSystem : public System {
 public:
-    void Init();
-    void Update(RenderBackend *const backend);
+    void Init(ECS *ecs);
+    void Update(ECS *ecs, RenderBackend *const backend);
     void SetCamera(Entity camera);
 
-    Signature GetSignature() { return ECS::Get().GetBit<Transform>() | ECS::Get().GetBit<Mesh>() | ECS::Get().GetBit<Material>(); };
+    Signature GetSignature(ECS *ecs) { return ecs->GetBit<Transform>() | ecs->GetBit<Mesh>() | ecs->GetBit<Material>(); };
 
 private:
     Entity m_Camera;

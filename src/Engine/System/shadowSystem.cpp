@@ -5,18 +5,16 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include "glm/ext/matrix_transform.hpp"
 
-void ShadowSystem::Update()
+void ShadowSystem::Update(ECS *ecs)
 {
     PROFILER_PROFILE_SCOPE("ShadowSystem::Update");
 
     ASSERT(entities.size() <= MAX_SHADOWCASTERS && "Too many shadowcasters");
 
-    ECS& ecs = ECS::Get();
-
     for (const Entity e : entities) {
-        Transform& transform = ecs.GetComponent<Transform>(e);
-        Shadowcaster& shadowcaster = ecs.GetComponent<Shadowcaster>(e);
-        Light& light = ecs.GetComponent<Light>(e);
+        Transform& transform = ecs->GetComponent<Transform>(e);
+        Shadowcaster& shadowcaster = ecs->GetComponent<Shadowcaster>(e);
+        Light& light = ecs->GetComponent<Light>(e);
 
         ASSERT(shadowcaster.shadowIndex == light.shadowIndex && "Shadow index mismatch");
 

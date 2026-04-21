@@ -8,10 +8,11 @@
 
 class ECS {
 public:
-    static ECS& Get()
+    ECS()
     {
-        static ECS instance;
-        return instance;
+        m_ComponentManager = ComponentManager();
+        m_EntityManager = EntityManager();
+        m_SystemManager = SystemManager();
     }
 
     [[nodiscard]] Entity CreateEntity()
@@ -95,16 +96,6 @@ public:
     {
         m_SystemManager.SetSignature<T>(signature);
     }
-
-private:
-    ECS()
-    {
-        m_ComponentManager = ComponentManager();
-        m_EntityManager = EntityManager();
-        m_SystemManager = SystemManager();
-    }
-    ECS(const ECS&) = delete;
-    void operator=(const ECS&) = delete;
 
 private:
     ComponentManager m_ComponentManager;

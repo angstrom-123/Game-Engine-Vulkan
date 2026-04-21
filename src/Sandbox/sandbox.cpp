@@ -18,39 +18,37 @@ float Random(float min, float max)
     return min + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX) / (max - min));
 }
 
-void Sandbox::Init(Config& config)
+// NOTE: Explicitly constructing Scene
+Sandbox::Sandbox(Engine *engine, Config& config) : Scene(engine)
 {
     m_LastFrame = 0;
-    m_LastTime = m_Engine->GetTime();
-
-    // For convenience
-    ECS& ecs = ECS::Get();
+    m_LastTime = engine->GetTime();
 
     // For controlling the camera
-    m_CameraSystem = ecs.RegisterSystem<DefaultCameraSystem>();
-    ecs.SetSystemSignature<DefaultCameraSystem>(m_CameraSystem->GetSignature());
+    m_CameraSystem = ecs->RegisterSystem<DefaultCameraSystem>();
+    ecs->SetSystemSignature<DefaultCameraSystem>(m_CameraSystem->GetSignature(ecs));
     m_CameraSystem->Init();
 
     // For rendering the scene
-    m_RenderSystem = ecs.RegisterSystem<RenderSystem>();
-    ecs.SetSystemSignature<RenderSystem>(m_RenderSystem->GetSignature());
-    m_RenderSystem->Init();
+    m_RenderSystem = ecs->RegisterSystem<RenderSystem>();
+    ecs->SetSystemSignature<RenderSystem>(m_RenderSystem->GetSignature(ecs));
+    m_RenderSystem->Init(ecs);
 
     // Create camera and assign to renderer
-    m_Camera = ecs.CreateEntity();
-    ecs.AddComponent<Camera>(m_Camera, Camera(glm::vec3(0.0), glm::vec2(config.windowWidth, config.windowHeight), glm::radians(60.0), 0.01, 1000.0));
+    m_Camera = ecs->CreateEntity();
+    ecs->AddComponent<Camera>(m_Camera, Camera(glm::vec3(0.0), glm::vec2(config.windowWidth, config.windowHeight), glm::radians(60.0), 0.01, 1000.0));
     m_RenderSystem->SetCamera(m_Camera);
 
     // Load sponza mesh. It is in many pieces so parent them all to one entity to inherit transform
-    m_SponzaParent = ecs.CreateEntity();
-    ecs.GetComponent<Transform>(m_SponzaParent).Scale(0.015).Translate(0.0, -2.0, 0.0).Rotate(glm::radians(-90.0), Y_AXIS);
-    m_Engine->CreateMesh("src/Sandbox/Resource/Model/sponza.obj", "src/Sandbox/Resource/Model/sponza.mtl", m_SponzaParts);
+    m_SponzaParent = ecs->CreateEntity();
+    ecs->GetComponent<Transform>(m_SponzaParent).Scale(0.015).Translate(0.0, -2.0, 0.0).Rotate(glm::radians(-90.0), Y_AXIS);
+    engine->CreateMesh(ecs, "src/Sandbox/Resource/Model/sponza.obj", "src/Sandbox/Resource/Model/sponza.mtl", m_SponzaParts);
     for (Entity e : m_SponzaParts) {
-        ecs.GetComponent<Transform>(e).InheritFrom(m_SponzaParent);
+        ecs->GetComponent<Transform>(e).InheritFrom(m_SponzaParent);
     }
 
     // Add a lot of random lights
-    m_LightsParent = ecs.CreateEntity();
+    m_LightsParent = ecs->CreateEntity();
     srand(time(NULL));
     for (uint32_t i = 0; i < 128; i++) {
         Entity point;
@@ -60,8 +58,8 @@ void Sandbox::Init(Config& config)
             .intensity = Random(0.5, 1.5),
             .radius = Random(1.0, 7.0)
         };
-        m_Engine->CreatePointLight(pointLightInfo, point);
-        ecs.GetComponent<Transform>(point).InheritFrom(m_LightsParent);
+        engine->CreatePointLight(ecs, pointLightInfo, point);
+        ecs->GetComponent<Transform>(point).InheritFrom(m_LightsParent);
     }
 
     // Directional shadowcasting light
@@ -70,7 +68,7 @@ void Sandbox::Init(Config& config)
         .position           = glm::vec3(0.0),
         .color              = glm::vec3(1.0),
         .direction          = glm::vec3(0.6, -1.0, 0.2),
-        .intensity          = 1.0,
+        .intensity          = 2.0,
         .radius             = 60.0,
         .distance           = 40.0,
         .shadowcaster       = true,
@@ -80,7 +78,7 @@ void Sandbox::Init(Config& config)
         .projectionBottom   = -40.0,
         .projectionTop      = 40.0
     };
-    m_Engine->CreateDirectionalLight(sunLightInfo, sun);
+    engine->CreateDirectionalLight(ecs, sunLightInfo, sun);
 
     // Spot shadowcasting light
     Entity spot;
@@ -95,34 +93,31 @@ void Sandbox::Init(Config& config)
         .shadowcaster       = true,
         .shadowBias         = 0.005,
     };
-    m_Engine->CreateSpotLight(spotLightInfo, spot);
+    engine->CreateSpotLight(ecs, spotLightInfo, spot);
 }
 
-void Sandbox::Frame(double deltaTime)
+void Sandbox::Update(double deltaTime)
 {
     PROFILER_PROFILE_SCOPE("Sandbox::Frame");
 
     // FPS Counter
-    double currTime = m_Engine->GetTime();
+    double currTime = engine->GetTime();
     if (currTime - m_LastTime >= 1.0) {
-        INFO(static_cast<float>(m_Engine->GetFrameNumber() - m_LastFrame) << "fps");
+        INFO(static_cast<float>(engine->GetFrameNumber() - m_LastFrame) << "fps");
 
         m_LastTime = currTime;
-        m_LastFrame = m_Engine->GetFrameNumber();
+        m_LastFrame = engine->GetFrameNumber();
     }
 
-    // For convenience
-    ECS& ecs = ECS::Get();
-
     // Move all the point lights around
-    float offsetX = std::sin(static_cast<float>(m_Engine->GetFrameNumber()) / 60.0) * 5.0;
-    float offsetY = std::cos(static_cast<float>(m_Engine->GetFrameNumber()) / 60.0) * 5.0;
-    float offsetZ = std::cos(static_cast<float>(m_Engine->GetFrameNumber() + 47) / 45.0) * 5.0;
-    ecs.GetComponent<Transform>(m_LightsParent).Translate(offsetX, offsetY, offsetZ);
+    float offsetX = std::sin(static_cast<float>(engine->GetFrameNumber()) / 60.0) * 5.0;
+    float offsetY = std::cos(static_cast<float>(engine->GetFrameNumber()) / 60.0) * 5.0;
+    float offsetZ = std::cos(static_cast<float>(engine->GetFrameNumber() + 47) / 45.0) * 5.0;
+    ecs->GetComponent<Transform>(m_LightsParent).Translate(offsetX, offsetY, offsetZ);
 
     // Update our systems
-    m_CameraSystem->Update(m_Engine->GetKeysDown(), m_Engine->GetFrameMouseDelta(), deltaTime);
-    m_RenderSystem->Update(m_Engine->GetRenderBackend());
+    m_CameraSystem->Update(ecs, engine->GetKeysDown(), engine->GetFrameMouseDelta(), deltaTime);
+    m_RenderSystem->Update(ecs, engine->GetRenderBackend());
 }
 
 void Sandbox::EventCallback(Event event)

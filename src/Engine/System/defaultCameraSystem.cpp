@@ -17,14 +17,13 @@ void DefaultCameraSystem::Init(float sensitivity, float speed)
     m_Speed = speed;
 }
 
-void DefaultCameraSystem::Update(bool *keysDown, glm::vec2 mouseDelta, double dt)
+void DefaultCameraSystem::Update(ECS *ecs, bool *keysDown, glm::vec2 mouseDelta, double dt)
 {
     PROFILER_PROFILE_SCOPE("DefaultCameraSystem::Update");
 
-    ECS& ecs = ECS::Get();
     for (Entity e : entities) {
-        Camera& camera = ecs.GetComponent<Camera>(e);
-        Transform& transform = ecs.GetComponent<Transform>(e);
+        Camera& camera = ecs->GetComponent<Camera>(e);
+        Transform& transform = ecs->GetComponent<Transform>(e);
 
         // Keyboard input
         glm::vec3 forward = transform.rotation * glm::vec3(0.0, 0.0, -1.0);

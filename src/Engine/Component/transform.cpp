@@ -49,11 +49,11 @@ glm::mat4x4 Transform::LocalModelMatrix()
     return model;
 }
 
-glm::mat4x4 Transform::GlobalModelMatrix()
+glm::mat4x4 Transform::GlobalModelMatrix(ECS *ecs)
 {
     glm::mat4x4 model = LocalModelMatrix();
     if (inherit != INVALID_HANDLE) {
-        model = ECS::Get().GetComponent<Transform>(inherit).GlobalModelMatrix() * model;
+        model = ecs->GetComponent<Transform>(inherit).GlobalModelMatrix(ecs) * model;
     }
 
     return model;

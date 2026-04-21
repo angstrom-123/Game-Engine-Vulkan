@@ -6,6 +6,6 @@
 
 class LightSystem : public System {
 public:
-    void Update();
-    Signature GetSignature() { return ECS::Get().GetBit<Transform>() | ECS::Get().GetBit<Light>(); };
+    void Update(ECS *ecs);
+    Signature GetSignature(ECS *ecs) { return ecs->GetBit<Transform>() | ecs->GetBit<Light>(); };
 };

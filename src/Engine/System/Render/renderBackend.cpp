@@ -162,21 +162,19 @@ void RenderBackend::Cleanup()
     vkDestroyInstance(m_Instance, nullptr);
 }
 
-void RenderBackend::Draw(Entity camera, std::set<Entity>& entities)
+void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
 {
     PROFILER_PROFILE_SCOPE("RenderBackend::Update");
 
     if (m_ResizeCamera != INVALID_HANDLE) {
-        Resize(m_ResizeCamera);
+        Resize(ecs, m_ResizeCamera);
     }
 
-    ECS& ecs = ECS::Get();
-
-    Camera& cam = ecs.GetComponent<Camera>(camera);
-    Transform& camTransform = ecs.GetComponent<Transform>(camera);
+    Camera& cam = ecs->GetComponent<Camera>(camera);
+    Transform& camTransform = ecs->GetComponent<Transform>(camera);
     glm::vec3 camTranslation = camTransform.translation;
     if (camTransform.inherit != INVALID_HANDLE) {
-        camTranslation += ecs.GetComponent<Transform>(camTransform.inherit).translation;
+        camTranslation += ecs->GetComponent<Transform>(camTransform.inherit).translation;
     }
     glm::mat4x4 camVP = cam.projection * cam.view;
     Frustum camFrustum = Frustum(camVP);
@@ -190,13 +188,13 @@ void RenderBackend::Draw(Entity camera, std::set<Entity>& entities)
 
     for (const Entity e : entities) {
         // Frustum culling
-        Mesh& mesh = ecs.GetComponent<Mesh>(e);
-        Transform& transform = ecs.GetComponent<Transform>(e);
-        glm::mat4x4 model = transform.GlobalModelMatrix();
+        Mesh& mesh = ecs->GetComponent<Mesh>(e);
+        Transform& transform = ecs->GetComponent<Transform>(e);
+        glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
         CentreExtents centreExtents = CentreExtents(mesh.bounds);
         if (camFrustum.Intersects(centreExtents.WorldSpace(model))) {
             // Add to draw list (front for opaque, back for transparent)
-            if (ecs.GetComponent<Material>(e).hasTransparency) {
+            if (ecs->GetComponent<Material>(e).hasTransparency) {
                 m_DrawOrder[backPtr--] = e;
             } else {
                 m_DrawOrder[frontPtr++] = e;
@@ -283,9 +281,9 @@ void RenderBackend::Draw(Entity camera, std::set<Entity>& entities)
     for (int32_t i = 0; i < frontPtr; i++) {
         const Entity e = m_DrawOrder[i];
 
-        Mesh& mesh = ecs.GetComponent<Mesh>(e);
-        Transform& transform = ecs.GetComponent<Transform>(e);
-        glm::mat4x4 model = transform.GlobalModelMatrix();
+        Mesh& mesh = ecs->GetComponent<Mesh>(e);
+        Transform& transform = ecs->GetComponent<Transform>(e);
+        glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
 
         DepthPushConstants constants = {
             .model = model,
@@ -425,7 +423,7 @@ void RenderBackend::Draw(Entity camera, std::set<Entity>& entities)
     // ========================== Light Culling Pass ===========================
 
     // Copy lights into the input buffer of the compute shader
-    const auto [lightCount, lights] = ecs.GetData<Light>();
+    const auto [lightCount, lights] = ecs->GetData<Light>();
     ASSERT(lightCount < MAX_LIGHTS && "Light buffer overflow");
     memcpy(frame.lightCulling.lightBuffer.data, lights, lightCount * sizeof(Light));
 
@@ -518,7 +516,7 @@ void RenderBackend::Draw(Entity camera, std::set<Entity>& entities)
 
     frame.shadowArray.TransitionFromReadableToAttachment(frame.commandBuffer);
 
-    const auto [shadowcasterCount, shadowcasters] = ecs.GetData<Shadowcaster>();
+    const auto [shadowcasterCount, shadowcasters] = ecs->GetData<Shadowcaster>();
 
     vkCmdSetViewport(frame.commandBuffer, 0, 1, &m_ShadowViewport);
     vkCmdSetScissor(frame.commandBuffer, 0, 1, &m_ShadowScissor);
@@ -540,11 +538,11 @@ void RenderBackend::Draw(Entity camera, std::set<Entity>& entities)
         // Only draw opaque entities to depth buffer from the light's perspective
         // TODO: Frustum culling on the light's matrix
         for (const Entity e : entities) {
-            if (ecs.GetComponent<Material>(e).hasTransparency) continue;
+            if (ecs->GetComponent<Material>(e).hasTransparency) continue;
 
-            Mesh& mesh = ecs.GetComponent<Mesh>(e);
-            Transform& transform = ecs.GetComponent<Transform>(e);
-            glm::mat4x4 model = transform.GlobalModelMatrix();
+            Mesh& mesh = ecs->GetComponent<Mesh>(e);
+            Transform& transform = ecs->GetComponent<Transform>(e);
+            glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
 
             DepthPushConstants constants = {
                 .model = model,
@@ -605,15 +603,15 @@ void RenderBackend::Draw(Entity camera, std::set<Entity>& entities)
     for (int32_t i = 0; i < frontPtr; i++) {
         const Entity e = m_DrawOrder[i];
 
-        Mesh& mesh = ecs.GetComponent<Mesh>(e);
-        Transform& transform = ecs.GetComponent<Transform>(e);
+        Mesh& mesh = ecs->GetComponent<Mesh>(e);
+        Transform& transform = ecs->GetComponent<Transform>(e);
 
         // Apply local transform and any inherited transform
-        glm::mat4x4 model = transform.GlobalModelMatrix();
+        glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
 
         ASSERT(mesh.allocated && "Drawing unallocated mesh");
 
-        Material& material = ecs.GetComponent<Material>(e);
+        Material& material = ecs->GetComponent<Material>(e);
 
         PushConstants constants = {
             .model              = model,
@@ -649,13 +647,13 @@ void RenderBackend::Draw(Entity camera, std::set<Entity>& entities)
     for (int32_t i = frontPtr; i < entityCount; i++) {
         const Entity e = m_DrawOrder[i];
 
-        Mesh& mesh = ecs.GetComponent<Mesh>(e);
-        Transform& transform = ecs.GetComponent<Transform>(e);
-        glm::mat4x4 model = transform.GlobalModelMatrix();
+        Mesh& mesh = ecs->GetComponent<Mesh>(e);
+        Transform& transform = ecs->GetComponent<Transform>(e);
+        glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
 
         ASSERT(mesh.allocated && "Drawing unallocated mesh");
 
-        Material& material = ecs.GetComponent<Material>(e);
+        Material& material = ecs->GetComponent<Material>(e);
 
         PushConstants constants = {
             .model              = model,
@@ -808,11 +806,9 @@ void RenderBackend::AllocateShadowcaster(Light& light, Shadowcaster& shadowcaste
     shadowcaster.shadowIndex = index;
 }
 
-void RenderBackend::Resize(Entity camera)
+void RenderBackend::Resize(ECS *ecs, Entity camera)
 {
     PROFILER_PROFILE_SCOPE("RenderBackend::Resize");
-
-    ECS& ecs = ECS::Get();
 
     // Check if the resize is valid
     VkSurfaceCapabilitiesKHR capabilities;
@@ -848,7 +844,7 @@ void RenderBackend::Resize(Entity camera)
     InitFramebuffers();
     InitSyncStructures();
 
-    Camera& cam = ecs.GetComponent<Camera>(camera);
+    Camera& cam = ecs->GetComponent<Camera>(camera);
     cam.aspect = static_cast<float>(m_Extent.width) / static_cast<float>(m_Extent.height);
     cam.projection = Camera::VulkanPerspective(cam.fov, cam.aspect, cam.near, cam.far);
 

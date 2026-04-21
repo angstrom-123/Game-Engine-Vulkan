@@ -10,6 +10,7 @@ struct Config {
     uint32_t windowWidth;
     uint32_t windowHeight;
     uint64_t msaaSamples;
+    uint32_t maxScenes;
 
     static bool VsyncEnabled(int argc, const char *argv[]);
 };

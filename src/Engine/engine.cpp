@@ -1,12 +1,12 @@
 #include "engine.h"
 
 #include "Component/shadowcaster.h"
-// #include "System/lightSystem.h"
 #include "ECS/ecs.h"
+#include "ECS/ecsTypes.h"
 #include "Util/objLoader.h"
 #include "Util/imageLoader.h"
-#include "Component/camera.h"
 #include "Util/profiler.h"
+#include "scene.h"
 
 #include <ranges>
 
@@ -21,7 +21,7 @@ void GLFWErrorCb(int error, const char *desc)
     ERROR(desc);
 }
 
-Engine::Engine(App *app, Config& config)
+Engine::Engine(Config& config)
 {
     // Window
     glfwInit();
@@ -39,44 +39,12 @@ Engine::Engine(App *app, Config& config)
     m_EventHandler.Init(m_Window);
     m_EventHandler.SetEventCallback(Engine::EventHook, this);
 
-    ECS& ecs = ECS::Get();
-
-    // Register Components
-    ecs.RegisterComponent<Transform>();
-    ecs.RegisterComponent<Mesh>();
-    ecs.RegisterComponent<Camera>();
-    ecs.RegisterComponent<Material>();
-    ecs.RegisterComponent<Light>();
-    ecs.RegisterComponent<Shadowcaster>();
-
     m_RenderBackend = new RenderBackend();
     m_RenderBackend->Init(m_Window, config);
 
-    m_App = app;
-    m_App->SetEnginePointer(this);
-    m_App->Init(config);
-
-    // Default Systems
-    // m_RenderSystem = ecs.RegisterSystem<RenderSystem>();
-    // ecs.SetSystemSignature<RenderSystem>(m_RenderSystem->GetSignature());
-    // m_RenderSystem->Init(m_Window, config);
-    //
-    // m_LightSystem = ecs.RegisterSystem<LightSystem>();
-    // ecs.SetSystemSignature<LightSystem>(m_LightSystem->GetSignature());
-    //
-    // m_ShadowSystem = ecs.RegisterSystem<ShadowSystem>();
-    // ecs.SetSystemSignature<ShadowSystem>(m_ShadowSystem->GetSignature());
-    //
-    // // App
-    // m_App = app;
-    // m_App->SetEnginePointer(this);
-    // app->Init();
-    //
-    // // Default Entities + Connection to default systems
-    // // NOTE: App is inited before this so that any systems created there pick up on these components
-    // Entity camera = ecs.CreateEntity();
-    // ecs.AddComponent<Camera>(camera, Camera(glm::vec3(0.0), glm::vec2(config.windowWidth, config.windowHeight), glm::radians(60.0), 0.01, 1000.0));
-    // m_RenderSystem->SetCamera(camera);
+    m_MaxScenes = config.maxScenes;
+    m_Scenes.reserve(m_MaxScenes);
+    m_ActiveScene = INVALID_HANDLE;
 }
 
 void Engine::Run()
@@ -88,12 +56,11 @@ void Engine::Run()
         glfwPollEvents();
 
         double currTime = GetTime();
+        double deltaTime = currTime - lastTime;
 
-        m_App->Frame(currTime - lastTime);
-
-        // m_LightSystem->Update();
-        // m_ShadowSystem->Update();
-        // m_RenderSystem->Update();
+        if (m_ActiveScene != INVALID_HANDLE) {
+            m_Scenes[m_ActiveScene]->Update(deltaTime);
+        }
 
         lastTime = currTime;
 
@@ -101,9 +68,24 @@ void Engine::Run()
     }
 }
 
+void Engine::SwitchScene(SceneHandle scene)
+{
+    ASSERT(scene != INVALID_HANDLE && scene < m_MaxScenes && "Switching to invalid scene");
+    m_ActiveScene = scene;
+}
+
+void Engine::AddScene(Scene *scene)
+{
+    ASSERT(m_Scenes.size() < static_cast<uint32_t>(m_MaxScenes) && "Adding too many scenes");
+    scene->handle = m_Scenes.size();
+    m_Scenes.push_back(scene);
+}
+
 void Engine::Cleanup()
 {
-    m_App->Cleanup();
+    for (Scene *scene : m_Scenes) {
+        scene->Destroy();
+    }
 
     // m_RenderSystem->Cleanup();
     m_RenderBackend->Cleanup();
@@ -115,15 +97,9 @@ void Engine::Cleanup()
 
 void Engine::EventCallback(Event event)
 {
-    // switch (event.kind) {
-    //     case EVENT_WINDOW_RESIZE:
-    //         m_RenderSystem->RequestResize();
-    //         break;
-    //     default:
-    //         break;
-    // };
-
-    m_App->EventCallback(event);
+    if (m_ActiveScene != INVALID_HANDLE) {
+        m_Scenes[m_ActiveScene]->EventCallback(event);
+    }
 }
 
 void Engine::EventHook(Event event, void *data)
@@ -177,7 +153,7 @@ void Engine::CreateMaterial(const MtlData& data, Material& material)
     // m_RenderSystem->AllocateMaterialTextures(materialInfo, material);
 }
 
-void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results)
+void Engine::CreateMesh(ECS *ecs, const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results)
 {
     double startTime = GetTime();
 
@@ -197,13 +173,11 @@ void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::v
         materials.insert({name, mat});
     }
 
-    ECS& ecs = ECS::Get();
-
     // TODO: Optimise vertex size
     //       SNORM for the normals and uvs
     results.reserve(shapes.size());
     for (const Shape& s : shapes) {
-        Entity e = ecs.CreateEntity();
+        Entity e = ecs->CreateEntity();
 
         Mesh mesh;
         mesh.allocated = false;
@@ -220,31 +194,29 @@ void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::v
         }
         // m_RenderSystem->AllocateMesh(mesh);
         m_RenderBackend->AllocateMesh(mesh);
-        ecs.AddComponent<Mesh>(e, mesh);
+        ecs->AddComponent<Mesh>(e, mesh);
         results.push_back(e);
 
         Material mat = materials[s.materialName];
-        ecs.AddComponent<Material>(e, mat);
+        ecs->AddComponent<Material>(e, mat);
     }
 
     INFO("Mesh load took " << GetTime() - startTime << "s");
 }
 
-void Engine::CreatePointLight(const LightCreateInfo& info, Entity& result)
+void Engine::CreatePointLight(ECS *ecs, const LightCreateInfo& info, Entity& result)
 {
-    ECS& ecs = ECS::Get();
-    Entity e = ecs.CreateEntity();
+    Entity e = ecs->CreateEntity();
 
-    ecs.GetComponent<Transform>(e).Translate(info.position);
-    ecs.AddComponent(e, Light(POINT, info.color, info.intensity, info.radius));
+    ecs->GetComponent<Transform>(e).Translate(info.position);
+    ecs->AddComponent(e, Light(POINT, info.color, info.intensity, info.radius));
 
     result = e;
 }
 
-void Engine::CreateSpotLight(const LightCreateInfo& info, Entity& result)
+void Engine::CreateSpotLight(ECS *ecs, const LightCreateInfo& info, Entity& result)
 {
-    ECS& ecs = ECS::Get();
-    Entity e = ecs.CreateEntity();
+    Entity e = ecs->CreateEntity();
 
     glm::vec3 base = glm::vec3(0.0, 0.0, 1.0);
     glm::vec3 axis = glm::cross(base, -glm::normalize(info.direction));
@@ -256,19 +228,18 @@ void Engine::CreateSpotLight(const LightCreateInfo& info, Entity& result)
         Shadowcaster shadowcaster = Shadowcaster(PERSPECTIVE, info.outerConeRadians * 2.0, 0.1, info.radius);
         // m_RenderSystem->AllocateShadowcaster(light, shadowcaster);
         m_RenderBackend->AllocateShadowcaster(light, shadowcaster);
-        ecs.AddComponent<Shadowcaster>(e, shadowcaster);
+        ecs->AddComponent<Shadowcaster>(e, shadowcaster);
     }
 
-    ecs.AddComponent<Light>(e, light);
-    ecs.GetComponent<Transform>(e).Translate(info.position).Rotate(angle, axis);
+    ecs->AddComponent<Light>(e, light);
+    ecs->GetComponent<Transform>(e).Translate(info.position).Rotate(angle, axis);
 
     result = e;
 }
 
-void Engine::CreateDirectionalLight(const LightCreateInfo& info, Entity& result)
+void Engine::CreateDirectionalLight(ECS *ecs, const LightCreateInfo& info, Entity& result)
 {
-    ECS& ecs = ECS::Get();
-    Entity e = ecs.CreateEntity();
+    Entity e = ecs->CreateEntity();
 
     glm::vec3 base = glm::vec3(0.0, 0.0, 1.0);
     glm::vec3 axis = glm::cross(base, -glm::normalize(info.direction));
@@ -280,11 +251,11 @@ void Engine::CreateDirectionalLight(const LightCreateInfo& info, Entity& result)
         Shadowcaster shadowcaster = Shadowcaster(ORTHOGRAPHIC, info.projectionLeft, info.projectionRight, info.projectionBottom, info.projectionTop, 0.1, info.radius);
         // m_RenderSystem->AllocateShadowcaster(light, shadowcaster);
         m_RenderBackend->AllocateShadowcaster(light, shadowcaster);
-        ecs.AddComponent<Shadowcaster>(e, shadowcaster);
+        ecs->AddComponent<Shadowcaster>(e, shadowcaster);
     }
 
-    ecs.AddComponent<Light>(e, light);
-    ecs.GetComponent<Transform>(e).Rotate(angle, axis).Translate(info.position - glm::normalize(info.direction) * info.distance);
+    ecs->AddComponent<Light>(e, light);
+    ecs->GetComponent<Transform>(e).Rotate(angle, axis).Translate(info.position - glm::normalize(info.direction) * info.distance);
 
     result = e;
 }

@@ -1,21 +1,19 @@
 #include "renderSystem.h"
 
-void RenderSystem::Init()
+void RenderSystem::Init(ECS *ecs)
 {
-    ECS& ecs = ECS::Get();
+    m_LightSystem = ecs->RegisterSystem<LightSystem>();
+    m_ShadowSystem = ecs->RegisterSystem<ShadowSystem>();
 
-    m_LightSystem = ecs.RegisterSystem<LightSystem>();
-    m_ShadowSystem = ecs.RegisterSystem<ShadowSystem>();
-
-    ecs.SetSystemSignature<LightSystem>(m_LightSystem->GetSignature());
-    ecs.SetSystemSignature<ShadowSystem>(m_ShadowSystem->GetSignature());
+    ecs->SetSystemSignature<LightSystem>(m_LightSystem->GetSignature(ecs));
+    ecs->SetSystemSignature<ShadowSystem>(m_ShadowSystem->GetSignature(ecs));
 }
 
-void RenderSystem::Update(RenderBackend *const backend)
+void RenderSystem::Update(ECS *ecs, RenderBackend *const backend)
 {
-    m_LightSystem->Update();
-    m_ShadowSystem->Update();
-    backend->Draw(m_Camera, entities);
+    m_LightSystem->Update(ecs);
+    m_ShadowSystem->Update(ecs);
+    backend->Draw(ecs, m_Camera, entities);
 }
 
 void RenderSystem::SetCamera(Entity camera)

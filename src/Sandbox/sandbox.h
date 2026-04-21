@@ -1,14 +1,18 @@
 #pragma once
 
 #include "System/Render/renderSystem.h"
-#include "config.h"
 #include <Engine/engine.h>
 #include <Engine/System/defaultCameraSystem.h>
 
-class Sandbox: public App {
+struct SandboxUserData {
+    uint32_t windowWidth;
+    uint32_t windowHeight;
+};
+
+class Sandbox: public Scene {
 public: 
-    void Init(Config& config) override;
-    void Frame(double deltaTime) override;
+    Sandbox(Engine *engine, Config& config);
+    void Update(double deltaTime) override;
     void EventCallback(Event event) override;
     void Cleanup() override;
 
