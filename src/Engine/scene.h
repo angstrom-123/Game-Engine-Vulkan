@@ -8,13 +8,16 @@
 #include "ECS/ecs.h"
 #include "event.h"
 
-using SceneHandle = int32_t;
+using Scene = int32_t;
 
 class Engine;
 
-class Scene {
+class SceneBase {
 public:
-    Scene(Engine *engine) 
+    SceneBase() = default;
+    virtual ~SceneBase() = default;
+
+    void Init(Engine *engine, void *userData)
     {
         this->engine = engine;
         this->ecs = new ECS();
@@ -26,22 +29,25 @@ public:
         ecs->RegisterComponent<Material>();
         ecs->RegisterComponent<Light>();
         ecs->RegisterComponent<Shadowcaster>();
+
+        OnInit(userData);
     }
 
-    virtual void Update(double deltaTime) = 0;
-    virtual void EventCallback(Event event) = 0;
-    void Destroy()
+    void Cleanup()
     {
         delete ecs;
-        Cleanup();
+        OnCleanup();
     }
 
+    virtual void OnEvent(Event event) = 0;
+    virtual void OnUpdate(double deltaTime) = 0;
+
 public:
-    SceneHandle handle;
     Engine *engine;
 
 protected:
-    virtual void Cleanup() = 0;
+    virtual void OnInit(void *userData) = 0;
+    virtual void OnCleanup() = 0;
 
 protected:
     ECS *ecs;

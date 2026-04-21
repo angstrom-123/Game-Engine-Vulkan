@@ -5,7 +5,7 @@
 
 #include "event.h"
 
-class EventHandler {
+class EventManager {
 public:
     void Init(GLFWwindow *window);
     void SetEventCallback(void ( *callback)(Event event, void *data), void *data);

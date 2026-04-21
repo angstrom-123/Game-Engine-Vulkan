@@ -23,6 +23,7 @@ namespace profiling {
     public:
         void BeginSession(const std::string& name)
         {
+            m_FirstTimepoint = UINT64_MAX;
             m_OutputStream.open("results.tracing.json");
             m_Session = (ProfilingSession) { name };
             m_OutputStream << "[";
@@ -35,7 +36,7 @@ namespace profiling {
             m_GpuHeadingCount = count;
             for (uint32_t i = 0; i < count; i++) {
                 m_GpuHeadings[i] = std::string(headings[i]);
-                m_OutputStream << m_GpuHeadings[i] << ", ";
+                m_GpuOutputStream << m_GpuHeadings[i] << ", ";
             }
             m_GpuOutputStream << std::endl;
         }
@@ -80,11 +81,17 @@ namespace profiling {
                 ERROR("Writing profile to closed stream");
                 return;
             }
+            
+            // Recording first measurement as reference so the timer starts recording at 0
+            if (m_FirstTimepoint == UINT64_MAX) {
+                m_FirstTimepoint = result.start;
+            }
+
             m_OutputStream << "{"
                            << "    \"name\": \"" << result.name << "\","
                            << "    \"cat\": \"default\","
                            << "    \"ph\": \"X\","
-                           << "    \"ts\": \"" << result.start << "\","
+                           << "    \"ts\": \"" << result.start - m_FirstTimepoint << "\","
                            << "    \"dur\": \"" << std::max(result.end - result.start, 1ul) << "\","
                            << "    \"pid\": \"0000\","
                            << "    \"tid\": \"" << result.thread << "\""
@@ -107,6 +114,7 @@ namespace profiling {
         std::string *m_GpuHeadings;
         std::ofstream m_OutputStream;
         std::ofstream m_GpuOutputStream;
+        uint64_t m_FirstTimepoint;
     };
 
     class Timer {

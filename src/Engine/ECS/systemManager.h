@@ -4,8 +4,9 @@
 #include <typeindex>
 #include <unordered_map>
 
-#include "system.h"
+#include "Util/derived.h"
 #include "Util/myAssert.h"
+#include "system.h"
 
 class SystemManager {
 public:
@@ -16,7 +17,7 @@ public:
         }
     }
 
-    template<typename T> T *RegisterSystem()
+    template<Derived<System> T> T *RegisterSystem()
     {
         std::type_index index = std::type_index(typeid(T));
         ASSERT(m_Systems.find(index) == m_Systems.end() && "Registering system twice");
@@ -26,7 +27,7 @@ public:
         return system;
     }
 
-    template<typename T> void SetSignature(Signature signature)
+    template<Derived<System> T> void SetSignature(Signature signature)
     {
         std::type_index index = std::type_index(typeid(T));
         ASSERT(m_Systems.find(index) != m_Systems.end() && "Setting signature of unregistered system");

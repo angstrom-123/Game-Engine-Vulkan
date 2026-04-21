@@ -9,12 +9,12 @@ struct SandboxUserData {
     uint32_t windowHeight;
 };
 
-class Sandbox: public Scene {
+class Sandbox : public SceneBase {
 public: 
-    Sandbox(Engine *engine, Config& config);
-    void Update(double deltaTime) override;
-    void EventCallback(Event event) override;
-    void Cleanup() override;
+    void OnInit(void *userData) override;
+    void OnUpdate(double deltaTime) override;
+    void OnEvent(Event event) override;
+    void OnCleanup() override;
 
 private:
     Entity m_Camera;

@@ -2,6 +2,8 @@
 
 #include "Component/transform.h"
 
+#include "Util/derived.h"
+
 #include "systemManager.h"
 #include "entityManager.h"
 #include "componentManager.h"
@@ -87,12 +89,12 @@ public:
         return m_ComponentManager.GetData<T>();
     }
 
-    template<typename T> T* RegisterSystem()
+    template<Derived<System> T> T* RegisterSystem()
     {
         return m_SystemManager.RegisterSystem<T>();
     }
 
-    template<typename T> void SetSystemSignature(Signature signature)
+    template<Derived<System> T> void SetSystemSignature(Signature signature)
     {
         m_SystemManager.SetSignature<T>(signature);
     }

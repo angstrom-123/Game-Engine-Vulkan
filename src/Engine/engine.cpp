@@ -23,6 +23,12 @@ void GLFWErrorCb(int error, const char *desc)
 
 Engine::Engine(Config& config)
 {
+    ASSERT(config.windowWidth > 0 && "Window width must not be 0");
+    ASSERT(config.windowHeight > 0 && "Window height must not be 0");
+    ASSERT(config.msaaSamples > 0 && "MSAA samples must not be 0");
+    ASSERT(std::floor(std::log2(config.msaaSamples)) == std::log2(config.msaaSamples) && "MSAA sample count must be a power of 2");
+    ASSERT(config.maxScenes > 0 && "Maximum scenes must not be 0");
+
     // Window
     glfwInit();
 
@@ -31,86 +37,57 @@ Engine::Engine(Config& config)
     glfwWindowHint(GLFW_FOCUSED, GLFW_TRUE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
     glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
-    m_Window = glfwCreateWindow(config.windowWidth, config.windowHeight, config.appName, nullptr, nullptr);
+    window = glfwCreateWindow(config.windowWidth, config.windowHeight, config.appName, nullptr, nullptr);
 
     glfwSetErrorCallback(GLFWErrorCb);
 
     // Event Handler
-    m_EventHandler.Init(m_Window);
-    m_EventHandler.SetEventCallback(Engine::EventHook, this);
+    eventManager.Init(window);
+    eventManager.SetEventCallback(Engine::EventHook, this);
 
-    m_RenderBackend = new RenderBackend();
-    m_RenderBackend->Init(m_Window, config);
+    sceneManager.Init(config.maxScenes);
 
-    m_MaxScenes = config.maxScenes;
-    m_Scenes.reserve(m_MaxScenes);
-    m_ActiveScene = INVALID_HANDLE;
+    renderBackend = new RenderBackend();
+    renderBackend->Init(window, config);
 }
 
 void Engine::Run()
 {
     double lastTime = GetTime();
-    while (!glfwWindowShouldClose(m_Window)) {
+    while (!glfwWindowShouldClose(window)) {
         PROFILER_PROFILE_SCOPE("Frame");
-
-        glfwPollEvents();
 
         double currTime = GetTime();
         double deltaTime = currTime - lastTime;
-
-        if (m_ActiveScene != INVALID_HANDLE) {
-            m_Scenes[m_ActiveScene]->Update(deltaTime);
-        }
-
         lastTime = currTime;
 
-        m_EventHandler.RecordFrame();
+        glfwPollEvents();
+
+        sceneManager.DispatchUpdates(deltaTime);
+        eventManager.RecordFrame();
     }
-}
-
-void Engine::SwitchScene(SceneHandle scene)
-{
-    ASSERT(scene != INVALID_HANDLE && scene < m_MaxScenes && "Switching to invalid scene");
-    m_ActiveScene = scene;
-}
-
-void Engine::AddScene(Scene *scene)
-{
-    ASSERT(m_Scenes.size() < static_cast<uint32_t>(m_MaxScenes) && "Adding too many scenes");
-    scene->handle = m_Scenes.size();
-    m_Scenes.push_back(scene);
 }
 
 void Engine::Cleanup()
 {
-    for (Scene *scene : m_Scenes) {
-        scene->Destroy();
-    }
+    sceneManager.Cleanup();
 
-    // m_RenderSystem->Cleanup();
-    m_RenderBackend->Cleanup();
-    delete m_RenderBackend;
+    renderBackend->Cleanup();
+    delete renderBackend;
 
-    glfwDestroyWindow(m_Window);
+    glfwDestroyWindow(window);
     glfwTerminate();
 }
 
 void Engine::EventCallback(Event event)
 {
-    if (m_ActiveScene != INVALID_HANDLE) {
-        m_Scenes[m_ActiveScene]->EventCallback(event);
-    }
+    sceneManager.DispatchEvents(event);
 }
 
 void Engine::EventHook(Event event, void *data)
 {
     Engine *engine = static_cast<Engine *>(data);
     engine->EventCallback(event);
-}
-
-double Engine::GetTime()
-{
-    return glfwGetTime();
 }
 
 void Engine::CreateMaterial(const MtlData& data, Material& material)
@@ -149,8 +126,7 @@ void Engine::CreateMaterial(const MtlData& data, Material& material)
         }
     }
 
-    m_RenderBackend->AllocateMaterialTextures(materialInfo, material);
-    // m_RenderSystem->AllocateMaterialTextures(materialInfo, material);
+    renderBackend->AllocateMaterialTextures(materialInfo, material);
 }
 
 void Engine::CreateMesh(ECS *ecs, const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results)
@@ -192,8 +168,7 @@ void Engine::CreateMesh(ECS *ecs, const fs::path& objPath, const fs::path& mtlPa
                 CalculateTangents(mesh.vertices[index - 2], mesh.vertices[index - 1], mesh.vertices[index]);
             }
         }
-        // m_RenderSystem->AllocateMesh(mesh);
-        m_RenderBackend->AllocateMesh(mesh);
+        renderBackend->AllocateMesh(mesh);
         ecs->AddComponent<Mesh>(e, mesh);
         results.push_back(e);
 
@@ -226,8 +201,7 @@ void Engine::CreateSpotLight(ECS *ecs, const LightCreateInfo& info, Entity& resu
     if (info.shadowcaster) {
         light.direction.w = info.shadowBias;
         Shadowcaster shadowcaster = Shadowcaster(PERSPECTIVE, info.outerConeRadians * 2.0, 0.1, info.radius);
-        // m_RenderSystem->AllocateShadowcaster(light, shadowcaster);
-        m_RenderBackend->AllocateShadowcaster(light, shadowcaster);
+        renderBackend->AllocateShadowcaster(light, shadowcaster);
         ecs->AddComponent<Shadowcaster>(e, shadowcaster);
     }
 
@@ -249,8 +223,7 @@ void Engine::CreateDirectionalLight(ECS *ecs, const LightCreateInfo& info, Entit
     if (info.shadowcaster) {
         light.direction.w = info.shadowBias;
         Shadowcaster shadowcaster = Shadowcaster(ORTHOGRAPHIC, info.projectionLeft, info.projectionRight, info.projectionBottom, info.projectionTop, 0.1, info.radius);
-        // m_RenderSystem->AllocateShadowcaster(light, shadowcaster);
-        m_RenderBackend->AllocateShadowcaster(light, shadowcaster);
+        renderBackend->AllocateShadowcaster(light, shadowcaster);
         ecs->AddComponent<Shadowcaster>(e, shadowcaster);
     }
 

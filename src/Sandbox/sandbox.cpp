@@ -19,15 +19,17 @@ float Random(float min, float max)
 }
 
 // NOTE: Explicitly constructing Scene
-Sandbox::Sandbox(Engine *engine, Config& config) : Scene(engine)
+void Sandbox::OnInit(void *userData)
 {
+    SandboxUserData *config = static_cast<SandboxUserData *>(userData);
+
     m_LastFrame = 0;
     m_LastTime = engine->GetTime();
 
     // For controlling the camera
     m_CameraSystem = ecs->RegisterSystem<DefaultCameraSystem>();
     ecs->SetSystemSignature<DefaultCameraSystem>(m_CameraSystem->GetSignature(ecs));
-    m_CameraSystem->Init();
+    m_CameraSystem->Init(ecs);
 
     // For rendering the scene
     m_RenderSystem = ecs->RegisterSystem<RenderSystem>();
@@ -36,7 +38,8 @@ Sandbox::Sandbox(Engine *engine, Config& config) : Scene(engine)
 
     // Create camera and assign to renderer
     m_Camera = ecs->CreateEntity();
-    ecs->AddComponent<Camera>(m_Camera, Camera(glm::vec3(0.0), glm::vec2(config.windowWidth, config.windowHeight), glm::radians(60.0), 0.01, 1000.0));
+    Camera camera = Camera(glm::vec3(0.0), glm::vec2(config->windowWidth, config->windowHeight), glm::radians(60.0), 0.01, 1000.0);
+    ecs->AddComponent<Camera>(m_Camera, camera);
     m_RenderSystem->SetCamera(m_Camera);
 
     // Load sponza mesh. It is in many pieces so parent them all to one entity to inherit transform
@@ -96,7 +99,7 @@ Sandbox::Sandbox(Engine *engine, Config& config) : Scene(engine)
     engine->CreateSpotLight(ecs, spotLightInfo, spot);
 }
 
-void Sandbox::Update(double deltaTime)
+void Sandbox::OnUpdate(double deltaTime)
 {
     PROFILER_PROFILE_SCOPE("Sandbox::Frame");
 
@@ -117,10 +120,10 @@ void Sandbox::Update(double deltaTime)
 
     // Update our systems
     m_CameraSystem->Update(ecs, engine->GetKeysDown(), engine->GetFrameMouseDelta(), deltaTime);
-    m_RenderSystem->Update(ecs, engine->GetRenderBackend());
+    m_RenderSystem->Update(ecs, engine->renderBackend);
 }
 
-void Sandbox::EventCallback(Event event)
+void Sandbox::OnEvent(Event event)
 {
     // Some simple logging
     switch (event.kind) {
@@ -135,7 +138,7 @@ void Sandbox::EventCallback(Event event)
     };
 }
 
-void Sandbox::Cleanup()
+void Sandbox::OnCleanup()
 {
     // Nothing to clean up for now
 }

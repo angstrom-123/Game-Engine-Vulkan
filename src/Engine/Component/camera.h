@@ -8,10 +8,10 @@ struct Camera {
     glm::mat4x4 projection;
     float near;
     float far;
-    float pitch;
-    float yaw;
     float aspect;
     float fov;
+    float pitch;
+    float yaw;
 
     Camera() = default;
     Camera(glm::vec3 position, glm::vec2 dimensions, float fovRadians, float nearClip, float farClip);

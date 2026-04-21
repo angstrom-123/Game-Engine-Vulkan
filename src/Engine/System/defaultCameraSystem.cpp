@@ -3,6 +3,7 @@
 
 #include "glm/ext/quaternion_trigonometric.hpp"
 #include "glm/gtc/quaternion.hpp"
+#include <cmath>
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include "glm/ext/matrix_transform.hpp"
@@ -11,10 +12,22 @@
 
 static constexpr float MAX_PITCH = 89.9;
 
-void DefaultCameraSystem::Init(float sensitivity, float speed)
+void DefaultCameraSystem::Init(ECS *ecs, float sensitivity, float speed)
 {
     m_Sensitivity = sensitivity;
     m_Speed = speed;
+
+    for (Entity e : entities) {
+        Camera& camera = ecs->GetComponent<Camera>(e);
+        Transform& transform = ecs->GetComponent<Transform>(e);
+        
+        const glm::quat r = transform.rotation;
+
+        camera.pitch = std::asin(-2.0f * (r.x * r.z - r.w * r.y));
+        camera.pitch = std::clamp(camera.pitch, -MAX_PITCH, MAX_PITCH);
+
+        camera.yaw = std::atan2(2.0f * (r.y * r.z + r.w * r.x), r.w * r.w - r.x * r.x - r.y * r.y + r.z * r.z);
+    }
 }
 
 void DefaultCameraSystem::Update(ECS *ecs, bool *keysDown, glm::vec2 mouseDelta, double dt)

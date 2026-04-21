@@ -108,7 +108,7 @@ void RenderBackend::Init(GLFWwindow *window, Config& config)
 
     // Set up gpu profiling with vulkan timestamps
 #ifdef PROFILING 
-    std::string headings[6] = { "Depth", "Resolve", "Culling", "Shadow", "Opaque", "Translucent", "Total" };
+    std::string headings[7] = { "Depth", "Resolve", "Culling", "Shadow", "Opaque", "Translucent", "Total" };
     PROFILER_BEGIN_GPU_SESSION(headings, 7);
 
     if (m_Properties.limits.timestampPeriod == 0 || !m_Properties.limits.timestampComputeAndGraphics) {
@@ -125,7 +125,7 @@ void RenderBackend::Init(GLFWwindow *window, Config& config)
     }
 
     for (FrameData& frame : m_Frames) {
-        frame.queryCount = 10;
+        frame.queryCount = 12;
 
         VkQueryPoolCreateInfo queryPoolInfo = {
             .sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
@@ -702,7 +702,7 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
     float translucentNS = (frame.queryTimestamps[11] - frame.queryTimestamps[10]) * periodNS;
     float gpuTimeNS     = (frame.queryTimestamps[11] - frame.queryTimestamps[0]) * periodNS;
 
-    float gpuValues[6] = { depthNS, resolveNS, cullingNS, shadowNS, opaqueNS, translucentNS, gpuTimeNS };
+    float gpuValues[7] = { depthNS, resolveNS, cullingNS, shadowNS, opaqueNS, translucentNS, gpuTimeNS };
     PROFILER_GPU_VALUES(gpuValues);
 #endif
 

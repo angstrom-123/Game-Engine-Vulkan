@@ -8,6 +8,8 @@ Camera::Camera(glm::vec3 position, glm::vec2 dimensions, float fovRadians, float
     far = farClip;
     aspect = dimensions.x / dimensions.y;
     fov = fovRadians;
+    pitch = 0.0;
+    yaw = 0.0;
 }
 
 glm::mat4x4 Camera::VulkanPerspective(float fovRadians, float aspect, float near, float far)
