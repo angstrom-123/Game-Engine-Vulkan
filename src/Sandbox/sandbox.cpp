@@ -1,7 +1,8 @@
 #include "sandbox.h"
-#include "ECS/ecsTypes.h"
-#include "glm/trigonometric.hpp"
+#include "Component/camera.h"
+#include <cstdlib>
 
+#include <Engine/ECS/ecsTypes.h>
 #include <Engine/event.h>
 #include <Engine/Util/logger.h>
 #include <Engine/Util/profiler.h>
@@ -9,7 +10,7 @@
 #include <Engine/Component/material.h>
 #include <Engine/Component/light.h>
 
-#include <cstdlib>
+#include <glm/trigonometric.hpp>
 #include <glm/vec3.hpp>
 
 float Random(float min, float max)
@@ -17,7 +18,7 @@ float Random(float min, float max)
     return min + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX) / (max - min));
 }
 
-void Sandbox::Init()
+void Sandbox::Init(Config& config)
 {
     m_LastFrame = 0;
     m_LastTime = m_Engine->GetTime();
@@ -25,16 +26,22 @@ void Sandbox::Init()
     // For convenience
     ECS& ecs = ECS::Get();
 
-    // Create camera control system (Camera is a default Entity in the engine) 
-    // DefaultCameraSystem is built in to the engine, but must be enabled here
-    // explicitly (in case you wish to use your own)
+    // For controlling the camera
     m_CameraSystem = ecs.RegisterSystem<DefaultCameraSystem>();
     ecs.SetSystemSignature<DefaultCameraSystem>(m_CameraSystem->GetSignature());
     m_CameraSystem->Init();
 
-    // Load sponza mesh (made of several objects with different textures)
-    // Sponza is a VERY heavy file, as it contains 40+ large image textures, which each need to 
-    // be loaded individually, and applied to separate meshes (Could optimize with array textures)
+    // For rendering the scene
+    m_RenderSystem = ecs.RegisterSystem<RenderSystem>();
+    ecs.SetSystemSignature<RenderSystem>(m_RenderSystem->GetSignature());
+    m_RenderSystem->Init();
+
+    // Create camera and assign to renderer
+    m_Camera = ecs.CreateEntity();
+    ecs.AddComponent<Camera>(m_Camera, Camera(glm::vec3(0.0), glm::vec2(config.windowWidth, config.windowHeight), glm::radians(60.0), 0.01, 1000.0));
+    m_RenderSystem->SetCamera(m_Camera);
+
+    // Load sponza mesh. It is in many pieces so parent them all to one entity to inherit transform
     m_SponzaParent = ecs.CreateEntity();
     ecs.GetComponent<Transform>(m_SponzaParent).Scale(0.015).Translate(0.0, -2.0, 0.0).Rotate(glm::radians(-90.0), Y_AXIS);
     m_Engine->CreateMesh("src/Sandbox/Resource/Model/sponza.obj", "src/Sandbox/Resource/Model/sponza.mtl", m_SponzaParts);
@@ -57,6 +64,7 @@ void Sandbox::Init()
         ecs.GetComponent<Transform>(point).InheritFrom(m_LightsParent);
     }
 
+    // Directional shadowcasting light
     Entity sun;
     LightCreateInfo sunLightInfo = {
         .position           = glm::vec3(0.0),
@@ -74,6 +82,7 @@ void Sandbox::Init()
     };
     m_Engine->CreateDirectionalLight(sunLightInfo, sun);
 
+    // Spot shadowcasting light
     Entity spot;
     LightCreateInfo spotLightInfo = {
         .position           = glm::vec3(0.0, 6.0, 0.0),
@@ -105,19 +114,20 @@ void Sandbox::Frame(double deltaTime)
     // For convenience
     ECS& ecs = ECS::Get();
 
-    // Control the camera
-    m_CameraSystem->Update(m_Engine->GetKeysDown(), m_Engine->GetFrameMouseDelta(), deltaTime);
-
     // Move all the point lights around
     float offsetX = std::sin(static_cast<float>(m_Engine->GetFrameNumber()) / 60.0) * 5.0;
     float offsetY = std::cos(static_cast<float>(m_Engine->GetFrameNumber()) / 60.0) * 5.0;
     float offsetZ = std::cos(static_cast<float>(m_Engine->GetFrameNumber() + 47) / 45.0) * 5.0;
     ecs.GetComponent<Transform>(m_LightsParent).Translate(offsetX, offsetY, offsetZ);
+
+    // Update our systems
+    m_CameraSystem->Update(m_Engine->GetKeysDown(), m_Engine->GetFrameMouseDelta(), deltaTime);
+    m_RenderSystem->Update(m_Engine->GetRenderBackend());
 }
 
 void Sandbox::EventCallback(Event event)
 {
-    // Fundamental events are handled by the engine and then forwarded here.
+    // Some simple logging
     switch (event.kind) {
         case EVENT_WINDOW_RESIZE:
             INFO("Resized to " << event.windowWidth << "x" << event.windowHeight);

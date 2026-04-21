@@ -1,7 +1,8 @@
 #include "engine.h"
 
 #include "Component/shadowcaster.h"
-#include "System/lightSystem.h"
+// #include "System/lightSystem.h"
+#include "ECS/ecs.h"
 #include "Util/objLoader.h"
 #include "Util/imageLoader.h"
 #include "Component/camera.h"
@@ -48,27 +49,34 @@ Engine::Engine(App *app, Config& config)
     ecs.RegisterComponent<Light>();
     ecs.RegisterComponent<Shadowcaster>();
 
-    // Default Systems
-    m_RenderSystem = ecs.RegisterSystem<RenderSystem>();
-    ecs.SetSystemSignature<RenderSystem>(m_RenderSystem->GetSignature());
-    m_RenderSystem->Init(m_Window, config);
+    m_RenderBackend = new RenderBackend();
+    m_RenderBackend->Init(m_Window, config);
 
-    m_LightSystem = ecs.RegisterSystem<LightSystem>();
-    ecs.SetSystemSignature<LightSystem>(m_LightSystem->GetSignature());
-
-    m_ShadowSystem = ecs.RegisterSystem<ShadowSystem>();
-    ecs.SetSystemSignature<ShadowSystem>(m_ShadowSystem->GetSignature());
-
-    // App
     m_App = app;
     m_App->SetEnginePointer(this);
-    app->Init();
+    m_App->Init(config);
 
-    // Default Entities + Connection to default systems
-    // NOTE: App is inited before this so that any systems created there pick up on these components
-    Entity camera = ecs.CreateEntity();
-    ecs.AddComponent<Camera>(camera, Camera(glm::vec3(0.0), glm::vec2(config.windowWidth, config.windowHeight), glm::radians(60.0), 0.01, 1000.0));
-    m_RenderSystem->SetCamera(camera);
+    // Default Systems
+    // m_RenderSystem = ecs.RegisterSystem<RenderSystem>();
+    // ecs.SetSystemSignature<RenderSystem>(m_RenderSystem->GetSignature());
+    // m_RenderSystem->Init(m_Window, config);
+    //
+    // m_LightSystem = ecs.RegisterSystem<LightSystem>();
+    // ecs.SetSystemSignature<LightSystem>(m_LightSystem->GetSignature());
+    //
+    // m_ShadowSystem = ecs.RegisterSystem<ShadowSystem>();
+    // ecs.SetSystemSignature<ShadowSystem>(m_ShadowSystem->GetSignature());
+    //
+    // // App
+    // m_App = app;
+    // m_App->SetEnginePointer(this);
+    // app->Init();
+    //
+    // // Default Entities + Connection to default systems
+    // // NOTE: App is inited before this so that any systems created there pick up on these components
+    // Entity camera = ecs.CreateEntity();
+    // ecs.AddComponent<Camera>(camera, Camera(glm::vec3(0.0), glm::vec2(config.windowWidth, config.windowHeight), glm::radians(60.0), 0.01, 1000.0));
+    // m_RenderSystem->SetCamera(camera);
 }
 
 void Engine::Run()
@@ -83,9 +91,9 @@ void Engine::Run()
 
         m_App->Frame(currTime - lastTime);
 
-        m_LightSystem->Update();
-        m_ShadowSystem->Update();
-        m_RenderSystem->Update();
+        // m_LightSystem->Update();
+        // m_ShadowSystem->Update();
+        // m_RenderSystem->Update();
 
         lastTime = currTime;
 
@@ -96,20 +104,24 @@ void Engine::Run()
 void Engine::Cleanup()
 {
     m_App->Cleanup();
-    m_RenderSystem->Cleanup();
+
+    // m_RenderSystem->Cleanup();
+    m_RenderBackend->Cleanup();
+    delete m_RenderBackend;
+
     glfwDestroyWindow(m_Window);
     glfwTerminate();
 }
 
 void Engine::EventCallback(Event event)
 {
-    switch (event.kind) {
-        case EVENT_WINDOW_RESIZE:
-            m_RenderSystem->RequestResize();
-            break;
-        default:
-            break;
-    };
+    // switch (event.kind) {
+    //     case EVENT_WINDOW_RESIZE:
+    //         m_RenderSystem->RequestResize();
+    //         break;
+    //     default:
+    //         break;
+    // };
 
     m_App->EventCallback(event);
 }
@@ -161,9 +173,8 @@ void Engine::CreateMaterial(const MtlData& data, Material& material)
         }
     }
 
-    // If any textures are not present (or just not described in the mtl file)
-    // the renderer falls back to defaults.
-    m_RenderSystem->AllocateMaterialTextures(materialInfo, material);
+    m_RenderBackend->AllocateMaterialTextures(materialInfo, material);
+    // m_RenderSystem->AllocateMaterialTextures(materialInfo, material);
 }
 
 void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results)
@@ -207,7 +218,8 @@ void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::v
                 CalculateTangents(mesh.vertices[index - 2], mesh.vertices[index - 1], mesh.vertices[index]);
             }
         }
-        m_RenderSystem->AllocateMesh(mesh);
+        // m_RenderSystem->AllocateMesh(mesh);
+        m_RenderBackend->AllocateMesh(mesh);
         ecs.AddComponent<Mesh>(e, mesh);
         results.push_back(e);
 
@@ -220,8 +232,6 @@ void Engine::CreateMesh(const fs::path& objPath, const fs::path& mtlPath, std::v
 
 void Engine::CreatePointLight(const LightCreateInfo& info, Entity& result)
 {
-    ASSERT(result == INVALID_HANDLE && "Overwriting existing entity");
-
     ECS& ecs = ECS::Get();
     Entity e = ecs.CreateEntity();
 
@@ -244,7 +254,8 @@ void Engine::CreateSpotLight(const LightCreateInfo& info, Entity& result)
     if (info.shadowcaster) {
         light.direction.w = info.shadowBias;
         Shadowcaster shadowcaster = Shadowcaster(PERSPECTIVE, info.outerConeRadians * 2.0, 0.1, info.radius);
-        m_RenderSystem->AllocateShadowcaster(light, shadowcaster);
+        // m_RenderSystem->AllocateShadowcaster(light, shadowcaster);
+        m_RenderBackend->AllocateShadowcaster(light, shadowcaster);
         ecs.AddComponent<Shadowcaster>(e, shadowcaster);
     }
 
@@ -256,8 +267,6 @@ void Engine::CreateSpotLight(const LightCreateInfo& info, Entity& result)
 
 void Engine::CreateDirectionalLight(const LightCreateInfo& info, Entity& result)
 {
-    ASSERT(result == INVALID_HANDLE && "Overwriting existing entity");
-
     ECS& ecs = ECS::Get();
     Entity e = ecs.CreateEntity();
 
@@ -269,7 +278,8 @@ void Engine::CreateDirectionalLight(const LightCreateInfo& info, Entity& result)
     if (info.shadowcaster) {
         light.direction.w = info.shadowBias;
         Shadowcaster shadowcaster = Shadowcaster(ORTHOGRAPHIC, info.projectionLeft, info.projectionRight, info.projectionBottom, info.projectionTop, 0.1, info.radius);
-        m_RenderSystem->AllocateShadowcaster(light, shadowcaster);
+        // m_RenderSystem->AllocateShadowcaster(light, shadowcaster);
+        m_RenderBackend->AllocateShadowcaster(light, shadowcaster);
         ecs.AddComponent<Shadowcaster>(e, shadowcaster);
     }
 

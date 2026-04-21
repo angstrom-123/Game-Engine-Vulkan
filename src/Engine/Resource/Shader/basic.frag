@@ -18,7 +18,6 @@ layout (set = 0, binding = 0) uniform GlobalUniforms {
     vec4 ssaoKernel[SSAO_SAMPLES];
 } uniforms;
 layout (set = 1, binding = 0) uniform sampler2DArray uTextures[4];
-// layout (set = 1, binding = 1) uniform sampler2DArray uShadowmaps;
 layout (set = 1, binding = 1) uniform sampler2DArrayShadow uShadowmaps;
 layout (set = 1, binding = 2) uniform sampler2D uNoiseTexture;
 layout (set = 2, binding = 0) uniform Camera {
