@@ -1,7 +1,7 @@
 #pragma once
 
-#include "renderTypes.h"
 #include "textureArray.h"
+#include <unordered_map>
 
 enum TextureArrayID {
     TEXTURE_ARRAY_COLOR_1024,
@@ -25,13 +25,10 @@ struct TextureAllocation {
 
 class TextureArrayHandler {
 public:
-    void Init(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue graphicsQueue, CommandSubmitter& submitter, VmaAllocator allocator, FrameData *frames, TextureArraySizes& sizes);
+    void Init(const TextureArraySizes& sizes, class VulkanBackend *backend);
     void Cleanup(VkDevice device, VmaAllocator allocator);
-    TextureAllocation AllocateTexture(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue graphicsQueue, CommandSubmitter& submitter, VmaAllocator allocator, ImageData *imageData);
+    TextureAllocation AllocateTexture(ImageData *imageData, class VulkanBackend *backend);
     TextureAllocation GetFallbackTexture(ImageData *imageData, ImageKind kind);
-
-public:
-    VkDescriptorSetLayout descriptorLayout;
 
 private:
     TextureAllocation m_DefaultColorAllocation;

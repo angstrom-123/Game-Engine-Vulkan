@@ -8,8 +8,8 @@ void CommandSubmitter::Init(VkDevice device, uint32_t graphicsQueueFamily)
     VK_CHECK(vkCreateFence(device, &fenceInfo, nullptr, &m_UploadFence));
 
     VkCommandPoolCreateInfo createInfo = vkinit::CommandPoolCreateInfo(graphicsQueueFamily);
-    VK_CHECK(vkCreateCommandPool(device, &createInfo, nullptr, &m_CommandPool));
 
+    VK_CHECK(vkCreateCommandPool(device, &createInfo, nullptr, &m_CommandPool));
     VkCommandBufferAllocateInfo alloc_info = vkinit::CommandBufferAllocateInfo(m_CommandPool);
     VK_CHECK(vkAllocateCommandBuffers(device, &alloc_info, &m_CommandBuffer));
 }
@@ -20,7 +20,7 @@ void CommandSubmitter::Cleanup(VkDevice device)
     vkDestroyCommandPool(device, m_CommandPool, nullptr); 
 }
 
-void CommandSubmitter::ImmediateSubmit(VkDevice device, VkQueue graphicsQueue, std::function<void (VkCommandBuffer commandBuffer)>&& function )
+void CommandSubmitter::ImmediateSubmit(VkDevice device, VkQueue graphicsQueue, std::function<void (VkCommandBuffer commandBuffer)>&& function)
 {
     VkCommandBufferBeginInfo beginInfo = vkinit::CommandBufferBeginInfo(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
     VK_CHECK(vkBeginCommandBuffer(m_CommandBuffer, &beginInfo));

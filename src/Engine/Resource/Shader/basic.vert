@@ -7,6 +7,7 @@ layout (set = 0, binding = 0) uniform GlobalUniforms {
 
 layout (push_constant) uniform Constants {
     mat4 model;
+    vec3 baseColor;
     float specularExponent;
     uint ambientIndex;
     uint diffuseIndex;
@@ -17,6 +18,7 @@ layout (push_constant) uniform Constants {
     uint maxTileLights;
     uint screenWidth;
     uint screenHeight;
+    uint materialFlags;
 } constants;
 
 layout (location = 0) in vec3 aPosition;

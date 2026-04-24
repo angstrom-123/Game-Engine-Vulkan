@@ -48,13 +48,13 @@ namespace profiling {
                 return;
             }
             m_OutputStream << "{"
-                           << "    \"name\": \"end\","
-                           << "    \"cat\": \"special\","
-                           << "    \"ph\": \"X\","
-                           << "    \"ts\": \"0\","
-                           << "    \"dur\": \"0\","
-                           << "    \"pid\": \"0000\","
-                           << "    \"tid\": \"0\""
+                           << "\"name\": \"end\","
+                           << "\"cat\": \"special\","
+                           << "\"ph\": \"X\","
+                           << "\"ts\": \"0\","
+                           << "\"dur\": \"0\","
+                           << "\"pid\": \"0000\","
+                           << "\"tid\": \"0\""
                            << "}]";
             m_OutputStream.close();
 
@@ -117,16 +117,16 @@ namespace profiling {
         uint64_t m_FirstTimepoint;
     };
 
-    class Timer {
+    class ProfilingTimer {
     public:
-        Timer(const char* name)
+        ProfilingTimer(const char* name)
         {
             m_Name = name;
             m_Stopped = false;
             m_StartTimepoint = std::chrono::high_resolution_clock::now();
         }
 
-        ~Timer()
+        ~ProfilingTimer()
         {
             if (!m_Stopped) Stop();
         }
@@ -154,7 +154,7 @@ namespace profiling {
 #ifdef PROFILING
     #define PROFILER_BEGIN_SESSION(name) profiling::Instrumentor::Get().BeginSession(name)
     #define PROFILER_END_SESSION() profiling::Instrumentor::Get().EndSession()
-    #define PROFILER_PROFILE_SCOPE(name) profiling::Timer timer##__LINE__(name)
+    #define PROFILER_PROFILE_SCOPE(name) profiling::ProfilingTimer timer##__LINE__(name)
     #define PROFILER_BEGIN_GPU_SESSION(headings, count) profiling::Instrumentor::Get().BeginGpuSession(headings, count)
     #define PROFILER_GPU_VALUES(valuesNS) profiling::Instrumentor::Get().WriteGpuValues(valuesNS)
 #else 

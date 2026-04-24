@@ -12,12 +12,16 @@ using Scene = int32_t;
 
 class Engine;
 
+struct SceneConfig {
+    glm::ivec2 windowSize;
+};
+
 class SceneBase {
 public:
-    SceneBase() = default;
     virtual ~SceneBase() = default;
+    SceneBase() = default;
 
-    void Init(Engine *engine, void *userData)
+    void Init(Engine *engine, glm::ivec2 windowSize)
     {
         this->engine = engine;
         this->ecs = new ECS();
@@ -30,7 +34,10 @@ public:
         ecs->RegisterComponent<Light>();
         ecs->RegisterComponent<Shadowcaster>();
 
-        OnInit(userData);
+        SceneConfig config = {
+            .windowSize = windowSize,
+        };
+        OnInit(config);
     }
 
     void Cleanup()
@@ -39,14 +46,16 @@ public:
         OnCleanup();
     }
 
+    virtual void OnSelect() = 0;
     virtual void OnEvent(Event event) = 0;
     virtual void OnUpdate(double deltaTime) = 0;
 
 public:
-    Engine *engine;
+    Engine *engine = nullptr;
+    std::string name = "";
 
 protected:
-    virtual void OnInit(void *userData) = 0;
+    virtual void OnInit(SceneConfig& userData) = 0;
     virtual void OnCleanup() = 0;
 
 protected:

@@ -1,6 +1,6 @@
 #version 450 
 
-#define SSAO_SAMPLES 16
+#define SSAO_SAMPLES 8
 
 struct Light {
     vec4 position;      // xyz + light type  - all                 (0: Point, 1: Spot, 2: Directional)
@@ -23,6 +23,7 @@ layout (set = 1, binding = 2) uniform sampler2D uNoiseTexture;
 layout (set = 2, binding = 0) uniform Camera {
     mat4 view;
     mat4 projection;
+    mat4 inverseProjection;
     vec3 position;
 } camera;
 layout (set = 2, binding = 1) readonly buffer LightBuffer { Light lights[]; } lightBuffer;
@@ -32,6 +33,7 @@ layout (set = 2, binding = 4) uniform sampler2D uDepthTexture;
 
 layout (push_constant) uniform Constants {
     mat4 model;
+    vec3 baseColor;
     float specularExponent;
     uint ambientIndex;
     uint diffuseIndex;
@@ -42,13 +44,22 @@ layout (push_constant) uniform Constants {
     uint maxTileLights;
     uint screenWidth;
     uint screenHeight;
+    uint materialFlags;
+    float shadowTexelSize;
 } constants;
+
+#define MATERIAL_FLAG_NONE 0 
+#define MATERIAL_FLAG_TRANSPARENT 1
 
 layout (location = 0) in vec3 vPosition;
 layout (location = 1) in vec2 vUV;
 layout (location = 2) in mat3 vTBN;
 
 layout (location = 0) out vec4 outFragColor;
+
+vec2 screenResolution = vec2(constants.screenWidth, constants.screenHeight);
+vec2 noiseScale = screenResolution / 8.0;
+vec2 uv = gl_FragCoord.xy / screenResolution;
 
 // For point / spot lights
 float Attenuate(float dist, float radius)
@@ -83,11 +94,9 @@ float CalculateShadow(Light light, vec3 normal, vec3 lightDir)
 
     // PCF
     float shadow = 0.0;
-    vec2 texelSize = 1.0 / vec2(textureSize(uShadowmaps, 0));
     for (int x = -1; x <= 1; x++) {
         for (int y = -1; y <= 1; y++) {
-            vec2 coordOffset = texelSize * vec2(x, y);
-            vec4 shadowCoord = vec4(projectionCoords.xy + coordOffset, light.shadowIndex, currentDepth - bias);
+            vec4 shadowCoord = vec4(projectionCoords.xy + constants.shadowTexelSize * vec2(x, y), light.shadowIndex, currentDepth - bias);
             shadow += texture(uShadowmaps, shadowCoord);
         }
     }
@@ -96,23 +105,23 @@ float CalculateShadow(Light light, vec3 normal, vec3 lightDir)
     return shadow;
 }
 
-vec3 ReconstructViewPosition(vec2 uv, float depth, mat4 projection)
+vec3 ReconstructViewPosition(vec2 uv, float depth)
 {
     vec4 clipPos = vec4(uv * 2.0 - 1.0, depth, 1.0);
-    vec4 viewPos = inverse(projection) * clipPos;
+    vec4 viewPos = camera.inverseProjection * clipPos;
     return viewPos.xyz / viewPos.w;
 }
 
-float SSAO(vec3 normal)
+float SSAO(vec3 viewPos, vec3 normal)
 {
-    const vec2 screenResolution = vec2(constants.screenWidth, constants.screenHeight);
+    // No occlusion for transparent materials
+    if ((constants.materialFlags & MATERIAL_FLAG_TRANSPARENT) == MATERIAL_FLAG_TRANSPARENT) {
+        return 1.0;
+    }
+
     const float bias = 0.025;
     const float radius = 1.0;
-    const vec2 noiseScale = screenResolution / 2.0;
 
-    vec2 uv = gl_FragCoord.xy / screenResolution;
-    float depth = texture(uDepthTexture, uv).r;
-    vec3 viewPos = ReconstructViewPosition(uv, depth, camera.projection);
     vec3 randomVec = texture(uNoiseTexture, uv * noiseScale).xyz;
     vec3 viewNormal = mat3(camera.view) * normal;
 
@@ -130,7 +139,7 @@ float SSAO(vec3 normal)
         offset.xyz = offset.xyz * 0.5 + 0.5;
 
         float sampleDepth = texture(uDepthTexture, offset.xy).r;
-        vec3 sampleViewPos = ReconstructViewPosition(offset.xy, sampleDepth, camera.projection);
+        vec3 sampleViewPos = ReconstructViewPosition(offset.xy, sampleDepth);
         float sampleZ = sampleViewPos.z;
 
         float rangeCheck = abs(viewPos.z - sampleZ) < radius ? 1.0 : 0.0;
@@ -167,23 +176,28 @@ void main()
         Light light = lightBuffer.lights[lightIndex];
         uint type = uint(light.position.w);
 
-        vec3 lightDir;
+        vec3 lightDir = light.direction.xyz;
         float attenuation = 1.0;
-        float spot = 1.0;
-        float shadow = 0.0;
-
-        if (type == 2) {
-            lightDir = light.direction.xyz;
-            shadow = CalculateShadow(light, normal, lightDir);
-        } else {
+        if (type != 2) {
             vec3 delta = light.position.xyz - vPosition;
             float dist = length(delta);
             lightDir = delta / dist;
             attenuation = Attenuate(dist, light.radius);
-            if (type == 1) {
-                spot = SpotFactor(lightDir, light.direction.xyz, light.innerCone, light.outerCone);
-                shadow = CalculateShadow(light, normal, lightDir);
-            }
+        }
+
+        float spot = 1.0;
+        if (type == 1) {
+            spot = SpotFactor(lightDir, light.direction.xyz, light.innerCone, light.outerCone);
+        }
+
+        // Skip this light before the more expensive calculations if it won't affect the pixel much 
+        if (attenuation * spot < 0.001) {
+            continue;
+        }
+
+        float shadow = 0.0;
+        if (type != 0 && light.shadowIndex != 0xFFFFFFFF) {
+            shadow = CalculateShadow(light, normal, lightDir);
         }
 
         float contributionFactor = spot * attenuation * light.color.a * (1.0 - shadow);
@@ -203,10 +217,13 @@ void main()
         specularTotal += specularContribution;
     }
 
-    vec3 ambient = vec3(0.2) * ambientMap.rgb * SSAO(normal);
+    float depth = texture(uDepthTexture, uv).r;
+    float occlusion = SSAO(ReconstructViewPosition(uv, depth), normal);
+
+    vec3 ambient = vec3(0.3) * ambientMap.rgb * occlusion;
     vec3 diffuse = diffuseTotal * diffuseMap.rgb;
     vec3 specular = specularTotal * ambientMap.rgb;
-    vec3 result = ambient + diffuse + specular;
+    vec3 result = (ambient + diffuse + specular) * constants.baseColor;
 
     outFragColor = vec4(result, ambientMap.a);
 }

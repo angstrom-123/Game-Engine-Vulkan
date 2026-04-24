@@ -1,4 +1,4 @@
-#include "renderBackend.h"
+#include "vulkanBackend.h"
 
 #include <cmath>
 #include <cstdint>
@@ -7,6 +7,7 @@
 
 #include "Component/light.h"
 #include "Component/camera.h"
+#include "Component/mesh.h"
 #include "Component/shadowcaster.h"
 #include "ECS/ecs.h"
 #include "ECS/ecsTypes.h"
@@ -18,7 +19,6 @@
 #include "System/Render/writableTextureArray.h"
 #include "Util/allocator.h"
 #include "Util/logger.h"
-#include "Util/imageLoader.h"
 #include "Component/transform.h"
 #include "Component/material.h"
 #include "Util/profiler.h"
@@ -29,12 +29,19 @@
 #include <vulkan/vulkan_core.h>
 #include <stb/stb_image.h>
 
+#define VMA_IMPLEMENTATION
+#ifdef DEBUG
+    #define VMA_LEAK_LOG_FORMAT(format, ...) fprintf(stderr, format "\n", ##__VA_ARGS__)
+    #define VMA_ASSERT_LEAK(expr) if (!(expr)) { abort(); }
+#endif
+#include <VulkanMemoryAllocator/vk_mem_alloc.h>
+
 // TODO: Subpasses 
 //       - Should optimise some of the horrible transitions I am doing 
 //       - Perhaps the depth pass can be a subpass?
-
-void RenderBackend::Init(GLFWwindow *window, Config& config)
+void VulkanBackend::Init(GLFWwindow *window, Config& config)
 {
+    m_Swapchain = VK_NULL_HANDLE;
     m_PresentMode = config.vsync ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
     m_DrawOrder.reserve(MAX_ENTITIES);
 
@@ -93,19 +100,6 @@ void RenderBackend::Init(GLFWwindow *window, Config& config)
     // Framebuffers
     InitFramebuffers();
 
-    // Shadowmaps are stored in a texture array but are managed differently to these arrays
-    // since these arrays are readonly, and the shadowmap array is writable
-    TextureArraySizes arraySizes = {
-        .color1024 = 128,   // 1024*1024*128*4 = 512 MiB
-        .color2048 = 32,    // 2048*2048*32*4  = 512 MiB
-        .data1024 = 128,    // 1024*1024*128*4 = 512 MiB
-        .data2048 = 32,     // 2048*2048*32*4  = 512 MiB
-    };
-    m_ArrayHandler.Init(m_Device, m_PhysicalDevice, m_GraphicsQueue, m_Submitter, m_Allocator, m_Frames, arraySizes);
-    m_MainDeletionQueue.PushFunction([=, this] {
-        m_ArrayHandler.Cleanup(m_Device, m_Allocator);
-    });
-
     // Set up gpu profiling with vulkan timestamps
 #ifdef PROFILING 
     std::string headings[7] = { "Depth", "Resolve", "Culling", "Shadow", "Opaque", "Translucent", "Total" };
@@ -116,7 +110,7 @@ void RenderBackend::Init(GLFWwindow *window, Config& config)
 
         uint32_t propertyCount = 1;
         VkQueueFamilyProperties graphicsQueueProperties;
-        vkGetPhysicalDeviceQueueFamilyProperties(m_PhysicalDevice, &propertyCount, &graphicsQueueProperties);
+        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &propertyCount, &graphicsQueueProperties);
         if (graphicsQueueProperties.timestampValidBits == 0) {
             ERROR("Graphics queue doesn't support timestamps");
         }
@@ -124,7 +118,7 @@ void RenderBackend::Init(GLFWwindow *window, Config& config)
         abort();
     }
 
-    for (FrameData& frame : m_Frames) {
+    for (FrameData& frame : frames) {
         frame.queryCount = 12;
 
         VkQueryPoolCreateInfo queryPoolInfo = {
@@ -133,41 +127,41 @@ void RenderBackend::Init(GLFWwindow *window, Config& config)
             .queryType = VK_QUERY_TYPE_TIMESTAMP,
             .queryCount = frame.queryCount,
         };
-        vkCreateQueryPool(m_Device, &queryPoolInfo, nullptr, &frame.queryPool);
+        vkCreateQueryPool(device, &queryPoolInfo, nullptr, &frame.queryPool);
 
         frame.queryTimestamps.resize(frame.queryCount);
 
-        m_Submitter.ImmediateSubmit(m_Device, m_GraphicsQueue, [=](VkCommandBuffer commandBuffer) {
+        submitter.ImmediateSubmit(device, graphicsQueue, [=](VkCommandBuffer commandBuffer) {
             vkCmdResetQueryPool(commandBuffer, frame.queryPool, 0, frame.queryTimestamps.size());
         });
 
         m_MainDeletionQueue.PushFunction([=, this] {
-            vkDestroyQueryPool(m_Device, frame.queryPool, nullptr);
+            vkDestroyQueryPool(device, frame.queryPool, nullptr);
         });
     }
 #endif // PROFILING
 }
 
-void RenderBackend::Cleanup() 
+VulkanBackend::~VulkanBackend() 
 {
-    VK_CHECK(vkDeviceWaitIdle(m_Device));
+    VK_CHECK(vkDeviceWaitIdle(device));
 
     m_MainDeletionQueue.Flush();
     m_DynamicDeletionQueue.Flush();
 
-    vmaDestroyAllocator(m_Allocator);
-    vkDestroyDevice(m_Device, nullptr);
+    vmaDestroyAllocator(allocator);
+    vkDestroyDevice(device, nullptr);
     vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr);
     vkb::destroy_debug_utils_messenger(m_Instance, m_DebugMessenger);
     vkDestroyInstance(m_Instance, nullptr);
 }
 
-void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
+void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHandler, std::set<Entity>& entities)
 {
-    PROFILER_PROFILE_SCOPE("RenderBackend::Update");
+    PROFILER_PROFILE_SCOPE("VulkanBackend::Draw");
 
     if (m_ResizeCamera != INVALID_HANDLE) {
-        Resize(ecs, m_ResizeCamera);
+        Resize(ecs);
     }
 
     Camera& cam = ecs->GetComponent<Camera>(camera);
@@ -193,11 +187,10 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
         glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
         CentreExtents centreExtents = CentreExtents(mesh.bounds);
         if (camFrustum.Intersects(centreExtents.WorldSpace(model))) {
-            // Add to draw list (front for opaque, back for transparent)
-            if (ecs->GetComponent<Material>(e).hasTransparency) {
-                m_DrawOrder[backPtr--] = e;
+            if ((ecs->GetComponent<Material>(e).flags & MATERIAL_FLAG_TRANSPARENT) == MATERIAL_FLAG_TRANSPARENT) {
+                m_DrawOrder[backPtr--] = e; // Transparent to back
             } else {
-                m_DrawOrder[frontPtr++] = e;
+                m_DrawOrder[frontPtr++] = e; // Opaque to front
             }
         } else {
             // Keep the entity vector packed while skipping one
@@ -220,14 +213,14 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
 
     uint32_t imageIndex;
     size_t frameIndex = m_FrameNum % FRAMES_IN_FLIGHT;
-    FrameData &frame = m_Frames[frameIndex];
+    FrameData &frame = frames[frameIndex];
 
     { PROFILER_PROFILE_SCOPE("Acquire_Swapchain_Image");
 
-    VK_CHECK(vkWaitForFences(m_Device, 1, &frame.renderFence, VK_TRUE, UINT64_MAX));
-    VK_CHECK(vkResetFences(m_Device, 1, &frame.renderFence));
+    VK_CHECK(vkWaitForFences(device, 1, &frame.renderFence, VK_TRUE, UINT64_MAX));
+    VK_CHECK(vkResetFences(device, 1, &frame.renderFence));
 
-    VkResult acquireErr = vkAcquireNextImageKHR(m_Device, m_Swapchain, UINT64_MAX, frame.acquireSemaphore, nullptr, &imageIndex);
+    VkResult acquireErr = vkAcquireNextImageKHR(device, m_Swapchain, UINT64_MAX, frame.acquireSemaphore, nullptr, &imageIndex);
     if (acquireErr == VK_ERROR_OUT_OF_DATE_KHR || acquireErr == VK_SUBOPTIMAL_KHR) {
         m_ResizeCamera = camera;
         return;
@@ -244,7 +237,7 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
 
     { PROFILER_PROFILE_SCOPE("Wait_For_Image_Fences");
     if (image.flightFence != VK_NULL_HANDLE && image.flightFence != frame.renderFence) {
-        VK_CHECK(vkWaitForFences(m_Device, 1, &image.flightFence, VK_TRUE, UINT64_MAX));
+        VK_CHECK(vkWaitForFences(device, 1, &image.flightFence, VK_TRUE, UINT64_MAX));
     }
     image.flightFence = frame.renderFence;
 
@@ -272,7 +265,7 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
     vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.queryPool, 0);
 #endif
 
-    VkRenderPassBeginInfo depthPassInfo = vkinit::RenderPassBeginInfo(m_DepthRenderPass, image.depthFramebuffer, &depthClear, 1, m_Extent);
+    VkRenderPassBeginInfo depthPassInfo = vkinit::RenderPassBeginInfo(depthRenderPass, image.depthFramebuffer, &depthClear, 1, m_Extent);
     vkCmdBeginRenderPass(frame.commandBuffer, &depthPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_DepthPipeline);
@@ -366,7 +359,7 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
             .pImageInfo = &dstImageInfo,
         },
     };
-    vkUpdateDescriptorSets(m_Device, 2, writes, 0, nullptr);
+    vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
 
 #ifdef PROFILING
     vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, frame.queryPool, 2);
@@ -477,6 +470,7 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
     CameraUniforms cameraUniforms = {
         .view = cam.view,
         .projection = cam.projection,
+        .inverseProjection = glm::inverse(cam.projection),
         .viewPos = camTranslation
     };
     memcpy(frame.lightCulling.uniformBuffer.data, &cameraUniforms, sizeof(CameraUniforms));
@@ -495,7 +489,7 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         .pImageInfo = &depthInfo,
     };
-    vkUpdateDescriptorSets(m_Device, 1, &depthWrite, 0, nullptr);
+    vkUpdateDescriptorSets(device, 1, &depthWrite, 0, nullptr);
     vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_LightCullingPipelineLayout, 0, 1, &frame.lightCulling.descriptorSet, 0, nullptr);
 
     vkCmdDispatch(frame.commandBuffer, m_TilesX, m_TilesY, 1);
@@ -514,68 +508,90 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
 
     // ========================== Shadowcaster pass ============================
 
-    frame.shadowArray.TransitionFromReadableToAttachment(frame.commandBuffer);
+    if (shadowHandler != nullptr) {
+        WritableTextureArray& shadowArray = shadowHandler->shadowArrays[frameIndex];
+        shadowArray.TransitionFromReadableToAttachment(frame.commandBuffer);
 
-    const auto [shadowcasterCount, shadowcasters] = ecs->GetData<Shadowcaster>();
+        const auto [shadowcasterCount, shadowcasters] = ecs->GetData<Shadowcaster>();
 
-    vkCmdSetViewport(frame.commandBuffer, 0, 1, &m_ShadowViewport);
-    vkCmdSetScissor(frame.commandBuffer, 0, 1, &m_ShadowScissor);
+        vkCmdSetViewport(frame.commandBuffer, 0, 1, &m_ShadowViewport);
+        vkCmdSetScissor(frame.commandBuffer, 0, 1, &m_ShadowScissor);
 
 #ifdef PROFILING
-    vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.queryPool, 6);
+        vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, frame.queryPool, 6);
 #endif
 
-    for (uint32_t i = 0; i < shadowcasterCount; i++) {
-        Shadowcaster shadowcaster = shadowcasters[i];
-        ASSERT(shadowcaster.shadowIndex < MAX_SHADOWCASTERS && "Rendering shadowmap for unallocated shadowcaster");
+        for (uint32_t i = 0; i < shadowcasterCount; i++) {
+            Shadowcaster shadowcaster = shadowcasters[i];
+            ASSERT(shadowcaster.shadowIndex < MAX_SHADOWCASTERS && "Rendering shadowmap for unallocated shadowcaster");
 
-        VkFramebuffer framebuffer = frame.shadowArray.GetLayerFramebuffer(shadowcaster.shadowIndex);
-        VkRenderPassBeginInfo shadowPassInfo = vkinit::RenderPassBeginInfo(m_ShadowRenderPass, framebuffer, &depthClear, 1, m_ShadowExtent);
-        vkCmdBeginRenderPass(frame.commandBuffer, &shadowPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+            VkFramebuffer framebuffer = shadowArray.GetLayerFramebuffer(shadowcaster.shadowIndex);
+            VkRenderPassBeginInfo shadowPassInfo = vkinit::RenderPassBeginInfo(shadowRenderPass, framebuffer, &depthClear, 1, m_ShadowExtent);
+            vkCmdBeginRenderPass(frame.commandBuffer, &shadowPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ShadowPipeline);
+            vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ShadowPipeline);
 
-        // Only draw opaque entities to depth buffer from the light's perspective
-        // TODO: Frustum culling on the light's matrix
-        for (const Entity e : entities) {
-            if (ecs->GetComponent<Material>(e).hasTransparency) continue;
+            // Only draw opaque entities to depth buffer from the light's perspective
+            // TODO: Frustum culling on the light's matrix
+            for (const Entity e : entities) {
+                if ((ecs->GetComponent<Material>(e).flags & MATERIAL_FLAG_TRANSPARENT) == MATERIAL_FLAG_TRANSPARENT) {
+                    continue;
+                }
 
-            Mesh& mesh = ecs->GetComponent<Mesh>(e);
-            Transform& transform = ecs->GetComponent<Transform>(e);
-            glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
+                Mesh& mesh = ecs->GetComponent<Mesh>(e);
+                Transform& transform = ecs->GetComponent<Transform>(e);
+                glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
 
-            DepthPushConstants constants = {
-                .model = model,
-                .vp = shadowcaster.projection * shadowcaster.view
-            };
-            vkCmdPushConstants(frame.commandBuffer, m_ShadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(DepthPushConstants), &constants);
-            VkDeviceSize offset = 0;
-            vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offset);
-            vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
+                DepthPushConstants constants = {
+                    .model = model,
+                    .vp = shadowcaster.projection * shadowcaster.view
+                };
+                vkCmdPushConstants(frame.commandBuffer, m_ShadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(DepthPushConstants), &constants);
+                VkDeviceSize offset = 0;
+                vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offset);
+                vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
+            }
+
+            vkCmdEndRenderPass(frame.commandBuffer);
         }
 
-        vkCmdEndRenderPass(frame.commandBuffer);
-    }
+        // Transition any shadowcaster layers that weren't used to shader read only
+        shadowArray.TransitionRemainingLayersToReadable(frame.commandBuffer);
 
-    // Transition any shadowcaster layers that weren't used to shader read only
-    frame.shadowArray.TransitionRemainingLayersToReadable(frame.commandBuffer);
-
-    // Write descriptor set for whole shadowmap array
-    VkDescriptorImageInfo imageInfo = {
-        .sampler = frame.shadowArray.GetSampler(),
-        .imageView = frame.shadowArray.GetView(),
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        // Write descriptor set for whole shadowmap array
+        VkDescriptorImageInfo imageInfo = {
+            .sampler = shadowArray.GetSampler(),
+            .imageView = shadowArray.GetView(),
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+        VkWriteDescriptorSet write = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = frame.textureDescriptorSet,
+            .dstBinding = 1,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &imageInfo
+        };
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    } else {
+        // Write descriptor set for whole shadowmap array
+        VkDescriptorImageInfo imageInfo = {
+            .sampler = m_DefaultShadowArray.GetSampler(),
+            .imageView = m_DefaultShadowArray.GetView(),
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        };
+        VkWriteDescriptorSet write = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = frame.textureDescriptorSet,
+            .dstBinding = 1,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &imageInfo
+        };
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     };
-    VkWriteDescriptorSet write = {
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .pNext = nullptr,
-        .dstSet = frame.textureDescriptorSet,
-        .dstBinding = 1,
-        .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .pImageInfo = &imageInfo
-    };
-    vkUpdateDescriptorSets(m_Device, 1, &write, 0, nullptr);
 
 #ifdef PROFILING
     vkCmdWriteTimestamp(frame.commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, frame.queryPool, 7);
@@ -590,7 +606,7 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
     vkCmdSetViewport(frame.commandBuffer, 0, 1, &m_Viewport);
     vkCmdSetScissor(frame.commandBuffer, 0, 1, &m_Scissor);
 
-    VkRenderPassBeginInfo passInfo = vkinit::RenderPassBeginInfo(m_RenderPass, image.framebuffer, &clearValues[0], 3, m_Extent);
+    VkRenderPassBeginInfo passInfo = vkinit::RenderPassBeginInfo(renderPass, image.framebuffer, &clearValues[0], 3, m_Extent);
     vkCmdBeginRenderPass(frame.commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     // Set uniform vp matrix
@@ -615,6 +631,7 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
 
         PushConstants constants = {
             .model              = model,
+            .baseColor          = material.baseColor,
             .specularExponent   = material.specularExponent,
             .ambientIndex       = (material.ambientTexture.arrayID << 16) | material.ambientTexture.textureID,
             .diffuseIndex       = (material.diffuseTexture.arrayID << 16) | material.diffuseTexture.textureID,
@@ -624,7 +641,9 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
             .tilesY             = m_TilesY,
             .maxTileLights      = MAX_TILE_LIGHTS,
             .screenWidth        = m_Extent.width,
-            .screenHeight       = m_Extent.height
+            .screenHeight       = m_Extent.height,
+            .materialFlags      = material.flags,
+            .shadowTexelSize    = 1.0 / static_cast<float>(SHADOWMAP_RESOLUTION),
         };
         vkCmdPushConstants(frame.commandBuffer, m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &constants);
 
@@ -657,6 +676,7 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
 
         PushConstants constants = {
             .model              = model,
+            .baseColor          = material.baseColor,
             .specularExponent   = material.specularExponent,
             .ambientIndex       = (material.ambientTexture.arrayID << 16) | material.ambientTexture.textureID,
             .diffuseIndex       = (material.diffuseTexture.arrayID << 16) | material.diffuseTexture.textureID,
@@ -666,7 +686,9 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
             .tilesY             = m_TilesY,
             .maxTileLights      = MAX_TILE_LIGHTS,
             .screenWidth        = m_Extent.width,
-            .screenHeight       = m_Extent.height
+            .screenHeight       = m_Extent.height,
+            .materialFlags      = material.flags,
+            .shadowTexelSize    = 1.0 / static_cast<float>(SHADOWMAP_RESOLUTION),
         };
         vkCmdPushConstants(frame.commandBuffer, m_PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(PushConstants), &constants);
 
@@ -691,7 +713,7 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
     VK_CHECK(vkEndCommandBuffer(frame.commandBuffer));
 
 #ifdef PROFILING 
-    vkGetQueryPoolResults(m_Device, frame.queryPool, 0, frame.queryTimestamps.size(), frame.queryTimestamps.size() * sizeof(uint64_t), frame.queryTimestamps.data(), sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
+    vkGetQueryPoolResults(device, frame.queryPool, 0, frame.queryTimestamps.size(), frame.queryTimestamps.size() * sizeof(uint64_t), frame.queryTimestamps.data(), sizeof(uint64_t), VK_QUERY_RESULT_64_BIT);
     float periodNS = m_Properties.limits.timestampPeriod;
 
     float depthNS       = (frame.queryTimestamps[1] - frame.queryTimestamps[0]) * periodNS;
@@ -708,111 +730,34 @@ void RenderBackend::Draw(ECS *ecs, Entity camera, std::set<Entity>& entities)
 
     // ========================== Submit and Present ===========================
 
+    { PROFILER_PROFILE_SCOPE("Submit_And_Present");
+
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo submitInfo = vkinit::SubmitInfo(&frame, &image, &waitStage);
-    VK_CHECK(vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, frame.renderFence));
-
+    VK_CHECK(vkQueueSubmit(graphicsQueue, 1, &submitInfo, frame.renderFence));
     VkPresentInfoKHR presentInfo = vkinit::PresentInfo(&image, &m_Swapchain, &imageIndex);
-    VkResult presentErr = vkQueuePresentKHR(m_GraphicsQueue, &presentInfo);
+    VkResult presentErr = vkQueuePresentKHR(graphicsQueue, &presentInfo);
     if (presentErr == VK_ERROR_OUT_OF_DATE_KHR || presentErr == VK_SUBOPTIMAL_KHR) {
         m_ResizeCamera = camera;
     } else {
         VK_CHECK(presentErr);
     }
 
+    } // PROFILER_PROFILE_SCOPE("Submit_And_Present")
+
     m_FrameNum++;
 }
 
-void RenderBackend::RequestResize(Entity camera)
+void VulkanBackend::RequestResize(Entity camera)
 {
     m_ResizeCamera = camera;
 }
 
-void RenderBackend::AllocateMesh(Mesh& mesh)
+void VulkanBackend::TMP(ECS *ecs)
 {
-    const size_t bufferSize = mesh.vertexCount * sizeof(Vertex);
-
-    // Staging buffer
-    VkBufferCreateInfo stagingBufferInfo = {
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .pNext = nullptr,
-        .size = bufferSize,
-        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT // Only for data transfer, not rendering
-    };
-    VmaAllocationCreateInfo allocInfo = {
-        .usage = VMA_MEMORY_USAGE_CPU_ONLY
-    };
-
-    AllocatedBuffer stagingBuffer;
-    VK_CHECK(vmaCreateBuffer(m_Allocator, &stagingBufferInfo, &allocInfo, &stagingBuffer.buffer, &stagingBuffer.allocation, nullptr));
-
-    vmaMapMemory(m_Allocator, stagingBuffer.allocation, &stagingBuffer.data);
-    memcpy(stagingBuffer.data, mesh.vertices, bufferSize);
-    vmaUnmapMemory(m_Allocator, stagingBuffer.allocation);
-
-    VkBufferCreateInfo vertexBufferInfo = {
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = mesh.vertexCount * sizeof(Vertex),
-        .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT // Data transfer destination
-    };
-
-    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY; // Target buffer is only for the gpu (faster)
-    VK_CHECK(vmaCreateBuffer(m_Allocator, &vertexBufferInfo, &allocInfo, &mesh.vertexBuffer.buffer, &mesh.vertexBuffer.allocation, nullptr));
-
-    // Copy the buffer to the GPU
-    m_Submitter.ImmediateSubmit(m_Device, m_GraphicsQueue, [=](VkCommandBuffer commandBuffer) {
-        VkBufferCopy copy = {
-            .srcOffset = 0,
-            .dstOffset = 0,
-            .size = bufferSize,
-        };
-        vkCmdCopyBuffer(commandBuffer, stagingBuffer.buffer, mesh.vertexBuffer.buffer, 1, &copy);
-    });
-
-    // Clean up mesh and staging buffer
-    delete[] mesh.vertices;
-    vmaDestroyBuffer(m_Allocator, stagingBuffer.buffer, stagingBuffer.allocation);
-
-    m_MainDeletionQueue.PushFunction([=, this] {
-        vmaDestroyBuffer(m_Allocator, mesh.vertexBuffer.buffer, mesh.vertexBuffer.allocation);
-    });
-
-    mesh.allocated = true;
-}
-
-void RenderBackend::AllocateMaterialTextures(const MaterialTextureInfo& info, Material& mat)
-{
-    mat.ambientTexture = (info.ambientTextureData) 
-                       ? m_ArrayHandler.AllocateTexture(m_Device, m_PhysicalDevice, m_GraphicsQueue, m_Submitter, m_Allocator, info.ambientTextureData)
-                       : m_ArrayHandler.GetFallbackTexture(info.ambientTextureData, IMAGE_KIND_COLOR);
-    mat.diffuseTexture = (info.diffuseTextureData) 
-                       ? m_ArrayHandler.AllocateTexture(m_Device, m_PhysicalDevice, m_GraphicsQueue, m_Submitter, m_Allocator, info.diffuseTextureData)
-                       : m_ArrayHandler.GetFallbackTexture(info.diffuseTextureData, IMAGE_KIND_COLOR);
-    mat.normalTexture = (info.normalTextureData) 
-                      ? m_ArrayHandler.AllocateTexture(m_Device, m_PhysicalDevice, m_GraphicsQueue, m_Submitter, m_Allocator, info.normalTextureData)
-                      : m_ArrayHandler.GetFallbackTexture(info.normalTextureData, IMAGE_KIND_NORMAL);
-}
-
-void RenderBackend::AllocateShadowcaster(Light& light, Shadowcaster& shadowcaster)
-{
-    // All frames must have the same index, so we allocate from each and test equality
-    uint32_t index = UINT32_MAX;
-    for (FrameData& frame : m_Frames) {
-        uint32_t frameIndex = frame.shadowArray.Allocate();
-        ASSERT(index == UINT32_MAX || index == frameIndex && "Shadowmap index is different across frames");
-        index = frameIndex;
-    }
-    light.shadowIndex = index; 
-    shadowcaster.shadowIndex = index;
-}
-
-void RenderBackend::Resize(ECS *ecs, Entity camera)
-{
-    PROFILER_PROFILE_SCOPE("RenderBackend::Resize");
-
     // Check if the resize is valid
     VkSurfaceCapabilitiesKHR capabilities;
-    VK_CHECK(m_GetSurfaceCapabilities(m_PhysicalDevice, m_Surface, &capabilities));
+    VK_CHECK(m_GetSurfaceCapabilities(physicalDevice, m_Surface, &capabilities));
 
     uint32_t w = capabilities.currentExtent.width;
     uint32_t h = capabilities.currentExtent.height;
@@ -821,16 +766,10 @@ void RenderBackend::Resize(ECS *ecs, Entity camera)
     }
 
     // Recreate all required structures
-    VK_CHECK(vkDeviceWaitIdle(m_Device));
+    VK_CHECK(vkDeviceWaitIdle(device));
 
-    for (FrameData& frame : m_Frames) {
+    for (FrameData& frame : frames) {
         VK_CHECK(vkResetCommandBuffer(frame.commandBuffer, 0));
-    }
-
-    m_DynamicDeletionQueue.Flush();
-
-    for (SwapchainImageData& image : m_Images) {
-        image.flightFence = VK_NULL_HANDLE;
     }
 
     m_Extent = capabilities.currentExtent;
@@ -838,20 +777,75 @@ void RenderBackend::Resize(ECS *ecs, Entity camera)
     m_Viewport.height = static_cast<float>(m_Extent.height);
     m_Scissor.extent = m_Extent;
 
+    m_DynamicDeletionQueue.Flush();
+
+    for (SwapchainImageData& image : m_Images) {
+        image.flightFence = VK_NULL_HANDLE;
+    }
+
     InitSwapchain();
+    InitSyncStructures();
     InitResolveResources();
     InitLightCullingResources();
     InitFramebuffers();
-    InitSyncStructures();
+}
 
-    Camera& cam = ecs->GetComponent<Camera>(camera);
-    cam.aspect = static_cast<float>(m_Extent.width) / static_cast<float>(m_Extent.height);
-    cam.projection = Camera::VulkanPerspective(cam.fov, cam.aspect, cam.near, cam.far);
+void VulkanBackend::WaitForIdle(VkDevice device)
+{
+    VK_CHECK(vkDeviceWaitIdle(device));
+}
+
+void VulkanBackend::Resize(ECS *ecs)
+{
+    PROFILER_PROFILE_SCOPE("VulkanBackend::Resize");
+
+    // Check if the resize is valid
+    VkSurfaceCapabilitiesKHR capabilities;
+    VK_CHECK(m_GetSurfaceCapabilities(physicalDevice, m_Surface, &capabilities));
+
+    uint32_t w = capabilities.currentExtent.width;
+    uint32_t h = capabilities.currentExtent.height;
+    if (w == 0 || h == 0 || w == UINT32_MAX || h == UINT32_MAX || (w == m_Extent.width && h == m_Extent.height)) {
+        return;
+    }
+
+    // Recreate all required structures
+    VK_CHECK(vkDeviceWaitIdle(device));
+
+    for (FrameData& frame : frames) {
+        VK_CHECK(vkResetCommandBuffer(frame.commandBuffer, 0));
+    }
+
+    m_Extent = capabilities.currentExtent;
+    m_Viewport.width = static_cast<float>(m_Extent.width);
+    m_Viewport.height = static_cast<float>(m_Extent.height);
+    m_Scissor.extent = m_Extent;
+
+    m_DynamicDeletionQueue.Flush();
+
+    for (SwapchainImageData& image : m_Images) {
+        image.flightFence = VK_NULL_HANDLE;
+    }
+
+    InitSwapchain();
+    InitSyncStructures();
+    InitResolveResources();
+    InitLightCullingResources();
+    InitFramebuffers();
+
+    Camera& cam = ecs->GetComponent<Camera>(m_ResizeCamera);
+    if (cam.perspective) {
+        float aspect = static_cast<float>(m_Extent.width) / static_cast<float>(m_Extent.height);
+        cam.projection = Camera::VulkanPerspective(cam.fov, aspect, cam.near, cam.far);
+    } else {
+        glm::vec2 dimensions = (glm::vec2(m_Extent.width, m_Extent.height) * cam.scale) / 2.0f;
+        cam.projection = Camera::VulkanOrthographic(-dimensions.x, dimensions.x, -dimensions.y, dimensions.y, cam.near, cam.far);
+    }
 
     m_ResizeCamera = INVALID_HANDLE;
 }
 
-void RenderBackend::InitVulkan(GLFWwindow *window)
+void VulkanBackend::InitVulkan(GLFWwindow *window)
 {
     vkb::InstanceBuilder builder;
     auto builtInstance = builder.set_app_name("Renderer")
@@ -880,34 +874,34 @@ void RenderBackend::InitVulkan(GLFWwindow *window)
     VkPhysicalDeviceFeatures features = {
         .sampleRateShading = VK_TRUE
     };
-    vkb::PhysicalDevice physicalDevice = selector.set_minimum_version(1, 1)
-                                                 .set_surface(m_Surface)
-                                                 .set_required_features(features)
-                                                 .select()
-                                                 .value();
-    vkb::DeviceBuilder deviceBuilder { physicalDevice };
+    vkb::PhysicalDevice vkbPhysicalDevice = selector.set_minimum_version(1, 1)
+                                                    .set_surface(m_Surface)
+                                                    .set_required_features(features)
+                                                    .select()
+                                                    .value();
+    vkb::DeviceBuilder deviceBuilder { vkbPhysicalDevice };
     vkb::Device vkbDevice = deviceBuilder.build().value();
 
-    m_Device = vkbDevice.device;
-    m_PhysicalDevice = vkbDevice.physical_device;
-    vkGetPhysicalDeviceProperties(m_PhysicalDevice, &m_Properties);
+    device = vkbDevice.device;
+    physicalDevice = vkbDevice.physical_device;
+    vkGetPhysicalDeviceProperties(physicalDevice, &m_Properties);
 
-    m_GraphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
-    m_GraphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
+    graphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
+    graphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
 
-    INFO("Selected physical device: " << physicalDevice.name);
+    INFO("Selected physical device: " << vkbPhysicalDevice.name);
 
     VmaAllocatorCreateInfo allocInfo = {
-        .physicalDevice = m_PhysicalDevice,
-        .device = m_Device,
+        .physicalDevice = physicalDevice,
+        .device = device,
         .instance = m_Instance,
     };
-    vmaCreateAllocator(&allocInfo, &m_Allocator);
+    vmaCreateAllocator(&allocInfo, &allocator);
 
     m_GetSurfaceCapabilities = (PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR) vkGetInstanceProcAddr(m_Instance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
 }
 
-void RenderBackend::InitMSAA(uint64_t requestedSamples)
+void VulkanBackend::InitMSAA(uint64_t requestedSamples)
 {
     VkSampleCountFlags available = m_Properties.limits.framebufferColorSampleCounts & m_Properties.limits.framebufferDepthSampleCounts;
 
@@ -927,9 +921,9 @@ void RenderBackend::InitMSAA(uint64_t requestedSamples)
     INFO("Using MSAA samples: " << m_MSAASamples);
 }
 
-void RenderBackend::InitSwapchain()
+void VulkanBackend::InitSwapchain()
 {
-    vkb::SwapchainBuilder builder { m_PhysicalDevice, m_Device, m_Surface };
+    vkb::SwapchainBuilder builder { physicalDevice, device, m_Surface };
     vkb::Swapchain vkbSwapchain = builder.use_default_format_selection()
                                          .set_desired_present_mode(m_PresentMode)
                                          .set_desired_min_image_count(3)
@@ -944,6 +938,10 @@ void RenderBackend::InitSwapchain()
     m_Swapchain = vkbSwapchain.swapchain;
     m_SwapchainFormat = vkbSwapchain.image_format;
 
+    m_DynamicDeletionQueue.PushFunction([=, this] { 
+        vkDestroySwapchainKHR(device, m_Swapchain, nullptr); 
+    });
+
     std::vector<VkImage> swapchainImages = vkbSwapchain.get_images().value();
     std::vector<VkImageView> swapchainViews = vkbSwapchain.get_image_views().value();
     m_Images = std::vector<SwapchainImageData>(swapchainImages.size());
@@ -952,15 +950,11 @@ void RenderBackend::InitSwapchain()
         m_Images[i].view = swapchainViews[i];
 
         m_DynamicDeletionQueue.PushFunction([=, this] { 
-            vkDestroyImageView(m_Device, m_Images[i].view, nullptr); 
+            vkDestroyImageView(device, m_Images[i].view, nullptr); 
         });
     }
 
     INFO("Using swapchain images: " << m_Images.size());
-
-    m_DynamicDeletionQueue.PushFunction([=, this] { 
-        vkDestroySwapchainKHR(m_Device, m_Swapchain, nullptr); 
-    });
 
     VkExtent3D depthExtent = {
         .width = m_Extent.width,
@@ -976,14 +970,15 @@ void RenderBackend::InitSwapchain()
     };
 
     for (SwapchainImageData& image : m_Images) {
-        vmaCreateImage(m_Allocator, &depthImageInfo, &depthImageAllocInfo, &image.depthImage.image, &image.depthImage.allocation, nullptr);
+        vmaCreateImage(allocator, &depthImageInfo, &depthImageAllocInfo, &image.depthImage.image, &image.depthImage.allocation, nullptr);
+        VMA_NAME_ALLOCATION(allocator, image.depthImage.allocation, "Swapchain_Depth_Image");
 
         VkImageViewCreateInfo depthViewInfo = vkinit::ImageViewCreateInfo(VK_FORMAT_D32_SFLOAT, image.depthImage.image, VK_IMAGE_ASPECT_DEPTH_BIT);
-        VK_CHECK(vkCreateImageView(m_Device, &depthViewInfo, nullptr, &image.depthView));
+        VK_CHECK(vkCreateImageView(device, &depthViewInfo, nullptr, &image.depthView));
 
         m_DynamicDeletionQueue.PushFunction([=, this] {
-            vkDestroyImageView(m_Device, image.depthView, nullptr);
-            vmaDestroyImage(m_Allocator, image.depthImage.image, image.depthImage.allocation);
+            vkDestroyImageView(device, image.depthView, nullptr);
+            vmaDestroyImage(allocator, image.depthImage.image, image.depthImage.allocation);
         });
     }
 
@@ -1000,40 +995,41 @@ void RenderBackend::InitSwapchain()
         .requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT
     };
     for (SwapchainImageData& image : m_Images) {
-        vmaCreateImage(m_Allocator, &msaaImageInfo, &msaaImageAllocInfo, &image.msaaColorImage.image, &image.msaaColorImage.allocation, nullptr);
+        vmaCreateImage(allocator, &msaaImageInfo, &msaaImageAllocInfo, &image.msaaColorImage.image, &image.msaaColorImage.allocation, nullptr);
+        VMA_NAME_ALLOCATION(allocator, image.depthImage.allocation, "Swapchain_MSAA_Image");
 
         VkImageViewCreateInfo msaaViewInfo = vkinit::ImageViewCreateInfo(m_SwapchainFormat, image.msaaColorImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
-        VK_CHECK(vkCreateImageView(m_Device, &msaaViewInfo, nullptr, &image.msaaColorView));
+        VK_CHECK(vkCreateImageView(device, &msaaViewInfo, nullptr, &image.msaaColorView));
 
         m_DynamicDeletionQueue.PushFunction([=, this] {
-            vkDestroyImageView(m_Device, image.msaaColorView, nullptr);
-            vmaDestroyImage(m_Allocator, image.msaaColorImage.image, image.msaaColorImage.allocation);
+            vkDestroyImageView(device, image.msaaColorView, nullptr);
+            vmaDestroyImage(allocator, image.msaaColorImage.image, image.msaaColorImage.allocation);
         });
     }
 }
 
-void RenderBackend::InitCommands()
+void VulkanBackend::InitCommands()
 {
-    VkCommandPoolCreateInfo createInfo = vkinit::CommandPoolCreateInfo(m_GraphicsQueueFamily);
+    VkCommandPoolCreateInfo createInfo = vkinit::CommandPoolCreateInfo(graphicsQueueFamily);
 
-    for (FrameData& frame : m_Frames) {
-        VK_CHECK(vkCreateCommandPool(m_Device, &createInfo, nullptr, &frame.commandPool));
+    for (FrameData& frame : frames) {
+        VK_CHECK(vkCreateCommandPool(device, &createInfo, nullptr, &frame.commandPool));
 
         VkCommandBufferAllocateInfo alloc_info = vkinit::CommandBufferAllocateInfo(frame.commandPool);
-        VK_CHECK(vkAllocateCommandBuffers(m_Device, &alloc_info, &frame.commandBuffer));
+        VK_CHECK(vkAllocateCommandBuffers(device, &alloc_info, &frame.commandBuffer));
 
         m_MainDeletionQueue.PushFunction([=, this] { 
-            vkDestroyCommandPool(m_Device, frame.commandPool, nullptr); 
+            vkDestroyCommandPool(device, frame.commandPool, nullptr); 
         });
     }
 
-    m_Submitter.Init(m_Device, m_GraphicsQueueFamily);
+    submitter.Init(device, graphicsQueueFamily);
     m_MainDeletionQueue.PushFunction([=, this] {
-        m_Submitter.Cleanup(m_Device);
+        submitter.Cleanup(device);
     });
 }
 
-void RenderBackend::InitMainRenderPass()
+void VulkanBackend::InitMainRenderPass()
 {
     VkAttachmentDescription colorAttachment = {
         .format = m_SwapchainFormat,
@@ -1098,53 +1094,44 @@ void RenderBackend::InitMainRenderPass()
         .pSubpasses = &subpass,
     };
 
-    VK_CHECK(vkCreateRenderPass(m_Device, &info, nullptr, &m_RenderPass));
+    VK_CHECK(vkCreateRenderPass(device, &info, nullptr, &renderPass));
 
     m_MainDeletionQueue.PushFunction([=, this] { 
-        vkDestroyRenderPass(m_Device, m_RenderPass, nullptr); 
+        vkDestroyRenderPass(device, renderPass, nullptr); 
     });
 }
 
-void RenderBackend::InitFramebuffers()
+void VulkanBackend::InitFramebuffers()
 {
-    VkFramebufferCreateInfo info = vkinit::FramebufferCreateInfo(m_RenderPass, m_Extent);
-    VkFramebufferCreateInfo depthInfo = vkinit::FramebufferCreateInfo(m_DepthRenderPass, m_Extent);
+    VkFramebufferCreateInfo info = vkinit::FramebufferCreateInfo(renderPass, m_Extent);
+    VkFramebufferCreateInfo depthInfo = vkinit::FramebufferCreateInfo(depthRenderPass, m_Extent);
 
     for (SwapchainImageData& image : m_Images) {
         VkImageView attachments[3] = { image.msaaColorView, image.view, image.depthView };
         info.attachmentCount = 3;
         info.pAttachments = &attachments[0];
-        VK_CHECK(vkCreateFramebuffer(m_Device, &info, nullptr, &image.framebuffer));
+        VK_CHECK(vkCreateFramebuffer(device, &info, nullptr, &image.framebuffer));
 
         depthInfo.attachmentCount = 1;
         depthInfo.pAttachments = &image.depthView;
-        VK_CHECK(vkCreateFramebuffer(m_Device, &depthInfo, nullptr, &image.depthFramebuffer));
+        VK_CHECK(vkCreateFramebuffer(device, &depthInfo, nullptr, &image.depthFramebuffer));
 
         m_DynamicDeletionQueue.PushFunction([=, this] { 
-            vkDestroyFramebuffer(m_Device, image.framebuffer, nullptr); 
-            vkDestroyFramebuffer(m_Device, image.depthFramebuffer, nullptr); 
+            vkDestroyFramebuffer(device, image.framebuffer, nullptr); 
+            vkDestroyFramebuffer(device, image.depthFramebuffer, nullptr); 
         });
     }
 }
 
-void RenderBackend::InitShadowResources()
+void VulkanBackend::InitShadowResources()
 {
-    WritableTextureArrayCreateInfo info = {
-        .resolution = SHADOWMAP_RESOLUTION,
-        .size = MAX_SHADOWCASTERS,
-        .format = VK_FORMAT_D32_SFLOAT,
-        .useShadowSampler = true
-    };
-
-    for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
-        m_Frames[i].shadowArray.Init(m_Device, m_GraphicsQueue, m_ShadowRenderPass, m_Submitter, m_Allocator, info);
-        m_MainDeletionQueue.PushFunction([=, this] {
-            m_Frames[i].shadowArray.Cleanup(m_Device, m_Allocator);
-        });
-    };
+    m_DefaultShadowArray.Init(this, shadowRenderPass, 1, MAX_SHADOWCASTERS, VK_FORMAT_D32_SFLOAT, true);
+    m_MainDeletionQueue.PushFunction([this] {
+        m_DefaultShadowArray.Cleanup(device, allocator);
+    });
 }
 
-void RenderBackend::InitResolveResources()
+void VulkanBackend::InitResolveResources()
 {
     VkExtent3D extent = { m_Extent.width, m_Extent.height, 1 };
     VkImageCreateInfo imageInfo = vkinit::ImageCreateInfo(VK_FORMAT_R32_SFLOAT, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, extent);
@@ -1153,19 +1140,20 @@ void RenderBackend::InitResolveResources()
     };
 
     for (SwapchainImageData& image : m_Images) {
-        vmaCreateImage(m_Allocator, &imageInfo, &allocInfo, &image.resolvedDepthImage.image, &image.resolvedDepthImage.allocation, nullptr);
+        vmaCreateImage(allocator, &imageInfo, &allocInfo, &image.resolvedDepthImage.image, &image.resolvedDepthImage.allocation, nullptr);
+        VMA_NAME_ALLOCATION(allocator, image.depthImage.allocation, "Swapchain_Resolved_Depth_Image");
 
         VkImageViewCreateInfo viewInfo = vkinit::ImageViewCreateInfo(VK_FORMAT_R32_SFLOAT, image.resolvedDepthImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
-        VK_CHECK(vkCreateImageView(m_Device, &viewInfo, nullptr, &image.resolvedDepthView));
+        VK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &image.resolvedDepthView));
 
         m_DynamicDeletionQueue.PushFunction([=, this] {
-            vkDestroyImageView(m_Device, image.resolvedDepthView, nullptr);
-            vmaDestroyImage(m_Allocator, image.resolvedDepthImage.image, image.resolvedDepthImage.allocation);
+            vkDestroyImageView(device, image.resolvedDepthView, nullptr);
+            vmaDestroyImage(allocator, image.resolvedDepthImage.image, image.resolvedDepthImage.allocation);
         });
     }
 }
 
-void RenderBackend::InitLightCullingDescriptor()
+void VulkanBackend::InitLightCullingDescriptor()
 {
     VkSamplerCreateInfo samplerInfo = {
         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -1178,7 +1166,7 @@ void RenderBackend::InitLightCullingDescriptor()
         .compareEnable = VK_FALSE,
         .unnormalizedCoordinates = VK_FALSE
     };
-    VK_CHECK(vkCreateSampler(m_Device, &samplerInfo, nullptr, &m_DepthSampler));
+    VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_DepthSampler));
 
     VkDescriptorSetLayoutBinding bindings[5];
     bindings[0] = {
@@ -1208,11 +1196,11 @@ void RenderBackend::InitLightCullingDescriptor()
         .bindingCount = 5,
         .pBindings = bindings,
     };
-    VK_CHECK(vkCreateDescriptorSetLayout(m_Device, &createInfo, nullptr, &m_LightCullingDescriptorLayout));
+    VK_CHECK(vkCreateDescriptorSetLayout(device, &createInfo, nullptr, &m_LightCullingDescriptorLayout));
 
     m_MainDeletionQueue.PushFunction([=, this] {
-        vkDestroySampler(m_Device, m_DepthSampler, nullptr);
-        vkDestroyDescriptorSetLayout(m_Device, m_LightCullingDescriptorLayout, nullptr);
+        vkDestroySampler(device, m_DepthSampler, nullptr);
+        vkDestroyDescriptorSetLayout(device, m_LightCullingDescriptorLayout, nullptr);
     });
 
     VkBufferCreateInfo bufferInfo = {
@@ -1224,11 +1212,12 @@ void RenderBackend::InitLightCullingDescriptor()
     VmaAllocationCreateInfo allocInfo = {
         .usage = VMA_MEMORY_USAGE_CPU_TO_GPU
     };
-    for (FrameData& frame : m_Frames) {
+    for (FrameData& frame : frames) {
         LightCullingData& lc = frame.lightCulling;
 
-        VK_CHECK(vmaCreateBuffer(m_Allocator, &bufferInfo, &allocInfo, &lc.uniformBuffer.buffer, &lc.uniformBuffer.allocation, nullptr));
-        vmaMapMemory(m_Allocator, lc.uniformBuffer.allocation, &lc.uniformBuffer.data);
+        vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &lc.uniformBuffer.buffer, &lc.uniformBuffer.allocation, nullptr);
+        VMA_NAME_ALLOCATION(allocator, lc.uniformBuffer.allocation, "Light_Culling_Uniform_Buffer");
+        vmaMapMemory(allocator, lc.uniformBuffer.allocation, &lc.uniformBuffer.data);
 
         // Descriptor pool
         VkDescriptorPoolSize poolSizes[3] = {
@@ -1245,7 +1234,7 @@ void RenderBackend::InitLightCullingDescriptor()
         };
 
         VkDescriptorPool pool;
-        VK_CHECK(vkCreateDescriptorPool(m_Device, &poolInfo, nullptr, &pool));
+        VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &pool));
         VkDescriptorSetAllocateInfo descriptorAllocInfo = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = nullptr,
@@ -1253,7 +1242,7 @@ void RenderBackend::InitLightCullingDescriptor()
             .descriptorSetCount = 1,
             .pSetLayouts = &m_LightCullingDescriptorLayout
         };
-        vkAllocateDescriptorSets(m_Device, &descriptorAllocInfo, &lc.descriptorSet);
+        vkAllocateDescriptorSets(device, &descriptorAllocInfo, &lc.descriptorSet);
 
         VkDescriptorBufferInfo descriptorBufferInfo = {
             .buffer = lc.uniformBuffer.buffer,
@@ -1269,17 +1258,17 @@ void RenderBackend::InitLightCullingDescriptor()
             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             .pBufferInfo = &descriptorBufferInfo,
         };
-        vkUpdateDescriptorSets(m_Device, 1, &write, 0, nullptr);
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
 
         m_MainDeletionQueue.PushFunction([=, this] {
-            vmaUnmapMemory(m_Allocator, lc.uniformBuffer.allocation);
-            vmaDestroyBuffer(m_Allocator, lc.uniformBuffer.buffer, lc.uniformBuffer.allocation);
-            vkDestroyDescriptorPool(m_Device, pool, nullptr);
+            vmaUnmapMemory(allocator, lc.uniformBuffer.allocation);
+            vmaDestroyBuffer(allocator, lc.uniformBuffer.buffer, lc.uniformBuffer.allocation);
+            vkDestroyDescriptorPool(device, pool, nullptr);
         });
     }
 }
 
-void RenderBackend::InitResolveDescriptor()
+void VulkanBackend::InitResolveDescriptor()
 {
     VkDescriptorSetLayoutBinding bindings[2] = {
         {
@@ -1302,13 +1291,13 @@ void RenderBackend::InitResolveDescriptor()
         .bindingCount = 2,
         .pBindings = bindings,
     };
-    VK_CHECK(vkCreateDescriptorSetLayout(m_Device, &createInfo, nullptr, &m_ResolveDescriptorLayout));
+    VK_CHECK(vkCreateDescriptorSetLayout(device, &createInfo, nullptr, &m_ResolveDescriptorLayout));
 
     m_MainDeletionQueue.PushFunction([=, this] {
-        vkDestroyDescriptorSetLayout(m_Device, m_ResolveDescriptorLayout, nullptr);
+        vkDestroyDescriptorSetLayout(device, m_ResolveDescriptorLayout, nullptr);
     });
 
-    for (FrameData& frame : m_Frames) {
+    for (FrameData& frame : frames) {
         // Descriptor pool
         VkDescriptorPoolSize poolSizes[2] = {
             { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1 },
@@ -1323,7 +1312,7 @@ void RenderBackend::InitResolveDescriptor()
         };
 
         VkDescriptorPool pool;
-        VK_CHECK(vkCreateDescriptorPool(m_Device, &poolInfo, nullptr, &pool));
+        VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &pool));
         VkDescriptorSetAllocateInfo descriptorAllocInfo = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = nullptr,
@@ -1331,15 +1320,15 @@ void RenderBackend::InitResolveDescriptor()
             .descriptorSetCount = 1,
             .pSetLayouts = &m_ResolveDescriptorLayout
         };
-        vkAllocateDescriptorSets(m_Device, &descriptorAllocInfo, &frame.resolveDescriptorSet);
+        vkAllocateDescriptorSets(device, &descriptorAllocInfo, &frame.resolveDescriptorSet);
 
         m_MainDeletionQueue.PushFunction([=, this] {
-            vkDestroyDescriptorPool(m_Device, pool, nullptr);
+            vkDestroyDescriptorPool(device, pool, nullptr);
         });
     }
 }
 
-void RenderBackend::InitLightCullingResources()
+void VulkanBackend::InitLightCullingResources()
 {
     m_TilesX = (m_Extent.width + TILE_SIZE - 1) / TILE_SIZE;
     m_TilesY = (m_Extent.height + TILE_SIZE - 1) / TILE_SIZE;
@@ -1348,7 +1337,7 @@ void RenderBackend::InitLightCullingResources()
     uint32_t indexCount = tileCount * MAX_TILE_LIGHTS;
     INFO("Light culling tiles: " << m_TilesX << "x" << m_TilesY);
 
-    for (FrameData& frame : m_Frames) {
+    for (FrameData& frame : frames) {
         LightCullingData& lc = frame.lightCulling;
 
         // Light buffer
@@ -1361,8 +1350,9 @@ void RenderBackend::InitLightCullingResources()
         VmaAllocationCreateInfo allocInfo = {
             .usage = VMA_MEMORY_USAGE_CPU_TO_GPU
         };
-        VK_CHECK(vmaCreateBuffer(m_Allocator, &bufferInfo, &allocInfo, &lc.lightBuffer.buffer, &lc.lightBuffer.allocation, nullptr));
-        vmaMapMemory(m_Allocator, lc.lightBuffer.allocation, &lc.lightBuffer.data);
+        vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &lc.lightBuffer.buffer, &lc.lightBuffer.allocation, nullptr);
+        VMA_NAME_ALLOCATION(allocator, lc.uniformBuffer.allocation, "Light_Culling_Light_Buffer");
+        vmaMapMemory(allocator, lc.lightBuffer.allocation, &lc.lightBuffer.data);
         VkDescriptorBufferInfo lightBufferInfo = {
             .buffer = lc.lightBuffer.buffer,
             .offset = 0,
@@ -1371,7 +1361,8 @@ void RenderBackend::InitLightCullingResources()
 
         // Tile light indices
         bufferInfo.size = indexCount * sizeof(uint32_t);
-        VK_CHECK(vmaCreateBuffer(m_Allocator, &bufferInfo, &allocInfo, &lc.lightIndices.buffer, &lc.lightIndices.allocation, nullptr));
+        vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &lc.lightIndices.buffer, &lc.lightIndices.allocation, nullptr);
+        VMA_NAME_ALLOCATION(allocator, lc.uniformBuffer.allocation, "Light_Culling_Light_Indices_Buffer");
         VkDescriptorBufferInfo lightIndicesInfo = {
             .buffer = lc.lightIndices.buffer,
             .offset = 0,
@@ -1380,7 +1371,8 @@ void RenderBackend::InitLightCullingResources()
 
         // Tile light index counts
         bufferInfo.size = tileCount * sizeof(uint32_t);
-        VK_CHECK(vmaCreateBuffer(m_Allocator, &bufferInfo, &allocInfo, &lc.tileCounts.buffer, &lc.tileCounts.allocation, nullptr));
+        vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &lc.tileCounts.buffer, &lc.tileCounts.allocation, nullptr);
+        VMA_NAME_ALLOCATION(allocator, lc.uniformBuffer.allocation, "Light_Culling_Light_Tile_Counts_Buffer");
         VkDescriptorBufferInfo tileCountsInfo = {
             .buffer = lc.tileCounts.buffer,
             .offset = 0,
@@ -1416,19 +1408,19 @@ void RenderBackend::InitLightCullingResources()
                 .pBufferInfo = &tileCountsInfo,
             },
         };
-        vkUpdateDescriptorSets(m_Device, 3, writes, 0, nullptr);
+        vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
 
         m_DynamicDeletionQueue.PushFunction([=, this] {
-            vmaUnmapMemory(m_Allocator, frame.lightCulling.lightBuffer.allocation);
-            vmaDestroyBuffer(m_Allocator, lc.lightBuffer.buffer, lc.lightBuffer.allocation);
-            vmaDestroyBuffer(m_Allocator, lc.lightIndices.buffer, lc.lightIndices.allocation);
-            vmaDestroyBuffer(m_Allocator, lc.tileCounts.buffer, lc.tileCounts.allocation);
+            vmaUnmapMemory(allocator, frame.lightCulling.lightBuffer.allocation);
+            vmaDestroyBuffer(allocator, lc.lightBuffer.buffer, lc.lightBuffer.allocation);
+            vmaDestroyBuffer(allocator, lc.lightIndices.buffer, lc.lightIndices.allocation);
+            vmaDestroyBuffer(allocator, lc.tileCounts.buffer, lc.tileCounts.allocation);
         });
     }
 }
 
 // NOTE: Shadow render pass and pipeline is same as depth but with MSAA disabled
-void RenderBackend::InitShadowRenderPass()
+void VulkanBackend::InitShadowRenderPass()
 {
     VkAttachmentDescription depthAttachment = {
         .format = VK_FORMAT_D32_SFLOAT,
@@ -1457,14 +1449,14 @@ void RenderBackend::InitShadowRenderPass()
         .pSubpasses = &subpass,
     };
 
-    VK_CHECK(vkCreateRenderPass(m_Device, &info, nullptr, &m_ShadowRenderPass));
+    VK_CHECK(vkCreateRenderPass(device, &info, nullptr, &shadowRenderPass));
 
     m_MainDeletionQueue.PushFunction([=, this] { 
-        vkDestroyRenderPass(m_Device, m_ShadowRenderPass, nullptr); 
+        vkDestroyRenderPass(device, shadowRenderPass, nullptr); 
     });
 }
 
-void RenderBackend::InitShadowPipeline()
+void VulkanBackend::InitShadowPipeline()
 {
     VkPushConstantRange constantRange = {
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
@@ -1472,7 +1464,7 @@ void RenderBackend::InitShadowPipeline()
         .size = sizeof(DepthPushConstants),
     };
     VkPipelineLayoutCreateInfo pipelineInfo = vkinit::LayoutCreateInfo(&constantRange);
-    VK_CHECK(vkCreatePipelineLayout(m_Device, &pipelineInfo, nullptr, &m_ShadowPipelineLayout)); 
+    VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_ShadowPipelineLayout)); 
 
     PipelineBuilder builder;
 
@@ -1494,18 +1486,18 @@ void RenderBackend::InitShadowPipeline()
            .SetDepthStencil(vkinit::DepthStencilStateCreateInfo(true, true, VK_COMPARE_OP_LESS_OR_EQUAL))
            .SetPipelineLayout(m_ShadowPipelineLayout);
 
-    m_ShadowPipeline = builder.BuildPipeline(m_Device, m_ShadowRenderPass, m_ShadowViewport, m_ShadowScissor);
+    m_ShadowPipeline = builder.BuildPipeline(device, shadowRenderPass, m_ShadowViewport, m_ShadowScissor);
 
-    vkDestroyShaderModule(m_Device, vert, nullptr);
-    vkDestroyShaderModule(m_Device, frag, nullptr);
+    vkDestroyShaderModule(device, vert, nullptr);
+    vkDestroyShaderModule(device, frag, nullptr);
 
     m_MainDeletionQueue.PushFunction([=, this] { 
-        vkDestroyPipelineLayout(m_Device, m_ShadowPipelineLayout, nullptr); 
-        vkDestroyPipeline(m_Device, m_ShadowPipeline, nullptr); 
+        vkDestroyPipelineLayout(device, m_ShadowPipelineLayout, nullptr); 
+        vkDestroyPipeline(device, m_ShadowPipeline, nullptr); 
     });
 }
 
-void RenderBackend::InitDepthRenderPass()
+void VulkanBackend::InitDepthRenderPass()
 {
     VkAttachmentDescription depthAttachment = {
         .format = VK_FORMAT_D32_SFLOAT,
@@ -1536,14 +1528,14 @@ void RenderBackend::InitDepthRenderPass()
         .pSubpasses = &subpass,
     };
 
-    VK_CHECK(vkCreateRenderPass(m_Device, &info, nullptr, &m_DepthRenderPass));
+    VK_CHECK(vkCreateRenderPass(device, &info, nullptr, &depthRenderPass));
 
     m_MainDeletionQueue.PushFunction([=, this] { 
-        vkDestroyRenderPass(m_Device, m_DepthRenderPass, nullptr); 
+        vkDestroyRenderPass(device, depthRenderPass, nullptr); 
     });
 }
 
-void RenderBackend::InitDepthPipeline()
+void VulkanBackend::InitDepthPipeline()
 {
     VkPushConstantRange constantRange = {
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
@@ -1551,7 +1543,7 @@ void RenderBackend::InitDepthPipeline()
         .size = sizeof(DepthPushConstants),
     };
     VkPipelineLayoutCreateInfo pipelineInfo = vkinit::LayoutCreateInfo(&constantRange);
-    VK_CHECK(vkCreatePipelineLayout(m_Device, &pipelineInfo, nullptr, &m_DepthPipelineLayout)); 
+    VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_DepthPipelineLayout)); 
 
     PipelineBuilder builder;
 
@@ -1571,18 +1563,18 @@ void RenderBackend::InitDepthPipeline()
            .SetDepthStencil(vkinit::DepthStencilStateCreateInfo(true, true, VK_COMPARE_OP_LESS_OR_EQUAL))
            .SetPipelineLayout(m_DepthPipelineLayout);
 
-    m_DepthPipeline = builder.BuildPipeline(m_Device, m_DepthRenderPass, m_Viewport, m_Scissor);
+    m_DepthPipeline = builder.BuildPipeline(device, depthRenderPass, m_Viewport, m_Scissor);
 
-    vkDestroyShaderModule(m_Device, vert, nullptr);
-    vkDestroyShaderModule(m_Device, frag, nullptr);
+    vkDestroyShaderModule(device, vert, nullptr);
+    vkDestroyShaderModule(device, frag, nullptr);
 
     m_MainDeletionQueue.PushFunction([=, this] { 
-        vkDestroyPipelineLayout(m_Device, m_DepthPipelineLayout, nullptr); 
-        vkDestroyPipeline(m_Device, m_DepthPipeline, nullptr); 
+        vkDestroyPipelineLayout(device, m_DepthPipelineLayout, nullptr); 
+        vkDestroyPipeline(device, m_DepthPipeline, nullptr); 
     });
 }
 
-void RenderBackend::InitLightCullingPipeline()
+void VulkanBackend::InitLightCullingPipeline()
 {
     // Pipeline
     VkPushConstantRange constantRange = {
@@ -1593,7 +1585,7 @@ void RenderBackend::InitLightCullingPipeline()
     VkPipelineLayoutCreateInfo pipelineInfo = vkinit::LayoutCreateInfo(&constantRange);
     pipelineInfo.setLayoutCount = 1;
     pipelineInfo.pSetLayouts = &m_LightCullingDescriptorLayout;
-    VK_CHECK(vkCreatePipelineLayout(m_Device, &pipelineInfo, nullptr, &m_LightCullingPipelineLayout)); 
+    VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_LightCullingPipelineLayout)); 
 
     PipelineBuilder builder;
 
@@ -1608,23 +1600,23 @@ void RenderBackend::InitLightCullingPipeline()
         .stage = stage,
         .layout = m_LightCullingPipelineLayout
     };
-    VK_CHECK(vkCreateComputePipelines(m_Device, VK_NULL_HANDLE, 1, &computeInfo, nullptr, &m_LightCullingPipeline));
+    VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &computeInfo, nullptr, &m_LightCullingPipeline));
 
-    vkDestroyShaderModule(m_Device, comp, nullptr);
+    vkDestroyShaderModule(device, comp, nullptr);
 
     m_MainDeletionQueue.PushFunction([=, this] { 
-        vkDestroyPipelineLayout(m_Device, m_LightCullingPipelineLayout, nullptr); 
-        vkDestroyPipeline(m_Device, m_LightCullingPipeline, nullptr); 
+        vkDestroyPipelineLayout(device, m_LightCullingPipelineLayout, nullptr); 
+        vkDestroyPipeline(device, m_LightCullingPipeline, nullptr); 
     });
 }
 
-void RenderBackend::InitResolvePipeline()
+void VulkanBackend::InitResolvePipeline()
 {
     // Pipeline
     VkPipelineLayoutCreateInfo pipelineInfo = vkinit::LayoutCreateInfo(nullptr);
     pipelineInfo.setLayoutCount = 1;
     pipelineInfo.pSetLayouts = &m_ResolveDescriptorLayout;
-    VK_CHECK(vkCreatePipelineLayout(m_Device, &pipelineInfo, nullptr, &m_ResolvePipelineLayout)); 
+    VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_ResolvePipelineLayout)); 
 
     PipelineBuilder builder;
 
@@ -1639,42 +1631,42 @@ void RenderBackend::InitResolvePipeline()
         .stage = stage,
         .layout = m_ResolvePipelineLayout
     };
-    VK_CHECK(vkCreateComputePipelines(m_Device, VK_NULL_HANDLE, 1, &computeInfo, nullptr, &m_ResolvePipeline));
+    VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &computeInfo, nullptr, &m_ResolvePipeline));
 
-    vkDestroyShaderModule(m_Device, comp, nullptr);
+    vkDestroyShaderModule(device, comp, nullptr);
 
     m_MainDeletionQueue.PushFunction([=, this] { 
-        vkDestroyPipelineLayout(m_Device, m_ResolvePipelineLayout, nullptr); 
-        vkDestroyPipeline(m_Device, m_ResolvePipeline, nullptr); 
+        vkDestroyPipelineLayout(device, m_ResolvePipelineLayout, nullptr); 
+        vkDestroyPipeline(device, m_ResolvePipeline, nullptr); 
     });
 }
 
-void RenderBackend::InitSyncStructures()
+void VulkanBackend::InitSyncStructures()
 {
     VkFenceCreateInfo fenceInfo = vkinit::FenceCreateInfo(VK_FENCE_CREATE_SIGNALED_BIT);
     VkSemaphoreCreateInfo semaphoreInfo = vkinit::SemaphoreCreateInfo();
 
-    for (FrameData& frame : m_Frames) {
-        VK_CHECK(vkCreateFence(m_Device, &fenceInfo, nullptr, &frame.renderFence));
-        VK_CHECK(vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &frame.acquireSemaphore));
+    for (FrameData& frame : frames) {
+        VK_CHECK(vkCreateFence(device, &fenceInfo, nullptr, &frame.renderFence));
+        VK_CHECK(vkCreateSemaphore(device, &semaphoreInfo, nullptr, &frame.acquireSemaphore));
 
         m_DynamicDeletionQueue.PushFunction([=, this] {
-            vkDestroyFence(m_Device, frame.renderFence, nullptr);
-            vkDestroySemaphore(m_Device, frame.acquireSemaphore, nullptr);
+            vkDestroyFence(device, frame.renderFence, nullptr);
+            vkDestroySemaphore(device, frame.acquireSemaphore, nullptr);
         });
     }
 
     for (SwapchainImageData& image : m_Images) {
         image.flightFence = VK_NULL_HANDLE;
-        VK_CHECK(vkCreateSemaphore(m_Device, &semaphoreInfo, nullptr, &image.renderSemaphore));
+        VK_CHECK(vkCreateSemaphore(device, &semaphoreInfo, nullptr, &image.renderSemaphore));
 
         m_DynamicDeletionQueue.PushFunction([=, this] { 
-            vkDestroySemaphore(m_Device, image.renderSemaphore, nullptr); 
+            vkDestroySemaphore(device, image.renderSemaphore, nullptr); 
         });
     }
 }
 
-void RenderBackend::InitMainPipelines()
+void VulkanBackend::InitMainPipelines()
 {
     // Pipeline
     VkPushConstantRange constantRange = {
@@ -1682,11 +1674,11 @@ void RenderBackend::InitMainPipelines()
         .offset = 0,
         .size = sizeof(PushConstants),
     };
-    VkDescriptorSetLayout layouts[3] = { m_DescriptorLayout, m_ArrayHandler.descriptorLayout, m_LightCullingDescriptorLayout };
+    VkDescriptorSetLayout layouts[3] = { m_DescriptorLayout, arrayDescriptorLayout, m_LightCullingDescriptorLayout };
     VkPipelineLayoutCreateInfo pipelineInfo = vkinit::LayoutCreateInfo(&constantRange);
     pipelineInfo.setLayoutCount = 3;
     pipelineInfo.pSetLayouts = layouts;
-    VK_CHECK(vkCreatePipelineLayout(m_Device, &pipelineInfo, nullptr, &m_PipelineLayout)); 
+    VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_PipelineLayout)); 
 
     PipelineBuilder builder;
 
@@ -1706,23 +1698,23 @@ void RenderBackend::InitMainPipelines()
            .SetDepthStencil(vkinit::DepthStencilStateCreateInfo(true, false, VK_COMPARE_OP_LESS_OR_EQUAL))
            .SetPipelineLayout(m_PipelineLayout);
 
-    m_Pipeline = builder.BuildPipeline(m_Device, m_RenderPass, m_Viewport, m_Scissor);
+    m_Pipeline = builder.BuildPipeline(device, renderPass, m_Viewport, m_Scissor);
 
     builder.SetMultisampling(vkinit::MultisampleStateCreateInfo(m_MSAASamples, true))
            .SetDepthStencil(vkinit::DepthStencilStateCreateInfo(true, true, VK_COMPARE_OP_LESS_OR_EQUAL));
-    m_TransparencyPipeline = builder.BuildPipeline(m_Device, m_RenderPass, m_Viewport, m_Scissor);
+    m_TransparencyPipeline = builder.BuildPipeline(device, renderPass, m_Viewport, m_Scissor);
 
-    vkDestroyShaderModule(m_Device, vert, nullptr);
-    vkDestroyShaderModule(m_Device, frag, nullptr);
+    vkDestroyShaderModule(device, vert, nullptr);
+    vkDestroyShaderModule(device, frag, nullptr);
 
     m_MainDeletionQueue.PushFunction([=, this] { 
-        vkDestroyPipelineLayout(m_Device, m_PipelineLayout, nullptr); 
-        vkDestroyPipeline(m_Device, m_Pipeline, nullptr); 
-        vkDestroyPipeline(m_Device, m_TransparencyPipeline, nullptr); 
+        vkDestroyPipelineLayout(device, m_PipelineLayout, nullptr); 
+        vkDestroyPipeline(device, m_Pipeline, nullptr); 
+        vkDestroyPipeline(device, m_TransparencyPipeline, nullptr); 
     });
 }
 
-void RenderBackend::InitSSAOResources()
+void VulkanBackend::InitSSAOResources()
 {
     // Generate SSAO kernel
     std::uniform_real_distribution<float> randomFloats(0.0, 1.0);
@@ -1753,13 +1745,13 @@ void RenderBackend::InitSSAOResources()
     }
 
     // Set SSAO kernel
-    for (FrameData& frame : m_Frames) {
+    for (FrameData& frame : frames) {
         memcpy(static_cast<char *>(frame.uniformBuffer.data) + offsetof(GlobalUniforms, ssaoKernel), ssaoKernel.data(), ssaoKernel.size() * sizeof(glm::vec4));
     }
 
     // Generate random SSAO noise image 
-    std::vector<glm::vec3> ssaoNoise = std::vector<glm::vec3>(16);
-    for (uint32_t i = 0; i < 16; i++) {
+    std::vector<glm::vec3> ssaoNoise = std::vector<glm::vec3>(64);
+    for (uint32_t i = 0; i < SSAO_NOISE_RESOLUTION * SSAO_NOISE_RESOLUTION; i++) {
         glm::vec3 noise = {
             randomFloats(generator) * 2.0 - 1.0,
             randomFloats(generator) * 2.0 - 1.0,
@@ -1768,30 +1760,32 @@ void RenderBackend::InitSSAOResources()
         ssaoNoise[i] = noise;
     }
 
-    VkExtent3D extent = { 4, 4, 1 };
+    VkExtent3D extent = { SSAO_NOISE_RESOLUTION, SSAO_NOISE_RESOLUTION, 1 };
     VkImageCreateInfo imageInfo = vkinit::ImageCreateInfo(VK_FORMAT_R16G16B16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, extent);
     VmaAllocationCreateInfo allocInfo = {
         .usage = VMA_MEMORY_USAGE_GPU_ONLY
     };
-    vmaCreateImage(m_Allocator, &imageInfo, &allocInfo, &m_SSAONoiseImage.image, &m_SSAONoiseImage.allocation, nullptr);
+    vmaCreateImage(allocator, &imageInfo, &allocInfo, &m_SSAONoiseImage.image, &m_SSAONoiseImage.allocation, nullptr);
+    VMA_NAME_ALLOCATION(allocator, m_SSAONoiseImage.allocation, "SSAO_Noise_Image");
 
     AllocatedBuffer stagingBuffer;
     VkBufferCreateInfo stagingBufferInfo = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = nullptr,
-        .size = 4 * 4 * sizeof(glm::vec3),
+        .size = SSAO_NOISE_RESOLUTION * SSAO_NOISE_RESOLUTION * sizeof(glm::vec3),
         .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT
     };
     VmaAllocationCreateInfo stagingBufferAllocInfo = {
         .usage = VMA_MEMORY_USAGE_CPU_ONLY
     };
-    VK_CHECK(vmaCreateBuffer(m_Allocator, &stagingBufferInfo, &stagingBufferAllocInfo, &stagingBuffer.buffer, &stagingBuffer.allocation, nullptr));
+    vmaCreateBuffer(allocator, &stagingBufferInfo, &stagingBufferAllocInfo, &stagingBuffer.buffer, &stagingBuffer.allocation, nullptr);
+    VMA_NAME_ALLOCATION(allocator, stagingBuffer.allocation, "SSAO_Noise_Staging_Buffer");
 
-    vmaMapMemory(m_Allocator, stagingBuffer.allocation, &stagingBuffer.data);
-    memcpy(stagingBuffer.data, ssaoNoise.data(), 4 * 4 * sizeof(glm::vec3));
-    vmaUnmapMemory(m_Allocator, stagingBuffer.allocation);
+    vmaMapMemory(allocator, stagingBuffer.allocation, &stagingBuffer.data);
+    memcpy(stagingBuffer.data, ssaoNoise.data(), SSAO_NOISE_RESOLUTION * SSAO_NOISE_RESOLUTION * sizeof(glm::vec3));
+    vmaUnmapMemory(allocator, stagingBuffer.allocation);
 
-    m_Submitter.ImmediateSubmit(m_Device, m_GraphicsQueue, [=, this](VkCommandBuffer commandBuffer) {
+    submitter.ImmediateSubmit(device, graphicsQueue, [=, this](VkCommandBuffer commandBuffer) {
         VkImageMemoryBarrier barrier = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = nullptr,
@@ -1823,10 +1817,10 @@ void RenderBackend::InitSSAOResources()
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
     });
-    vmaDestroyBuffer(m_Allocator, stagingBuffer.buffer, stagingBuffer.allocation);
+    vmaDestroyBuffer(allocator, stagingBuffer.buffer, stagingBuffer.allocation);
 
     VkImageViewCreateInfo viewInfo = vkinit::ImageViewCreateInfo(VK_FORMAT_R16G16B16_SFLOAT, m_SSAONoiseImage.image, VK_IMAGE_ASPECT_COLOR_BIT);
-    VK_CHECK(vkCreateImageView(m_Device, &viewInfo, nullptr, &m_SSAONoiseView));
+    VK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &m_SSAONoiseView));
 
     VkSamplerCreateInfo samplerInfo = {
         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -1838,14 +1832,14 @@ void RenderBackend::InitSSAOResources()
         .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
         .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
     };
-    VK_CHECK(vkCreateSampler(m_Device, &samplerInfo, nullptr, &m_SSAONoiseSampler));
+    VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_SSAONoiseSampler));
 
     VkDescriptorImageInfo descriptorImageInfo = {
         .sampler = m_SSAONoiseSampler,
         .imageView = m_SSAONoiseView,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     };
-    for (FrameData& frame : m_Frames) {
+    for (FrameData& frame : frames) {
         VkWriteDescriptorSet write = {
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .pNext = nullptr,
@@ -1855,17 +1849,17 @@ void RenderBackend::InitSSAOResources()
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             .pImageInfo = &descriptorImageInfo,
         };
-        vkUpdateDescriptorSets(m_Device, 1, &write, 0, nullptr);
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
     }
 
     m_MainDeletionQueue.PushFunction([=, this] {
-        vkDestroyImageView(m_Device, m_SSAONoiseView, nullptr);
-        vmaDestroyImage(m_Allocator, m_SSAONoiseImage.image, m_SSAONoiseImage.allocation);
-        vkDestroySampler(m_Device, m_SSAONoiseSampler, nullptr);
+        vkDestroyImageView(device, m_SSAONoiseView, nullptr);
+        vmaDestroyImage(allocator, m_SSAONoiseImage.image, m_SSAONoiseImage.allocation);
+        vkDestroySampler(device, m_SSAONoiseSampler, nullptr);
     });
 }
 
-void RenderBackend::InitGlobalDescriptor()
+void VulkanBackend::InitGlobalDescriptor()
 {
     // Global descriptor set layout
     VkDescriptorSetLayoutBinding binding = {
@@ -1880,7 +1874,7 @@ void RenderBackend::InitGlobalDescriptor()
         .bindingCount = 1,
         .pBindings = &binding
     };
-    VK_CHECK(vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_DescriptorLayout));
+    VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_DescriptorLayout));
 
     // Array descriptor set layout
     VkDescriptorSetLayoutBinding arrayBindings[3] = {
@@ -1905,11 +1899,11 @@ void RenderBackend::InitGlobalDescriptor()
     };
     layoutInfo.pBindings = arrayBindings;
     layoutInfo.bindingCount = 3;
-    VK_CHECK(vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_ArrayHandler.descriptorLayout));
+    VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &arrayDescriptorLayout));
     
     m_MainDeletionQueue.PushFunction([=, this] {
-        vkDestroyDescriptorSetLayout(m_Device, m_DescriptorLayout, nullptr);
-        vkDestroyDescriptorSetLayout(m_Device, m_ArrayHandler.descriptorLayout, nullptr);
+        vkDestroyDescriptorSetLayout(device, m_DescriptorLayout, nullptr);
+        vkDestroyDescriptorSetLayout(device, arrayDescriptorLayout, nullptr);
     });
 
     VkBufferCreateInfo bufferInfo = {
@@ -1921,13 +1915,14 @@ void RenderBackend::InitGlobalDescriptor()
     VmaAllocationCreateInfo allocInfo = {
         .usage = VMA_MEMORY_USAGE_CPU_TO_GPU
     };
-    for (FrameData& frame : m_Frames) {
-        VK_CHECK(vmaCreateBuffer(m_Allocator, &bufferInfo, &allocInfo, &frame.uniformBuffer.buffer, &frame.uniformBuffer.allocation, nullptr));
-        vmaMapMemory(m_Allocator, frame.uniformBuffer.allocation, &frame.uniformBuffer.data);
+    for (FrameData& frame : frames) {
+        vmaCreateBuffer(allocator, &bufferInfo, &allocInfo, &frame.uniformBuffer.buffer, &frame.uniformBuffer.allocation, nullptr);
+        VMA_NAME_ALLOCATION(allocator, frame.uniformBuffer.allocation, "Frame_Uniform_Buffer");
+        vmaMapMemory(allocator, frame.uniformBuffer.allocation, &frame.uniformBuffer.data);
 
         m_MainDeletionQueue.PushFunction([=, this] {
-            vmaUnmapMemory(m_Allocator, frame.uniformBuffer.allocation);
-            vmaDestroyBuffer(m_Allocator, frame.uniformBuffer.buffer, frame.uniformBuffer.allocation);
+            vmaUnmapMemory(allocator, frame.uniformBuffer.allocation);
+            vmaDestroyBuffer(allocator, frame.uniformBuffer.buffer, frame.uniformBuffer.allocation);
         });
 
         VkDescriptorPoolSize poolSizes[2] = { 
@@ -1941,10 +1936,10 @@ void RenderBackend::InitGlobalDescriptor()
             .poolSizeCount = 2,
             .pPoolSizes = poolSizes,
         };
-        VK_CHECK(vkCreateDescriptorPool(m_Device, &poolInfo, nullptr, &frame.descriptorPool));
+        VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &frame.descriptorPool));
 
         m_MainDeletionQueue.PushFunction([=, this] {
-            vkDestroyDescriptorPool(m_Device, frame.descriptorPool, nullptr); 
+            vkDestroyDescriptorPool(device, frame.descriptorPool, nullptr); 
         });
 
         VkDescriptorSetAllocateInfo allocInfo = {
@@ -1954,7 +1949,7 @@ void RenderBackend::InitGlobalDescriptor()
             .descriptorSetCount = 1,
             .pSetLayouts = &m_DescriptorLayout
         };
-        VK_CHECK(vkAllocateDescriptorSets(m_Device, &allocInfo, &frame.descriptorSet));
+        VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &frame.descriptorSet));
         
         // Write uniform buffer descriptor set
         VkDescriptorBufferInfo bufferInfo = {
@@ -1971,15 +1966,15 @@ void RenderBackend::InitGlobalDescriptor()
             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
             .pBufferInfo = &bufferInfo
         };
-        vkUpdateDescriptorSets(m_Device, 1, &write, 0, nullptr);
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
 
         // Allocate texture array descriptor set
-        allocInfo.pSetLayouts = &m_ArrayHandler.descriptorLayout;
-        VK_CHECK(vkAllocateDescriptorSets(m_Device, &allocInfo, &frame.textureDescriptorSet));
+        allocInfo.pSetLayouts = &arrayDescriptorLayout;
+        VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &frame.textureDescriptorSet));
     }
 }
 
-void RenderBackend::LoadShaderModule(const std::filesystem::path& path, VkShaderModule& module)
+void VulkanBackend::LoadShaderModule(const std::filesystem::path& path, VkShaderModule& module)
 {
     // 'ate' flag puts the cursor at the end
     std::ifstream file(path, std::ios::ate | std::ios::binary);
@@ -2004,7 +1999,7 @@ void RenderBackend::LoadShaderModule(const std::filesystem::path& path, VkShader
     };
 
     VkShaderModule shaderModule;
-    VkResult err = vkCreateShaderModule(m_Device, &info, nullptr, &shaderModule);
+    VkResult err = vkCreateShaderModule(device, &info, nullptr, &shaderModule);
     if (err) {
         ERROR("Failed to create shader module: " << path);
         abort();

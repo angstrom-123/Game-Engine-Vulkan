@@ -1,14 +1,15 @@
 #include "writableTextureArray.h"
-#include "System/Render/renderTypes.h"
+#include "renderTypes.h"
 #include "initialiser.h"
+#include "vulkanBackend.h"
 #include "Util/myAssert.h"
 #include "vulkan_core.h"
 
-void WritableTextureArray::Init(VkDevice device, VkQueue graphicsQueue, VkRenderPass renderPass, CommandSubmitter& submitter, VmaAllocator allocator, const WritableTextureArrayCreateInfo& info)
+void WritableTextureArray::Init(class VulkanBackend *backend, VkRenderPass renderPass, uint32_t resolution, uint32_t size, VkFormat format, bool useShadowSampler)
 {
-    m_Resolution = info.resolution;
-    m_LayerCount = info.size;
-    m_Format = info.format;
+    m_Resolution = resolution;
+    m_LayerCount = size;
+    m_Format = format;
     m_LayerViews.reserve(m_LayerCount);
     m_LayerFramebuffers.reserve(m_LayerCount);
 
@@ -29,22 +30,23 @@ void WritableTextureArray::Init(VkDevice device, VkQueue graphicsQueue, VkRender
     VmaAllocationCreateInfo allocInfo = {
         .usage = VMA_MEMORY_USAGE_GPU_ONLY
     };
-    vmaCreateImage(allocator, &imageInfo, &allocInfo, &m_Image.image, &m_Image.allocation, nullptr);
+    vmaCreateImage(backend->allocator, &imageInfo, &allocInfo, &m_Image.image, &m_Image.allocation, nullptr);
+    VMA_NAME_ALLOCATION(backend->allocator, m_Image.allocation, "Writable_Texture_Array_Image");
 
     VkImageViewCreateInfo viewInfo = vkinit::ImageViewCreateInfo(m_Format, m_Image.image, VK_IMAGE_ASPECT_DEPTH_BIT);
     VkFramebufferCreateInfo framebufferInfo = vkinit::FramebufferCreateInfo(renderPass, { m_Resolution, m_Resolution });
     for (uint32_t i = 0; i < m_LayerCount; i++) {
         viewInfo.subresourceRange.baseArrayLayer = i;
-        VK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &m_LayerViews[i]));
+        VK_CHECK(vkCreateImageView(backend->device, &viewInfo, nullptr, &m_LayerViews[i]));
 
         framebufferInfo.pAttachments = &m_LayerViews[i];
-        VK_CHECK(vkCreateFramebuffer(device, &framebufferInfo, nullptr, &m_LayerFramebuffers[i]));
+        VK_CHECK(vkCreateFramebuffer(backend->device, &framebufferInfo, nullptr, &m_LayerFramebuffers[i]));
     }
 
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     viewInfo.subresourceRange.layerCount = m_LayerCount;
     viewInfo.subresourceRange.baseArrayLayer = 0;
-    VK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &m_View));
+    VK_CHECK(vkCreateImageView(backend->device, &viewInfo, nullptr, &m_View));
 
     VkSamplerCreateInfo samplerInfo = {
         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -54,15 +56,15 @@ void WritableTextureArray::Init(VkDevice device, VkQueue graphicsQueue, VkRender
         .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
         .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
         .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
-        .compareEnable = info.useShadowSampler ? VK_TRUE : VK_FALSE,
-        .compareOp = info.useShadowSampler ? VK_COMPARE_OP_GREATER : VK_COMPARE_OP_ALWAYS,
+        .compareEnable = useShadowSampler ? VK_TRUE : VK_FALSE,
+        .compareOp = useShadowSampler ? VK_COMPARE_OP_GREATER : VK_COMPARE_OP_ALWAYS,
         .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE,
         .unnormalizedCoordinates = VK_FALSE,
     };
-    VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_Sampler));
+    VK_CHECK(vkCreateSampler(backend->device, &samplerInfo, nullptr, &m_Sampler));
 
     // Transition whole array to shader readable
-    submitter.ImmediateSubmit(device, graphicsQueue, [=, this](VkCommandBuffer commandBuffer) {
+    backend->submitter.ImmediateSubmit(backend->device, backend->graphicsQueue, [&](VkCommandBuffer commandBuffer) {
         VkImageMemoryBarrier barrierToShader = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = nullptr,
@@ -90,6 +92,26 @@ void WritableTextureArray::Cleanup(VkDevice device, VmaAllocator allocator)
         vkDestroyFramebuffer(device, m_LayerFramebuffers[i], nullptr);
     }
     vmaDestroyImage(allocator, m_Image.image, m_Image.allocation);
+}
+
+void WritableTextureArray::Reset(VkDevice device, VkRenderPass renderPass)
+{
+    m_FreeLayers.clear();
+    for (uint32_t i = 0; i < m_LayerCount; i++) {
+        m_FreeLayers.push_back(i);
+        // Free up old resources
+        vkDestroyImageView(device, m_LayerViews[i], nullptr);
+        vkDestroyFramebuffer(device, m_LayerFramebuffers[i], nullptr);
+
+        // Recreate views and framebuffers
+        VkImageViewCreateInfo viewInfo = vkinit::ImageViewCreateInfo(m_Format, m_Image.image, VK_IMAGE_ASPECT_DEPTH_BIT);
+        VkFramebufferCreateInfo framebufferInfo = vkinit::FramebufferCreateInfo(renderPass, { m_Resolution, m_Resolution });
+        viewInfo.subresourceRange.baseArrayLayer = i;
+        VK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &m_LayerViews[i]));
+
+        framebufferInfo.pAttachments = &m_LayerViews[i];
+        VK_CHECK(vkCreateFramebuffer(device, &framebufferInfo, nullptr, &m_LayerFramebuffers[i]));
+    }
 }
 
 uint32_t WritableTextureArray::Allocate()

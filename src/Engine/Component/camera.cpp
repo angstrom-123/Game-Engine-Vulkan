@@ -1,13 +1,26 @@
 #include "camera.h"
 
-Camera::Camera(glm::vec3 position, glm::vec2 dimensions, float fovRadians, float nearClip, float farClip)
+Camera::Camera(Perspective, glm::vec3 position, glm::vec2 dimensions, float fovRadians, float near, float far)
 {
     view = glm::lookAt(position, position + glm::vec3(0.0, 0.0, -1.0), glm::vec3(0.0, 1.0, 0.0));
-    projection = VulkanPerspective(fovRadians, dimensions.x / dimensions.y, nearClip, farClip);
-    near = nearClip;
-    far = farClip;
-    aspect = dimensions.x / dimensions.y;
-    fov = fovRadians;
+    projection = VulkanPerspective(fovRadians, dimensions.x / dimensions.y, near, far);
+    perspective = true;
+    this->near = near;
+    this->far = far;
+    this->fov = fovRadians;
+    pitch = 0.0;
+    yaw = 0.0;
+}
+
+Camera::Camera(Orthographic, glm::vec3 position, glm::vec2 dimensions, float scale, float near, float far)
+{
+    view = glm::lookAt(position, position + glm::vec3(0.0, 0.0, -1.0), glm::vec3(0.0, 1.0, 0.0));
+    dimensions = (dimensions * scale) / 2.0f;
+    projection = VulkanOrthographic(-dimensions.x, dimensions.x, -dimensions.y, dimensions.y, near, far);
+    perspective = false;
+    this->near = near;
+    this->far = far;
+    this->scale = scale;
     pitch = 0.0;
     yaw = 0.0;
 }

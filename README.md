@@ -3,7 +3,7 @@
 This is a starting point for a larger project that I am embarking upon to create
 a high quality 3D engine and game for personal use.
 
-## External Libraries
+## Libraries
 
 - STB (stb_image.h, stb_image_resize2.h)
 - VMA
@@ -11,6 +11,10 @@ a high quality 3D engine and game for personal use.
 - GLM
 - Vulkan SDK
 - GLFW
+
+## Known Issues
+
+- Extremely small memory leak after xcb_register_for_special_xge when first creating Swapchain. Known faulty interaction between GPU drivers, Vulkan, and GLFW - especially on Linux. The leaked amount is always constant.
 
 ## Screenshots
 

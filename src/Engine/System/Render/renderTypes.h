@@ -1,10 +1,11 @@
 #pragma once
 
-#include "System/Render/writableTextureArray.h"
+// #include "System/Render/writableTextureArray.h"
 #include "Util/allocator.h"
 #include "glm/ext/matrix_float4x4.hpp"
 #include "Util/logger.h"
 #include "vulkan_core.h"
+#include <deque>
 
 #ifdef DEBUG 
     #define USE_VALIDATION_LAYERS VK_TRUE 
@@ -27,10 +28,11 @@
 static const size_t FRAMES_IN_FLIGHT = 2;
 static const size_t MAX_LIGHTS = 512;
 static const size_t MAX_SHADOWCASTERS = 8;
-static const uint32_t SHADOWMAP_RESOLUTION = 2048;
+static const uint32_t SHADOWMAP_RESOLUTION = 1024;
 static const size_t MAX_TILE_LIGHTS = 128;
 static const size_t TILE_SIZE = 16;
-static const size_t SSAO_SAMPLES = 16;
+static const size_t SSAO_SAMPLES = 8;
+static const size_t SSAO_NOISE_RESOLUTION = 8;
 
 struct LightCullingPushConstants {
     uint32_t tileSize;
@@ -51,6 +53,7 @@ struct DepthPushConstants {
 
 struct PushConstants {
     glm::mat4x4 model;
+    glm::vec3 baseColor;
     float specularExponent;
     uint32_t ambientIndex;
     uint32_t diffuseIndex;
@@ -61,6 +64,8 @@ struct PushConstants {
     uint32_t maxTileLights;
     uint32_t screenWidth;
     uint32_t screenHeight;
+    uint32_t materialFlags;
+    float shadowTexelSize;
 };
 
 struct GlobalUniforms {
@@ -71,6 +76,7 @@ struct GlobalUniforms {
 struct CameraUniforms {
     glm::mat4x4 view;
     glm::mat4x4 projection;
+    glm::mat4x4 inverseProjection;
     glm::vec3 viewPos;
 };
 
@@ -95,7 +101,7 @@ struct FrameData {
     VkDescriptorSet descriptorSet;
     AllocatedBuffer uniformBuffer;
     LightCullingData lightCulling;
-    WritableTextureArray shadowArray;
+    // WritableTextureArray shadowArray;
 
 #ifdef PROFILING
     VkQueryPool queryPool;
@@ -125,3 +131,19 @@ struct SwapchainImageData {
     AllocatedImage msaaColorImage;
     VkImageView msaaColorView;
 };
+
+struct DeletionQueue {
+    std::deque<std::function<void ()>> deletors;
+
+    void PushFunction(std::function<void ()>&& function) { deletors.push_back(function); }
+    void Clear() { deletors.clear(); }
+    void Flush()
+    {
+        // Reverse iterator
+        for (auto it = deletors.rbegin(); it != deletors.rend(); it++) {
+            (*it)();
+        }
+        deletors.clear();
+    }
+};
+

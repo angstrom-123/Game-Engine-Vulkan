@@ -1,43 +1,37 @@
 #pragma once 
 
-#include <filesystem>
-
-#include "ECS/ecsTypes.h"
-#include "Component/light.h"
-#include "System/Render/renderBackend.h"
-#include "Util/objLoader.h"
+#include "System/Render/vulkanBackend.h"
 #include "config.h"
 #include "eventManager.h"
 #include "scene.h"
 #include "sceneManager.h"
-
-namespace fs = std::filesystem;
+#include <GLFW/glfw3.h>
 
 class Engine {
 public:
     Engine(Config& config);
-    void Run();
-    void Cleanup();
+    ~Engine();
+    void Run(Scene startScene);
     void EventCallback(Event event);
     static void EventHook(Event event, void *data);
-    void CreateMesh(ECS *ecs, const fs::path& objPath, const fs::path& mtlPath, std::vector<Entity>& results);
-    void CreatePointLight(ECS *ecs, const LightCreateInfo& info, Entity& result);
-    void CreateSpotLight(ECS *ecs, const LightCreateInfo& info, Entity& result);
-    void CreateDirectionalLight(ECS *ecs, const LightCreateInfo& info, Entity& result);
+    void SetScene(const std::string& name);
 
     double GetTime() { return glfwGetTime(); }
-    uint64_t GetFrameNumber() { return renderBackend->GetFrameNumber(); }
+    uint64_t GetFrameNumber() { return graphicsBackend.GetFrameNumber(); }
     glm::vec2 GetFrameMouseDelta() { return eventManager.mousePos - eventManager.mousePosLastFrame; }
+    glm::ivec2 GetWindowSize() { glm::ivec2 res; glfwGetFramebufferSize(window, &res.x, &res.y); return res; }
     bool *GetKeysDown() { return eventManager.keysDown; }
 
 public:
     struct GLFWwindow *window;
-    RenderBackend *renderBackend;
-
+    VulkanBackend graphicsBackend;
     EventManager eventManager;
     SceneManager sceneManager;
 
 private:
-    void CreateMaterial(const MtlData& data, Material& material);
+    uint64_t m_SplashScreenFrames = 120;
+    Scene m_LoadingScene = INVALID_HANDLE;
+
+private:
     void CalculateTangents(Vertex& v1, Vertex& v2, Vertex& v3);
 };

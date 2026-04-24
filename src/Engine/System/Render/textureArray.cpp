@@ -3,13 +3,15 @@
 #include <cmath>
 #include <cstring>
 
+#include "Util/allocator.h"
+#include "vulkanBackend.h"
 #include "initialiser.h"
 #include "Util/logger.h"
 #include "Util/myAssert.h"
 
 #include <vulkan/vulkan_core.h>
 
-void TextureArray::Init(VkDevice device, VkQueue graphicsQueue, CommandSubmitter& submitter, VmaAllocator allocator, uint32_t resolution, uint32_t size, VkFormat format)
+void TextureArray::Init(VulkanBackend *backend, uint32_t resolution, uint32_t size, VkFormat format)
 {
     m_Resolution = resolution;
     m_LayerCount = size;
@@ -33,15 +35,16 @@ void TextureArray::Init(VkDevice device, VkQueue graphicsQueue, CommandSubmitter
     imageInfo.mipLevels = m_MipLevels;
 
     VmaAllocationCreateInfo allocInfo = {
-        .usage = VMA_MEMORY_USAGE_GPU_ONLY
+        .usage = VMA_MEMORY_USAGE_GPU_ONLY,
     };
-    vmaCreateImage(allocator, &imageInfo, &allocInfo, &m_Image.image, &m_Image.allocation, nullptr);
+    vmaCreateImage(backend->allocator, &imageInfo, &allocInfo, &m_Image.image, &m_Image.allocation, nullptr);
+    VMA_NAME_ALLOCATION(backend->allocator, m_Image.allocation, "Texture_Array_Image");
 
     VkImageViewCreateInfo viewInfo = vkinit::ImageViewCreateInfo(m_Format, m_Image.image, VK_IMAGE_ASPECT_COLOR_BIT);
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     viewInfo.subresourceRange.layerCount = m_LayerCount;
     viewInfo.subresourceRange.levelCount = m_MipLevels;
-    VK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &m_View));
+    VK_CHECK(vkCreateImageView(backend->device, &viewInfo, nullptr, &m_View));
 
     VkSamplerCreateInfo samplerInfo = {
         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -56,10 +59,10 @@ void TextureArray::Init(VkDevice device, VkQueue graphicsQueue, CommandSubmitter
         .minLod = 0.0,
         .maxLod = VK_LOD_CLAMP_NONE,
     };
-    VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_Sampler));
+    VK_CHECK(vkCreateSampler(backend->device, &samplerInfo, nullptr, &m_Sampler));
 
     // Transition whole array to shader read
-    submitter.ImmediateSubmit(device, graphicsQueue, [&](VkCommandBuffer commandBuffer) {
+    backend->submitter.ImmediateSubmit(backend->device, backend->graphicsQueue, [&](VkCommandBuffer commandBuffer) {
         VkImageSubresourceRange range = {
             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
             .baseMipLevel = 0,
@@ -88,7 +91,7 @@ void TextureArray::Cleanup(VkDevice device, VmaAllocator allocator)
     vmaDestroyImage(allocator, m_Image.image, m_Image.allocation);
 }
 
-uint32_t TextureArray::Allocate(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue graphicsQueue, CommandSubmitter& submitter, VmaAllocator allocator, ImageData *imageData)
+uint32_t TextureArray::Allocate(VulkanBackend *backend, ImageData *imageData)
 {
     ASSERT(m_FreeLayers.size() > 0 && "Allocating too many texture array layers");
     uint32_t layerIndex = m_FreeLayers.front();
@@ -116,17 +119,18 @@ uint32_t TextureArray::Allocate(VkDevice device, VkPhysicalDevice physicalDevice
     };
 
     AllocatedBuffer stagingBuffer;
-    VK_CHECK(vmaCreateBuffer(allocator, &stagingBufferInfo, &allocInfo, &stagingBuffer.buffer, &stagingBuffer.allocation, nullptr));
+    vmaCreateBuffer(backend->allocator, &stagingBufferInfo, &allocInfo, &stagingBuffer.buffer, &stagingBuffer.allocation, nullptr);
+    VMA_NAME_ALLOCATION(backend->allocator, stagingBuffer.allocation, "Texture_Array_Staging_Buffer");
 
-    vmaMapMemory(allocator, stagingBuffer.allocation, &stagingBuffer.data);
+    vmaMapMemory(backend->allocator, stagingBuffer.allocation, &stagingBuffer.data);
     memcpy(stagingBuffer.data, imageData->pixels, imageSize);
-    vmaUnmapMemory(allocator, stagingBuffer.allocation);
+    vmaUnmapMemory(backend->allocator, stagingBuffer.allocation);
 
     // Clean up image data
     free(imageData->pixels);
 
     // Copy buffer to texture array gpu memory
-    submitter.ImmediateSubmit(device, graphicsQueue, [&](VkCommandBuffer commandBuffer) {
+    backend->submitter.ImmediateSubmit(backend->device, backend->graphicsQueue, [&](VkCommandBuffer commandBuffer) {
         VkImageSubresourceRange range = {
             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
             .baseMipLevel = 0,
@@ -165,7 +169,7 @@ uint32_t TextureArray::Allocate(VkDevice device, VkPhysicalDevice physicalDevice
 
         // Check for linear blit support (for mipmap creation)
         VkFormatProperties properties;
-        vkGetPhysicalDeviceFormatProperties(physicalDevice, m_Format, &properties);
+        vkGetPhysicalDeviceFormatProperties(backend->physicalDevice, m_Format, &properties);
         if (!(properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
             ERROR("Texture image format does not support linear blitting");
             WARN("TODO: Implement alternative image resizing for mipmap generation");
@@ -265,7 +269,7 @@ uint32_t TextureArray::Allocate(VkDevice device, VkPhysicalDevice physicalDevice
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &mipmapBarrier);
     });
 
-    vmaDestroyBuffer(allocator, stagingBuffer.buffer, stagingBuffer.allocation);
+    vmaDestroyBuffer(backend->allocator, stagingBuffer.buffer, stagingBuffer.allocation);
 
     return layerIndex;
 }

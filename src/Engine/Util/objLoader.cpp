@@ -279,7 +279,7 @@ void ObjLoader::ProcessLineObj(std::istringstream& iss, const std::string& line,
                 vertexStream.str(facePart);
                 while (std::getline(vertexStream, indexString, '/')) {
                     std::from_chars_result res = std::from_chars(indexString.data(), indexString.data() + indexString.size(), indices.data[partIndex]);
-                    ASSERT(res.ec == std::errc() && "Failed to read face index");
+                    VERIFY(res.ec == std::errc() && "Failed to read face index");
                     partIndex++;
                 }
                 shape->indices.push_back(indices);

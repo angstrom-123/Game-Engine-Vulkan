@@ -1,21 +1,15 @@
 #pragma once
 
 #include "Util/allocator.h"
-#include "commandSubmitter.h"
 #include <deque>
-
-struct WritableTextureArrayCreateInfo {
-    uint32_t resolution;
-    uint32_t size;
-    VkFormat format;
-    bool useShadowSampler;
-};
+#include <vector>
 
 class WritableTextureArray {
 public:
     WritableTextureArray() = default;
-    void Init(VkDevice device, VkQueue graphicsQueue, VkRenderPass renderPass, CommandSubmitter& submitter, VmaAllocator allocator, const WritableTextureArrayCreateInfo& info);
+    void Init(class VulkanBackend *backend, VkRenderPass renderPass, uint32_t resolution, uint32_t size, VkFormat format, bool useShadowSampler);
     void Cleanup(VkDevice device, VmaAllocator allocator);
+    void Reset(VkDevice device, VkRenderPass renderPass);
     uint32_t Allocate();
     void TransitionRemainingLayersToReadable(VkCommandBuffer commandBuffer);
     void TransitionFromReadableToAttachment(VkCommandBuffer commandBuffer);

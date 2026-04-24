@@ -1,5 +1,5 @@
 ENGINE_SRC	:= $(shell find Engine -name "*.cpp" 2>/dev/null)
-APP_SRC		:= $(shell find Sandbox -name "*.cpp" 2>/dev/null)
+APP_SRC		:= $(shell find Application -name "*.cpp" 2>/dev/null)
 MAIN_SRC	:= main.cpp
 
 BUILD_TYPE	?= release
@@ -32,7 +32,7 @@ $(OBJ_DIR)/Engine/%.o: Engine/%.cpp
 	@$(CC) $(FLAGS) -c $< -o $@
 
 # App sources (.o)
-$(OBJ_DIR)/Sandbox/%.o: Sandbox/%.cpp
+$(OBJ_DIR)/Application/%.o: Application/%.cpp
 	@mkdir -p $(dir $@)
 	@$(CC) $(FLAGS) -c $< -o $@
 

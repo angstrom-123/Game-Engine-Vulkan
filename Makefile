@@ -14,7 +14,7 @@ LINKS			+= -lm
 
 C_FLAGS			:= -I$(MAKE_DIR)/src
 C_FLAGS			+= -I$(MAKE_DIR)/src/Engine
-C_FLAGS			+= -I$(MAKE_DIR)/src/Sandbox
+C_FLAGS			+= -I$(MAKE_DIR)/src/Application
 C_FLAGS			+= -I$(MAKE_DIR)/vendor
 C_FLAGS			+= -I$(MAKE_DIR)/vendor/vulkan
 C_FLAGS			+= -Wall -Wextra -Wno-missing-braces -Wno-missing-field-initializers 
@@ -38,7 +38,7 @@ export MAKE_DIR RELEASE_DIR DEBUG_DIR PROFILING_DIR CC SHADERC LINKS C_FLAGS DEB
 shaders:
 	@echo COMPILING SHADERS 
 	@$(MAKE) -C src/Engine/Resource/Shader 
-	@$(MAKE) -C src/Sandbox/Resource/Shader 
+	@$(MAKE) -C src/Application/Resource/Shader 
 
 .PHONY: debug 
 debug: shaders

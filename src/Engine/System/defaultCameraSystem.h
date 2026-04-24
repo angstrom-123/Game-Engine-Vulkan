@@ -13,6 +13,6 @@ public:
     Signature GetSignature(ECS *ecs) { return ecs->GetBit<Transform>() | ecs->GetBit<Camera>(); };
 
 private:
-    float m_Sensitivity;
-    float m_Speed;
+    float m_Sensitivity = 0.0;
+    float m_Speed = 0.0;
 };

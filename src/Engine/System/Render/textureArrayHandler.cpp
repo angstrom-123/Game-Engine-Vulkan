@@ -3,13 +3,17 @@
 #include "Util/imageLoader.h"
 #include "Util/myAssert.h"
 #include "vulkan_core.h"
+#include "vulkanBackend.h"
 
-void TextureArrayHandler::Init(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue graphicsQueue, CommandSubmitter& submitter, VmaAllocator allocator, FrameData *frames, TextureArraySizes& sizes)
+void TextureArrayHandler::Init(const TextureArraySizes& sizes, VulkanBackend *backend)
 {
-    m_Arrays[TEXTURE_ARRAY_COLOR_1024].Init(device, graphicsQueue, submitter, allocator, 1024, sizes.color1024, VK_FORMAT_R8G8B8A8_SRGB);
-    m_Arrays[TEXTURE_ARRAY_COLOR_2048].Init(device, graphicsQueue, submitter, allocator, 2048, sizes.color2048, VK_FORMAT_R8G8B8A8_SRGB);
-    m_Arrays[TEXTURE_ARRAY_DATA_1024].Init(device, graphicsQueue, submitter, allocator, 1024, sizes.data1024, VK_FORMAT_R8G8B8A8_UNORM);
-    m_Arrays[TEXTURE_ARRAY_DATA_2048].Init(device, graphicsQueue, submitter, allocator, 2048, sizes.data2048, VK_FORMAT_R8G8B8A8_UNORM);
+    SUGGEST_IF(sizes.color1024 == 1, "Texture array color1024 size specified as 1. This slot is reserved for the default color texture. To allocate a free spot, set the size to 2. Else, leave it at 0.");
+    SUGGEST_IF(sizes.data1024 == 1, "Texture array data1024 size specified as 1. This slot is reserved for the default normal texture. To allocate a free spot, set the size to 2. Else, leave it at 0.");
+
+    m_Arrays[TEXTURE_ARRAY_COLOR_1024].Init(backend, 1024, std::max(1u, sizes.color1024), VK_FORMAT_R8G8B8A8_SRGB);
+    m_Arrays[TEXTURE_ARRAY_COLOR_2048].Init(backend, 2048, std::max(1u, sizes.color2048), VK_FORMAT_R8G8B8A8_SRGB);
+    m_Arrays[TEXTURE_ARRAY_DATA_1024].Init(backend, 1024, std::max(1u, sizes.data1024), VK_FORMAT_R8G8B8A8_UNORM);
+    m_Arrays[TEXTURE_ARRAY_DATA_2048].Init(backend, 2048, std::max(1u, sizes.data2048), VK_FORMAT_R8G8B8A8_UNORM);
 
     // Write descriptor sets for all the arrays at once
     VkDescriptorImageInfo imageInfos[TEXTURE_ARRAY_MAX_ENUM];
@@ -22,7 +26,7 @@ void TextureArrayHandler::Init(VkDevice device, VkPhysicalDevice physicalDevice,
     }
 
     for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
-        FrameData& frame = frames[i];
+        FrameData& frame = backend->frames[i];
         for (uint32_t j = 0; j < TEXTURE_ARRAY_MAX_ENUM; j++) {
             VkWriteDescriptorSet write = {
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -34,15 +38,15 @@ void TextureArrayHandler::Init(VkDevice device, VkPhysicalDevice physicalDevice,
                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 .pImageInfo = &imageInfos[j]
             };
-            vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+            vkUpdateDescriptorSets(backend->device, 1, &write, 0, nullptr);
         }
     }
 
     ImageData whiteImage, normalImage;
     whiteImage.LoadImage("src/Engine/Resource/Texture/white.png", false, IMAGE_KIND_COLOR);
     normalImage.LoadImage("src/Engine/Resource/Texture/normal.png", false, IMAGE_KIND_NORMAL);
-    m_DefaultColorAllocation = AllocateTexture(device, physicalDevice, graphicsQueue, submitter, allocator, &whiteImage);
-    m_DefaultNormalAllocation = AllocateTexture(device, physicalDevice, graphicsQueue, submitter, allocator, &normalImage);
+    m_DefaultColorAllocation = AllocateTexture(&whiteImage, backend);
+    m_DefaultNormalAllocation = AllocateTexture(&normalImage, backend);
 }
 
 void TextureArrayHandler::Cleanup(VkDevice device, VmaAllocator allocator)
@@ -52,7 +56,7 @@ void TextureArrayHandler::Cleanup(VkDevice device, VmaAllocator allocator)
     }
 }
 
-TextureAllocation TextureArrayHandler::AllocateTexture(VkDevice device, VkPhysicalDevice physicalDevice, VkQueue graphicsQueue, CommandSubmitter& submitter, VmaAllocator allocator, ImageData *imageData)
+TextureAllocation TextureArrayHandler::AllocateTexture(ImageData *imageData, VulkanBackend *backend)
 {
     if (m_AllocatedTextures.find(imageData->path) != m_AllocatedTextures.end()) {
         free(imageData->pixels);
@@ -69,7 +73,7 @@ TextureAllocation TextureArrayHandler::AllocateTexture(VkDevice device, VkPhysic
 
     TextureArray& array = m_Arrays[arrayID];
 
-    uint32_t layerIndex = array.Allocate(device, physicalDevice, graphicsQueue, submitter, allocator, imageData);
+    uint32_t layerIndex = array.Allocate(backend, imageData);
 
     TextureAllocation res = {
         .arrayID = arrayID,
