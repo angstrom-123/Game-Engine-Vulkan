@@ -1,15 +1,15 @@
 #pragma once
 
+#include "ResourceManager/imageResource.h"
 #include "Util/allocator.h"
-#include "Util/imageLoader.h"
 #include <queue>
 
 class TextureArray {
 public:
     TextureArray() = default;
-    void Init(class VulkanBackend *backend, uint32_t resolution, uint32_t size, VkFormat format);
+    void Init(uint32_t resolution, uint32_t size, VkFormat format, class VulkanBackend *backend);
     void Cleanup(VkDevice device, VmaAllocator allocator);
-    uint32_t Allocate(class VulkanBackend *backend, ImageData *imageData);
+    uint32_t Allocate(ImageResource& imageData, class VulkanBackend *backend);
 
     VkSampler GetSampler() { return m_Sampler; };
     VkImageView GetView() { return m_View; };

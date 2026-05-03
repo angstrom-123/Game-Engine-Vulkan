@@ -1,19 +1,16 @@
 #include "textureArrayHandler.h"
 #include "System/Render/renderTypes.h"
-#include "Util/imageLoader.h"
+#include "Util/flags.h"
 #include "Util/myAssert.h"
 #include "vulkan_core.h"
 #include "vulkanBackend.h"
 
 void TextureArrayHandler::Init(const TextureArraySizes& sizes, VulkanBackend *backend)
 {
-    SUGGEST_IF(sizes.color1024 == 1, "Texture array color1024 size specified as 1. This slot is reserved for the default color texture. To allocate a free spot, set the size to 2. Else, leave it at 0.");
-    SUGGEST_IF(sizes.data1024 == 1, "Texture array data1024 size specified as 1. This slot is reserved for the default normal texture. To allocate a free spot, set the size to 2. Else, leave it at 0.");
-
-    m_Arrays[TEXTURE_ARRAY_COLOR_1024].Init(backend, 1024, std::max(1u, sizes.color1024), VK_FORMAT_R8G8B8A8_SRGB);
-    m_Arrays[TEXTURE_ARRAY_COLOR_2048].Init(backend, 2048, std::max(1u, sizes.color2048), VK_FORMAT_R8G8B8A8_SRGB);
-    m_Arrays[TEXTURE_ARRAY_DATA_1024].Init(backend, 1024, std::max(1u, sizes.data1024), VK_FORMAT_R8G8B8A8_UNORM);
-    m_Arrays[TEXTURE_ARRAY_DATA_2048].Init(backend, 2048, std::max(1u, sizes.data2048), VK_FORMAT_R8G8B8A8_UNORM);
+    m_Arrays[TEXTURE_ARRAY_COLOR_1024].Init(1024, sizes.color1024, VK_FORMAT_R8G8B8A8_SRGB, backend);
+    m_Arrays[TEXTURE_ARRAY_COLOR_2048].Init(2048, sizes.color2048, VK_FORMAT_R8G8B8A8_SRGB, backend);
+    m_Arrays[TEXTURE_ARRAY_DATA_1024].Init(1024, sizes.data1024, VK_FORMAT_R8G8B8A8_UNORM, backend);
+    m_Arrays[TEXTURE_ARRAY_DATA_2048].Init(2048, sizes.data2048, VK_FORMAT_R8G8B8A8_UNORM, backend);
 
     // Write descriptor sets for all the arrays at once
     VkDescriptorImageInfo imageInfos[TEXTURE_ARRAY_MAX_ENUM];
@@ -41,12 +38,6 @@ void TextureArrayHandler::Init(const TextureArraySizes& sizes, VulkanBackend *ba
             vkUpdateDescriptorSets(backend->device, 1, &write, 0, nullptr);
         }
     }
-
-    ImageData whiteImage, normalImage;
-    whiteImage.LoadImage("src/Engine/Resource/Texture/white.png", false, IMAGE_KIND_COLOR);
-    normalImage.LoadImage("src/Engine/Resource/Texture/normal.png", false, IMAGE_KIND_NORMAL);
-    m_DefaultColorAllocation = AllocateTexture(&whiteImage, backend);
-    m_DefaultNormalAllocation = AllocateTexture(&normalImage, backend);
 }
 
 void TextureArrayHandler::Cleanup(VkDevice device, VmaAllocator allocator)
@@ -56,41 +47,23 @@ void TextureArrayHandler::Cleanup(VkDevice device, VmaAllocator allocator)
     }
 }
 
-TextureAllocation TextureArrayHandler::AllocateTexture(ImageData *imageData, VulkanBackend *backend)
+TextureAllocation TextureArrayHandler::AllocateTexture(ImageResource& imageData, VulkanBackend *backend)
 {
-    if (m_AllocatedTextures.find(imageData->path) != m_AllocatedTextures.end()) {
-        free(imageData->pixels);
-        return m_AllocatedTextures[imageData->path];
-    }
-
     TextureArrayID arrayID;
-    ASSERT(imageData->width <= 2048 && imageData->height <= 2048 && "Image too large to allocate in array");
-    if (imageData->width <= 1024 && imageData->height <= 1024) {
-        arrayID = (imageData->kind == IMAGE_KIND_NORMAL) ? TEXTURE_ARRAY_DATA_1024 : TEXTURE_ARRAY_COLOR_1024;
+
+    ASSERT(imageData.size.x <= 2048 && imageData.size.y <= 2048 && "Image too large to allocate in array");
+    if (imageData.size.x <= 1024 && imageData.size.y <= 1024) {
+        arrayID = FLAGS_HAVE_BIT(imageData.flags, IMAGE_FLAG_NON_COLOR) ? TEXTURE_ARRAY_DATA_1024 : TEXTURE_ARRAY_COLOR_1024;
     } else {
-        arrayID = (imageData->kind == IMAGE_KIND_NORMAL) ? TEXTURE_ARRAY_DATA_2048 : TEXTURE_ARRAY_COLOR_2048;
+        arrayID = FLAGS_HAVE_BIT(imageData.flags, IMAGE_FLAG_NON_COLOR) ? TEXTURE_ARRAY_DATA_2048 : TEXTURE_ARRAY_COLOR_2048;
     }
 
     TextureArray& array = m_Arrays[arrayID];
 
-    uint32_t layerIndex = array.Allocate(backend, imageData);
+    uint32_t layerIndex = array.Allocate(imageData, backend);
 
-    TextureAllocation res = {
+    return (TextureAllocation) {
         .arrayID = arrayID,
         .textureID = layerIndex,
     };
-
-    m_AllocatedTextures.insert({std::string(imageData->path), res});
-
-    return res;
-}
-
-TextureAllocation TextureArrayHandler::GetFallbackTexture(ImageData *imageData, ImageKind kind) 
-{
-    if (imageData) free(imageData->pixels);
-    switch (kind) {
-        case IMAGE_KIND_COLOR: return m_DefaultColorAllocation;
-        case IMAGE_KIND_NORMAL: return m_DefaultNormalAllocation;
-        default: VERIFY(false && "Unreachable");
-    }
 }

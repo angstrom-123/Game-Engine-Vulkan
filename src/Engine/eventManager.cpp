@@ -26,7 +26,7 @@ void EventManager::SetEventCallback(void ( *callback)(Event event, void *data), 
     m_CallbackData = data;
 }
 
-void EventManager::RecordFrame()
+void EventManager::Update()
 {
     mousePosLastFrame = mousePos;
 }

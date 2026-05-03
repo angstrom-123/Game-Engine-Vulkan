@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "ResourceManager/imageResource.h"
 #include "Util/allocator.h"
 #include "vulkanBackend.h"
 #include "initialiser.h"
@@ -11,7 +12,7 @@
 
 #include <vulkan/vulkan_core.h>
 
-void TextureArray::Init(VulkanBackend *backend, uint32_t resolution, uint32_t size, VkFormat format)
+void TextureArray::Init(uint32_t resolution, uint32_t size, VkFormat format, VulkanBackend *backend)
 {
     m_Resolution = resolution;
     m_LayerCount = size;
@@ -91,21 +92,22 @@ void TextureArray::Cleanup(VkDevice device, VmaAllocator allocator)
     vmaDestroyImage(allocator, m_Image.image, m_Image.allocation);
 }
 
-uint32_t TextureArray::Allocate(VulkanBackend *backend, ImageData *imageData)
+uint32_t TextureArray::Allocate(ImageResource& imageData, VulkanBackend *backend)
 {
     ASSERT(m_FreeLayers.size() > 0 && "Allocating too many texture array layers");
     uint32_t layerIndex = m_FreeLayers.front();
     m_FreeLayers.pop();
 
-    if (static_cast<uint32_t>(imageData->width) < m_Resolution || static_cast<uint32_t>(imageData->width) < m_Resolution) {
-        imageData->Resize(m_Resolution, m_Resolution);
+    ASSERT(imageData.pixels != nullptr && "Image is not loaded");
+    if (static_cast<uint32_t>(imageData.size.x) < m_Resolution || static_cast<uint32_t>(imageData.size.y) < m_Resolution) {
+        bool res = imageData.Resize(glm::ivec2(m_Resolution));
+        ASSERT(res && "Failed to resize image");
     }
 
-    ASSERT(imageData->width == static_cast<int>(m_Resolution) && "Image width doesn't match array texture");
-    ASSERT(imageData->height == static_cast<int>(m_Resolution) && "Image height doesn't match array texture");
-    ASSERT(imageData->channels == 4 && "Image has incorrect number of channels");
+    ASSERT(imageData.size.x == static_cast<int>(m_Resolution) && "Image width doesn't match array texture");
+    ASSERT(imageData.size.y == static_cast<int>(m_Resolution) && "Image height doesn't match array texture");
 
-    VkDeviceSize imageSize = imageData->width * imageData->height * imageData->channels;
+    VkDeviceSize imageSize = imageData.SizeBytes();
 
     // Staging buffer
     VkBufferCreateInfo stagingBufferInfo = {
@@ -123,11 +125,8 @@ uint32_t TextureArray::Allocate(VulkanBackend *backend, ImageData *imageData)
     VMA_NAME_ALLOCATION(backend->allocator, stagingBuffer.allocation, "Texture_Array_Staging_Buffer");
 
     vmaMapMemory(backend->allocator, stagingBuffer.allocation, &stagingBuffer.data);
-    memcpy(stagingBuffer.data, imageData->pixels, imageSize);
+    memcpy(stagingBuffer.data, imageData.pixels, imageSize);
     vmaUnmapMemory(backend->allocator, stagingBuffer.allocation);
-
-    // Clean up image data
-    free(imageData->pixels);
 
     // Copy buffer to texture array gpu memory
     backend->submitter.ImmediateSubmit(backend->device, backend->graphicsQueue, [&](VkCommandBuffer commandBuffer) {

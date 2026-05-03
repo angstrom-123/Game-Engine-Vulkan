@@ -1,0 +1,8 @@
+manifest: "SponzaScene"
+camera:
+  projection: "perspective"
+  shadows: true
+models:
+  - path: "Resource/sponza.obj"
+materials:
+  - path: "Resource/sponza.mtl"

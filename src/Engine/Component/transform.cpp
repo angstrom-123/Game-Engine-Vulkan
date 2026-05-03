@@ -2,17 +2,10 @@
 
 #include "ECS/ecs.h"
 
-Transform::Transform()
-{
-    translation = glm::vec3(0.0);
-    rotation = glm::quat(1.0, 0.0, 0.0, 0.0);
-    scale = glm::vec3(1.0);
-    inherit = INVALID_HANDLE;
-}
-
-void Transform::InheritFrom(Entity parent)
+Transform& Transform::InheritFrom(Entity parent)
 {
     inherit = parent;
+    return *this;
 }
 
 Transform& Transform::Rotate(float radians, const glm::vec3& axis)

@@ -18,6 +18,7 @@
 #include "System/Render/textureArrayHandler.h"
 #include "System/Render/writableTextureArray.h"
 #include "Util/allocator.h"
+#include "Util/flags.h"
 #include "Util/logger.h"
 #include "Component/transform.h"
 #include "Component/material.h"
@@ -186,8 +187,8 @@ void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHand
         Transform& transform = ecs->GetComponent<Transform>(e);
         glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
         CentreExtents centreExtents = CentreExtents(mesh.bounds);
-        if (camFrustum.Intersects(centreExtents.WorldSpace(model))) {
-            if ((ecs->GetComponent<Material>(e).flags & MATERIAL_FLAG_TRANSPARENT) == MATERIAL_FLAG_TRANSPARENT) {
+        if (camFrustum.Intersects(centreExtents.ToWorldSpace(model))) {
+            if (FLAGS_HAVE_BIT(ecs->GetComponent<Material>(e).flags, MATERIAL_FLAG_TRANSPARENT)) {
                 m_DrawOrder[backPtr--] = e; // Transparent to back
             } else {
                 m_DrawOrder[frontPtr++] = e; // Opaque to front
@@ -222,6 +223,7 @@ void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHand
 
     VkResult acquireErr = vkAcquireNextImageKHR(device, m_Swapchain, UINT64_MAX, frame.acquireSemaphore, nullptr, &imageIndex);
     if (acquireErr == VK_ERROR_OUT_OF_DATE_KHR || acquireErr == VK_SUBOPTIMAL_KHR) {
+        INFO("Resize because of swapchain acquire error (" << ((acquireErr == VK_ERROR_OUT_OF_DATE_KHR) ? "out of date" : "suboptimal") << ")");
         m_ResizeCamera = camera;
         return;
     } else if (acquireErr == VK_NOT_READY) {
@@ -531,10 +533,13 @@ void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHand
 
             vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ShadowPipeline);
 
+            glm::mat4x4 lightVP = shadowcaster.projection * shadowcaster.view;
+            Frustum lightFrustum = Frustum(lightVP);
+
             // Only draw opaque entities to depth buffer from the light's perspective
             // TODO: Frustum culling on the light's matrix
             for (const Entity e : entities) {
-                if ((ecs->GetComponent<Material>(e).flags & MATERIAL_FLAG_TRANSPARENT) == MATERIAL_FLAG_TRANSPARENT) {
+                if (FLAGS_HAVE_BIT(ecs->GetComponent<Material>(e).flags, MATERIAL_FLAG_TRANSPARENT)) {
                     continue;
                 }
 
@@ -542,14 +547,18 @@ void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHand
                 Transform& transform = ecs->GetComponent<Transform>(e);
                 glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
 
-                DepthPushConstants constants = {
-                    .model = model,
-                    .vp = shadowcaster.projection * shadowcaster.view
-                };
-                vkCmdPushConstants(frame.commandBuffer, m_ShadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(DepthPushConstants), &constants);
-                VkDeviceSize offset = 0;
-                vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offset);
-                vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
+                // Frustum culling
+                CentreExtents centreExtents = CentreExtents(mesh.bounds);
+                if (lightFrustum.Intersects(centreExtents.ToWorldSpace(model))) {
+                    DepthPushConstants constants = {
+                        .model = model,
+                        .vp = shadowcaster.projection * shadowcaster.view
+                    };
+                    vkCmdPushConstants(frame.commandBuffer, m_ShadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(DepthPushConstants), &constants);
+                    VkDeviceSize offset = 0;
+                    vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offset);
+                    vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
+                }
             }
 
             vkCmdEndRenderPass(frame.commandBuffer);
@@ -799,13 +808,16 @@ void VulkanBackend::Resize(ECS *ecs)
 {
     PROFILER_PROFILE_SCOPE("VulkanBackend::Resize");
 
+    INFO("Resized");
+
     // Check if the resize is valid
     VkSurfaceCapabilitiesKHR capabilities;
     VK_CHECK(m_GetSurfaceCapabilities(physicalDevice, m_Surface, &capabilities));
 
     uint32_t w = capabilities.currentExtent.width;
     uint32_t h = capabilities.currentExtent.height;
-    if (w == 0 || h == 0 || w == UINT32_MAX || h == UINT32_MAX || (w == m_Extent.width && h == m_Extent.height)) {
+    if (w == 0 || h == 0 || w == UINT32_MAX || h == UINT32_MAX) {
+        m_ResizeCamera = INVALID_HANDLE;
         return;
     }
 
@@ -833,6 +845,7 @@ void VulkanBackend::Resize(ECS *ecs)
     InitLightCullingResources();
     InitFramebuffers();
 
+    // Resize the camera in use at the time of the resize
     Camera& cam = ecs->GetComponent<Camera>(m_ResizeCamera);
     if (cam.perspective) {
         float aspect = static_cast<float>(m_Extent.width) / static_cast<float>(m_Extent.height);
@@ -938,8 +951,8 @@ void VulkanBackend::InitSwapchain()
     m_Swapchain = vkbSwapchain.swapchain;
     m_SwapchainFormat = vkbSwapchain.image_format;
 
-    m_DynamicDeletionQueue.PushFunction([=, this] { 
-        vkDestroySwapchainKHR(device, m_Swapchain, nullptr); 
+    m_DynamicDeletionQueue.PushFunction([=] { 
+        vkb::destroy_swapchain(vkbSwapchain);
     });
 
     std::vector<VkImage> swapchainImages = vkbSwapchain.get_images().value();
@@ -1979,8 +1992,7 @@ void VulkanBackend::LoadShaderModule(const std::filesystem::path& path, VkShader
     // 'ate' flag puts the cursor at the end
     std::ifstream file(path, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
-        ERROR("Failed to open shader file: " << path);
-        abort();
+        FATAL("Failed to open shader file: " << path);
     }
 
     // Get cursor pos (initialised at end)
@@ -2001,8 +2013,7 @@ void VulkanBackend::LoadShaderModule(const std::filesystem::path& path, VkShader
     VkShaderModule shaderModule;
     VkResult err = vkCreateShaderModule(device, &info, nullptr, &shaderModule);
     if (err) {
-        ERROR("Failed to create shader module: " << path);
-        abort();
+        FATAL("Failed to create shader module: " << path);
     }
 
     delete[] buf;

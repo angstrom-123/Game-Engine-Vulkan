@@ -9,5 +9,5 @@
 class ShadowSystem : public System {
 public:
     void Update(ECS *ecs);
-    Signature GetSignature(ECS *ecs) { return ecs->GetBit<Transform>() | ecs->GetBit<Light>() | ecs->GetBit<Shadowcaster>(); };
+    Signature GetSignature(ECS *ecs) override { return ecs->GetBit<Transform>() | ecs->GetBit<Light>() | ecs->GetBit<Shadowcaster>(); };
 };

@@ -1,0 +1,8 @@
+manifest: "ApesScene"
+camera:
+  projection: "perspective"
+  shadows: false
+models:
+  - path: "Resource/ape.obj"
+materials:
+  - path: "Resource/ape.mtl"

@@ -1,0 +1,11 @@
+manifest: "LoadingScene"
+camera:
+  projection: "orthographic"
+  shadows: false
+models:
+  - path: "Resource/loadingSpinner.obj"
+  - path: "Resource/loadingBackground.obj"
+materials:
+  - path: "Resource/loadingSpinner.mtl"
+  - path: "Resource/loadingBackground.mtl"
+

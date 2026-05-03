@@ -3,7 +3,8 @@
 #include <cstdint>
 #include <cstdlib>
 
-constexpr int32_t INVALID_HANDLE = -1;
+#include "handle.h"
+
 constexpr int32_t MAX_ENTITIES = 4096;
 
 using Entity = int32_t;

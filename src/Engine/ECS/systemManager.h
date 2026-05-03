@@ -37,6 +37,7 @@ public:
 
     void EntityDestroyed(Entity entity)
     {
+        ASSERT(entity != INVALID_HANDLE && "Invalid entity destroyed");
         for (const auto& [index, system] : m_Systems) {
             system->entities.erase(entity);
         }

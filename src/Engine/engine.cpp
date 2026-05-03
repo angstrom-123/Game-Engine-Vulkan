@@ -1,11 +1,11 @@
 #include "engine.h"
 
-#include "ECS/ecsTypes.h"
+#include "Scenes/LoadingScene/loadingScene.h"
 #include "Util/profiler.h"
-#include "loadingScene.h"
 #include "scene.h"
 
 #include <GLFW/glfw3.h>
+#include <filesystem>
 
 void GLFWErrorCb(int error, const char *desc) 
 {
@@ -19,7 +19,6 @@ Engine::Engine(Config& config)
     ASSERT(config.windowHeight > 0 && "Window height must not be 0");
     ASSERT(config.msaaSamples > 0 && "MSAA samples must not be 0");
     ASSERT(std::floor(std::log2(config.msaaSamples)) == std::log2(config.msaaSamples) && "MSAA sample count must be a power of 2");
-    ASSERT(config.maxScenes > 0 && "Maximum scenes must not be 0");
 
     // Window
     glfwInit();
@@ -29,49 +28,34 @@ Engine::Engine(Config& config)
     glfwWindowHint(GLFW_FOCUSED, GLFW_TRUE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
     glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
-    window = glfwCreateWindow(config.windowWidth, config.windowHeight, config.appName, nullptr, nullptr);
+    m_Window = glfwCreateWindow(config.windowWidth, config.windowHeight, config.appName, nullptr, nullptr);
 
-    graphicsBackend.Init(window, config);
+    m_GraphicsBackend.Init(m_Window, config);
 
-    eventManager.Init(window);
-    eventManager.SetEventCallback(Engine::EventHook, this);
+    m_ResourceManager.Init();
 
-    sceneManager.Init(config.maxScenes);
-    m_LoadingScene = sceneManager.RegisterScene<LoadingScene>("INTERNAL_LOADING_SCENE");
-    sceneManager.LoadScene(this, m_LoadingScene);
-    sceneManager.SwitchScene(m_LoadingScene);
+    m_EventManager.Init(m_Window);
+    m_EventManager.SetEventCallback(Engine::EventHook, this);
+
+    m_SceneManager.Init();
+    m_SceneManager.RegisterLoadingScene<LoadingScene>(this, &m_GraphicsBackend, &m_ResourceManager, "src/Engine/Scenes/LoadingScene");
 }
 
 Engine::~Engine()
 {
-    VulkanBackend::WaitForIdle(graphicsBackend.device);
-    glfwDestroyWindow(window);
+    VulkanBackend::WaitForIdle(m_GraphicsBackend.device);
+    glfwDestroyWindow(m_Window);
     glfwTerminate();
 }
 
-void Engine::Run(Scene startScene)
+void Engine::Run(const std::string& startSceneName)
 {
-    // Mini initial loop for the splashscreen to receive resize events
     double lastTime = GetTime();
-    for (uint64_t i = 0; i < m_SplashScreenFrames; i++) {
-        double currTime = GetTime();
-        double deltaTime = currTime - lastTime;
-        lastTime = currTime;
 
-        glfwPollEvents();
-
-        sceneManager.DispatchUpdates(deltaTime);
-        eventManager.RecordFrame();
-    }
-
-    // Load start scene
-    ASSERT(startScene != INVALID_HANDLE && "Start scene is invalid");
-    VulkanBackend::WaitForIdle(graphicsBackend.device);
-    sceneManager.LoadScene(this, startScene);
-    sceneManager.SwitchScene(startScene);
+    m_SceneManager.SwitchScene(this, &m_GraphicsBackend, &m_ResourceManager, startSceneName, false);
 
     // Main loop
-    while (!glfwWindowShouldClose(window)) {
+    while (!glfwWindowShouldClose(m_Window)) {
         PROFILER_PROFILE_SCOPE("Frame");
 
         double currTime = GetTime();
@@ -79,15 +63,16 @@ void Engine::Run(Scene startScene)
         lastTime = currTime;
 
         glfwPollEvents();
-
-        sceneManager.DispatchUpdates(deltaTime);
-        eventManager.RecordFrame();
+        m_SceneManager.Update(this, &m_GraphicsBackend, &m_ResourceManager, deltaTime);
+        m_EventManager.Update();
     }
+
+    INFO("Done");
 }
 
 void Engine::EventCallback(Event event)
 {
-    sceneManager.DispatchEvents(event);
+    m_SceneManager.DispatchEvents(event);
 }
 
 void Engine::EventHook(Event event, void *data)
@@ -96,22 +81,7 @@ void Engine::EventHook(Event event, void *data)
     engine->EventCallback(event);
 }
 
-void Engine::SetScene(const std::string& name)
+void Engine::SetScene(const std::string& name, bool showLoadingScene)
 {
-    ASSERT(sceneManager.activeScene != sceneManager.GetScene(name) && "Loading scene that is already active");
-
-    Scene oldScene = sceneManager.activeScene;
-    if (oldScene != m_LoadingScene && oldScene != INVALID_HANDLE) {
-        sceneManager.SwitchScene(m_LoadingScene);
-    }
-
-    VulkanBackend::WaitForIdle(graphicsBackend.device);
-
-    if (oldScene != m_LoadingScene && oldScene != INVALID_HANDLE) {
-        sceneManager.UnloadScene(oldScene);
-    }
-
-    Scene scene = sceneManager.GetScene(name);
-    sceneManager.LoadScene(this, scene);
-    sceneManager.SwitchScene(scene);
+    m_SceneManager.SwitchScene(this, &m_GraphicsBackend, &m_ResourceManager, name, showLoadingScene);
 }

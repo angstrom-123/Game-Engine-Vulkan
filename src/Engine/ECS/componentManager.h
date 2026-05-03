@@ -5,6 +5,7 @@
 
 #include "componentArray.h"
 #include "Util/myAssert.h"
+#include "handle.h"
 
 class ComponentManager {
 public:
@@ -39,7 +40,7 @@ public:
         std::type_index index = std::type_index(typeid(T));
         ASSERT(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Getting bit of unregistered component");
 
-        ComponentArray<T> *array = (ComponentArray<T> *) m_ComponentArrays[index];
+        ComponentArray<T> *array = static_cast<ComponentArray<T> *>(m_ComponentArrays[index]);
         return std::pair<uint32_t, T *>(array->Size(), array->Data());
     }
 
@@ -48,7 +49,7 @@ public:
         std::type_index index = std::type_index(typeid(T));
         ASSERT(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Adding unregistered component");
 
-        ComponentArray<T> *array = (ComponentArray<T> *) m_ComponentArrays[index];
+        ComponentArray<T> *array = static_cast<ComponentArray<T> *>(m_ComponentArrays[index]);
         array->Insert(entity, component);
     }
 
@@ -57,7 +58,7 @@ public:
         std::type_index index = std::type_index(typeid(T));
         ASSERT(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Removing unregistered component");
 
-        ComponentArray<T> *array = (ComponentArray<T> *) m_ComponentArrays[index];
+        ComponentArray<T> *array = static_cast<ComponentArray<T> *>(m_ComponentArrays[index]);
         array->Remove(entity);
     }
 
@@ -66,13 +67,14 @@ public:
         std::type_index index = std::type_index(typeid(T));
         ASSERT(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Getting unregistered component");
 
-        ComponentArray<T> *array = (ComponentArray<T> *) m_ComponentArrays[index];
+        ComponentArray<T> *array = static_cast<ComponentArray<T> *>(m_ComponentArrays[index]);
         return array->Get(entity);
     }
 
     // Notifying all component arrays that an entity is destroyed to clean up attached components
     void EntityDestroyed(Entity entity)
     {
+        ASSERT(entity != INVALID_HANDLE && "Invalid entity destroyed");
         for (const auto& [index, componentArray] : m_ComponentArrays) {
             componentArray->EntityDestroyed(entity);
         }

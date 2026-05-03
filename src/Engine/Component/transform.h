@@ -15,13 +15,12 @@
 class ECS;
 
 struct Transform {
-    glm::vec3 translation;
-    glm::quat rotation;
-    glm::vec3 scale;
-    Entity inherit;
+    glm::vec3 translation = glm::vec3(0.0);
+    glm::quat rotation = glm::quat(1.0, 0.0, 0.0, 0.0);
+    glm::vec3 scale = glm::vec3(1.0);
+    Entity inherit = INVALID_HANDLE;
 
-    Transform();
-    void InheritFrom(Entity e);
+    Transform& InheritFrom(Entity e);
     Transform& Rotate(float radians, const glm::vec3& axis);
     Transform& Scale(float factor);
     Transform& Translate(const glm::vec3& translation);

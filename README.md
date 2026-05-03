@@ -5,12 +5,13 @@ a high quality 3D engine and game for personal use.
 
 ## Libraries
 
-- STB (stb_image.h, stb_image_resize2.h)
+- STB (image)
 - VMA
 - VkBootstrap
 - GLM
-- Vulkan SDK
 - GLFW
+- fkYAML
+- Vulkan SDK
 
 ## Known Issues
 

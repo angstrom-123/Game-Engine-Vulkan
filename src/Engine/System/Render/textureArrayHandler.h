@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ResourceManager/imageResource.h"
+#include "ResourceManager/resourceTypes.h"
 #include "textureArray.h"
 #include <unordered_map>
 
@@ -27,12 +29,12 @@ class TextureArrayHandler {
 public:
     void Init(const TextureArraySizes& sizes, class VulkanBackend *backend);
     void Cleanup(VkDevice device, VmaAllocator allocator);
-    TextureAllocation AllocateTexture(ImageData *imageData, class VulkanBackend *backend);
-    TextureAllocation GetFallbackTexture(ImageData *imageData, ImageKind kind);
+    TextureAllocation AllocateTexture(ImageResource& imageData, class VulkanBackend *backend);
+    TextureAllocation GetFallbackColorTexture();
+    TextureAllocation GetFallbackNormalTexture();
 
 private:
-    TextureAllocation m_DefaultColorAllocation;
-    TextureAllocation m_DefaultNormalAllocation;
     TextureArray m_Arrays[TEXTURE_ARRAY_MAX_ENUM];
-    std::unordered_map<std::string, TextureAllocation> m_AllocatedTextures;
+    Resource m_DefaultColorTexture;
+    Resource m_DefaultNormalTexture;
 };

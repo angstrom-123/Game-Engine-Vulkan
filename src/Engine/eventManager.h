@@ -9,7 +9,7 @@ class EventManager {
 public:
     void Init(GLFWwindow *window);
     void SetEventCallback(void ( *callback)(Event event, void *data), void *data);
-    void RecordFrame();
+    void Update();
     
 public:
     bool keysDown[GLFW_KEY_LAST] = {0};

@@ -15,7 +15,7 @@ struct CentreExtents {
     glm::vec3 extents;
 
     CentreExtents() {};
-    CentreExtents(AABB& aabb);
-    CentreExtents WorldSpace(const glm::mat4x4& model);
+    CentreExtents(const AABB& aabb);
+    CentreExtents ToWorldSpace(const glm::mat4x4& model);
 };
 

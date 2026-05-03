@@ -18,8 +18,8 @@ struct Camera {
     float yaw = 0.0;
 
     Camera() = default;
-    Camera(Perspective, glm::vec3 position, glm::vec2 dimensions, float fovRadians, float near, float far);
-    Camera(Orthographic, glm::vec3 position, glm::vec2 dimensions, float scale, float near, float far);
+    Camera(Perspective, glm::vec3 position, glm::vec2 dimensions, float fovRadians = glm::radians(60.0), float near = 0.01, float far = 1000.0);
+    Camera(Orthographic, glm::vec3 position, glm::vec2 dimensions, float scale = 1.0, float near = 0.1, float far = 100.0);
     static glm::mat4x4 VulkanPerspective(float fovRadians, float aspect, float near, float far);
     static glm::mat4x4 VulkanOrthographic(float minX, float maxX, float minY, float maxY, float near, float far);
 };

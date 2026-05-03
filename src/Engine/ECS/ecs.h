@@ -26,7 +26,6 @@ public:
         return e;
     }
 
-    // Note: Specifically NOT returning a reference, since we don't want the user to edit the signature directly
     Signature GetSignature(Entity entity)
     {
         return m_EntityManager.GetSignature(entity);
@@ -91,12 +90,9 @@ public:
 
     template<Derived<System> T> T* RegisterSystem()
     {
-        return m_SystemManager.RegisterSystem<T>();
-    }
-
-    template<Derived<System> T> void SetSystemSignature(Signature signature)
-    {
-        m_SystemManager.SetSignature<T>(signature);
+        T *system = m_SystemManager.RegisterSystem<T>();
+        m_SystemManager.SetSignature<T>(system->GetSignature(this));
+        return system;
     }
 
 private:
