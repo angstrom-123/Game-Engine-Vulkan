@@ -19,7 +19,7 @@ namespace vkinit {
     VkPipelineShaderStageCreateInfo ShaderStageCreateInfo(VkShaderStageFlagBits stage, VkShaderModule module);
     VkPipelineVertexInputStateCreateInfo VertexInputStateCreateInfo(std::vector<VkVertexInputBindingDescription> *bindings = nullptr, std::vector<VkVertexInputAttributeDescription> *attributes = nullptr);
     VkPipelineInputAssemblyStateCreateInfo InputAssemblyStateCreateInfo(VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-    VkPipelineRasterizationStateCreateInfo RasterizationStateCreateInfo(VkPolygonMode polygonMode);
+    VkPipelineRasterizationStateCreateInfo RasterizationStateCreateInfo(VkPolygonMode polygonMode, VkCullModeFlags cullMode);
     VkPipelineMultisampleStateCreateInfo MultisampleStateCreateInfo(VkSampleCountFlagBits samples, bool enableA2C);
     VkPipelineColorBlendAttachmentState ColorBlendAttachmentState();
     VkPipelineLayoutCreateInfo LayoutCreateInfo(VkPushConstantRange *pushConstant = nullptr);

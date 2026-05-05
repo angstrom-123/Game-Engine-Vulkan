@@ -1,9 +1,13 @@
 #include "renderSystem.h"
+#include "Component/camera.h"
 #include "Component/material.h"
+#include "ResourceManager/fontResource.h"
 #include "ResourceManager/imageResource.h"
 #include "ResourceManager/materialResource.h"
 #include "ResourceManager/modelResource.h"
 #include "System/Render/textureArrayHandler.h"
+#include "Util/allocator.h"
+#include "Util/myAssert.h"
 #include "Util/profiler.h"
 #include "Util/flags.h"
 #include "vulkan_core.h"
@@ -62,246 +66,88 @@ void RenderSystem::UploadResources(std::vector<Resource> resources, const fs::pa
 
     // Upload default textures
     const DefaultTextures& defaultTextures = manager->GetDefaultTextures();
+    m_DefaultColor = manager->GetPath(defaultTextures.white);
+    m_DefaultNormal = manager->GetPath(defaultTextures.normal);
+    UploadTexture(defaultTextures.white, manager, backend);
+    UploadTexture(defaultTextures.gray, manager, backend);
+    UploadTexture(defaultTextures.black, manager, backend);
+    UploadTexture(defaultTextures.normal, manager, backend);
 
-    ImageResource& whiteData = manager->GetData<ImageResource>(defaultTextures.white);
-    ImageResource& grayData = manager->GetData<ImageResource>(defaultTextures.gray);
-    ImageResource& blackData = manager->GetData<ImageResource>(defaultTextures.black);
-    ImageResource& normalData = manager->GetData<ImageResource>(defaultTextures.normal);
+    // Upload default fonts
+    const DefaultFonts& defaultFonts = manager->GetDefaultFonts();
+    m_DefaultFont = manager->GetPath(defaultFonts.robotoRegular);
+    UploadFont(defaultFonts.robotoRegular, manager, backend);
 
-    m_Textures.insert({manager->GetPath(defaultTextures.white), m_ArrayHandler.AllocateTexture(whiteData, backend)});
-    m_Textures.insert({manager->GetPath(defaultTextures.gray), m_ArrayHandler.AllocateTexture(grayData, backend)});
-    m_Textures.insert({manager->GetPath(defaultTextures.black), m_ArrayHandler.AllocateTexture(blackData, backend)});
-    m_Textures.insert({manager->GetPath(defaultTextures.normal), m_ArrayHandler.AllocateTexture(normalData, backend)});
-
-    // Textures first
-    for (const Resource resource : resources) {
-        if (manager->HasData<ImageResource>(resource)) {
-            fs::path path = manager->GetPath(resource);
-            if (!m_Textures.contains(path)) {
-                ImageResource& imageData = manager->GetData<ImageResource>(resource);
-                m_Textures.insert({path, m_ArrayHandler.AllocateTexture(imageData, backend)});
-                imageData.Cleanup();
-            }
-        } 
+    // Process type by type because some resources depend on others - e.g. materials depend on textures. 
+    for (const Resource resource : manager->FilterHasData<ImageResource>(resources)) {
+        UploadTexture(resource, manager, backend);
     }
-
-    // Materials second
-    for (const Resource resource : resources) {
-        if (manager->HasData<MaterialResource>(resource)) {
-            fs::path path = manager->GetPath(resource);
-            const MaterialResource& data = manager->GetData<MaterialResource>(resource);
-            for (const SubMaterialResource& subMaterial : data.subMaterials) {
-                if (!m_AllocatedMaterials.contains(path / subMaterial.name)) {
-                    ASSERT(m_Textures.contains(subMaterial.ambientTexture) && "Material uses unspecified texture");
-                    ASSERT(m_Textures.contains(subMaterial.diffuseTexture) && "Material uses unspecified texture");
-                    ASSERT(m_Textures.contains(subMaterial.normalTexture) && "Material uses unspecified texture");
-                    Material material = {
-                        .baseColor = subMaterial.diffuseColor,
-                        .specularExponent = subMaterial.specularExponent,
-                        .ambientTexture = m_Textures[subMaterial.ambientTexture],
-                        .diffuseTexture = m_Textures[subMaterial.diffuseTexture],
-                        .normalTexture = m_Textures[subMaterial.normalTexture],
-                    };
-
-                    const ImageResource& ambientImage = manager->GetData<ImageResource>(manager->GetResource(subMaterial.ambientTexture));
-                    const ImageResource& diffuseImage = manager->GetData<ImageResource>(manager->GetResource(subMaterial.diffuseTexture));
-                    if (FLAGS_HAVE_BIT(ambientImage.flags, IMAGE_FLAG_TRANSPARENT) || FLAGS_HAVE_BIT(diffuseImage.flags, IMAGE_FLAG_TRANSPARENT)) {
-                        material.flags |= MATERIAL_FLAG_TRANSPARENT;
-                    }
-                    m_AllocatedMaterials.insert({path / subMaterial.name, material});
-                }
-            }
-        }
+    for (const Resource resource : manager->FilterHasData<FontResource>(resources)) {
+        UploadFont(resource, manager, backend);
     }
-
-    // Models third
-    for (const Resource resource : resources) {
-        if (manager->HasData<ModelResource>(resource)) {
-            fs::path path = manager->GetPath(resource);
-            if (!m_ModelParts.contains(path)) {
-                const ModelResource& modelData = manager->GetData<ModelResource>(resource);
-                const MaterialResource& materialData = manager->GetData<MaterialResource>(manager->GetResource(modelData.materialFilePath));
-
-                std::set<fs::path> subModels;
-                for (const SubModelResource& subModel : modelData.subModels) {
-                    if (!m_SubModelMaterials.contains(path / subModel.name)) {
-                        m_SubModelMaterials.insert({path / subModel.name, modelData.materialFilePath / subModel.materialName});
-                    }
-
-                    if (!m_SubModels.contains(path / subModel.name)) {
-                        Mesh mesh;
-                        mesh.vertexCount = subModel.indices.size();
-                        mesh.vertices = static_cast<Vertex *>(calloc(mesh.vertexCount, sizeof(Vertex)));
-                        for (int32_t i = 0; i < mesh.vertexCount; i++)  {
-                            // NOTE: the indices stored start from 1
-                            mesh.vertices[i] = (Vertex) {
-                                .position = modelData.positions[subModel.indices[i][0] - 1],
-                                .normal = modelData.normals[subModel.indices[i][2] - 1],
-                                .uv = modelData.uvs[subModel.indices[i][1] - 1]
-                            };
-                            mesh.bounds.Update(mesh.vertices[i]);
-
-                            // Calculate tangents for every tri
-                            if ((i + 1) % 3 == 0) {
-                                Vertex& v1 = mesh.vertices[i - 2];
-                                Vertex& v2 = mesh.vertices[i - 1];
-                                Vertex& v3 = mesh.vertices[i];
-                                glm::vec3 edge1 = v2.position - v1.position;
-                                glm::vec3 edge2 = v3.position - v1.position;
-                                glm::vec2 deltaUV1 = v2.uv - v1.uv;
-                                glm::vec2 deltaUV2 = v3.uv - v1.uv;
-
-                                float f = (deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y);
-                                float fInv = 1.0 / f;
-                                glm::vec4 tangent(
-                                    fInv * (deltaUV2.y * edge1.x - deltaUV1.y * edge2.x),
-                                    fInv * (deltaUV2.y * edge1.y - deltaUV1.y * edge2.y),
-                                    fInv * (deltaUV2.y * edge1.z - deltaUV1.y * edge2.z),
-                                    f < 0.0 ? -1.0 : 1.0
-                                );
-
-                                v1.tangent = tangent;
-                                v2.tangent = tangent;
-                                v3.tangent = tangent;
-                            }
-                        }
-
-                        const size_t bufferSize = mesh.vertexCount * sizeof(Vertex);
-                        ASSERT(bufferSize > 0 && "Mesh with no vertices");
-
-                        // Staging buffer
-                        VkBufferCreateInfo stagingBufferInfo = {
-                            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                            .pNext = nullptr,
-                            .size = bufferSize,
-                            .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT // Only for data transfer, not rendering
-                        };
-                        VmaAllocationCreateInfo allocInfo = {
-                            .usage = VMA_MEMORY_USAGE_CPU_ONLY
-                        };
-
-                        AllocatedBuffer stagingBuffer;
-                        vmaCreateBuffer(backend->allocator, &stagingBufferInfo, &allocInfo, &stagingBuffer.buffer, &stagingBuffer.allocation, nullptr);
-                        VMA_NAME_ALLOCATION(backend->allocator, stagingBuffer.allocation, "Mesh_Staging_Buffer");
-
-                        vmaMapMemory(backend->allocator, stagingBuffer.allocation, &stagingBuffer.data);
-                        memcpy(stagingBuffer.data, mesh.vertices, bufferSize);
-                        vmaUnmapMemory(backend->allocator, stagingBuffer.allocation);
-
-                        // Don't need them on the CPU anymore
-                        free(mesh.vertices);
-                        mesh.vertices = nullptr;
-
-                        VkBufferCreateInfo vertexBufferInfo = {
-                            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                            .size = bufferSize,
-                            .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT // Data transfer destination
-                        };
-
-                        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY; // Target buffer is only for the gpu (faster)
-                        vmaCreateBuffer(backend->allocator, &vertexBufferInfo, &allocInfo, &mesh.vertexBuffer.buffer, &mesh.vertexBuffer.allocation, nullptr);
-                        VMA_NAME_ALLOCATION(backend->allocator, mesh.vertexBuffer.allocation, "Mesh_Vertex_Buffer");
-
-                        // Copy the buffer to the GPU
-                        backend->submitter.ImmediateSubmit(backend->device, backend->graphicsQueue, [&](VkCommandBuffer commandBuffer) {
-                            VkBufferCopy copy = {
-                                .srcOffset = 0,
-                                .dstOffset = 0,
-                                .size = bufferSize,
-                            };
-                            vkCmdCopyBuffer(commandBuffer, stagingBuffer.buffer, mesh.vertexBuffer.buffer, 1, &copy);
-                        });
-
-                        // Clean up mesh and staging buffer
-                        vmaDestroyBuffer(backend->allocator, stagingBuffer.buffer, stagingBuffer.allocation);
-
-                        VmaAllocator allocator = backend->allocator;
-                        VkBuffer vertexBuffer = mesh.vertexBuffer.buffer; 
-                        VmaAllocation vertexAllocation = mesh.vertexBuffer.allocation; 
-                        m_DeletionQueue.PushFunction([allocator, vertexBuffer, vertexAllocation] {
-                            vmaDestroyBuffer(allocator, vertexBuffer, vertexAllocation);
-                        });
-
-                        mesh.allocated = true;
-
-                        m_SubModels.insert({path / subModel.name, mesh});
-                        subModels.insert({path / subModel.name});
-                    }
-                }
-
-                m_ModelParts.insert({path, subModels});
-            } 
-        }
+    for (const Resource resource : manager->FilterHasData<MaterialResource>(resources)) {
+        UploadMaterial(resource, manager, backend);
+    }
+    for (const Resource resource : manager->FilterHasData<ModelResource>(resources)) {
+        UploadModel(resource, manager, backend);
     }
 }
 
-std::pair<Entity, std::vector<Entity>> RenderSystem::GetModel(ECS *ecs, const fs::path& modelRelativePath)
+std::pair<Entity, std::vector<Entity>> RenderSystem::GetModel(ECS *ecs, const fs::path& modelRelativePath) const
 {
     ASSERT(!m_SceneDir.empty() && "Resources are not loaded");
 
     const fs::path fullPath = m_SceneDir / modelRelativePath;
     Entity origin = ecs->CreateEntity();
 
-    ASSERT(m_ModelParts.contains(fullPath) && "Getting invalid model");
-    ASSERT(!m_ModelParts[fullPath].empty() && "Getting model with no meshes");
-    const std::set<fs::path> partPaths = m_ModelParts[fullPath];
+    auto it = m_ModelParts.find(fullPath);
+    ASSERT(it != m_ModelParts.end() && "Getting invalid model");
+    ASSERT(!it->second.empty() && "Getting model with no meshes");
+    const std::set<fs::path>& partPaths = it->second;
 
     std::vector<Entity> parts;
     parts.reserve(partPaths.size());
 
     for (const fs::path& partPath : partPaths) {
-        Entity part = ecs->CreateEntity();
-        // Mesh
-        ASSERT(m_SubModels.contains(partPath) && "Getting mesh for invalid submodel");
-        const Mesh& mesh = m_SubModels[partPath];
-        ASSERT(mesh.allocated && "Unallocated mesh");
-        ecs->AddComponent<Mesh>(part, mesh);
-        // Material
-        ASSERT(m_SubModelMaterials.contains(partPath) && "Getting submaterial name for invalid submodel");
-        ASSERT(m_AllocatedMaterials.contains(m_SubModelMaterials[partPath]) && "Getting submaterial for invalid submodel");
-        const Material& material = m_AllocatedMaterials[m_SubModelMaterials[partPath]];
-        ecs->AddComponent<Material>(part, material);
-        // Transform
+        Entity part = GetModelPart(ecs, modelRelativePath, partPath.filename());
         ecs->GetComponent<Transform>(part).InheritFrom(origin);
-        // Insert
         parts.push_back(part);
     }
 
     return std::make_pair(origin, parts);
 }
 
-Entity RenderSystem::GetModelPart(ECS *ecs, const fs::path& modelRelativePath, const std::string& partName)
+Entity RenderSystem::GetModelPart(ECS *ecs, const fs::path& modelRelativePath, const std::string& partName) const
 {
     ASSERT(!m_SceneDir.empty() && "Resources are not loaded");
 
     Entity part = ecs->CreateEntity();
 
     const fs::path partPath = m_SceneDir / modelRelativePath / partName;
-    ASSERT(m_SubModels.contains(partPath) && "Getting mesh for invalid submodel");
-    // Mesh
-    const Mesh& mesh = m_SubModels[partPath];
-    ASSERT(mesh.allocated && "Unallocated mesh");
-    ecs->AddComponent<Mesh>(part, mesh);
-    // Material
-    ASSERT(m_SubModelMaterials.contains(partPath) && "Getting submaterial name for invalid submodel");
-    ASSERT(m_AllocatedMaterials.contains(m_SubModelMaterials[partPath]) && "Getting submaterial for invalid submodel");
-    const Material& material = m_AllocatedMaterials[m_SubModelMaterials[partPath]];
-    ecs->AddComponent<Material>(part, material);
+    auto meshIt = m_SubModels.find(partPath);
+    ASSERT(meshIt != m_SubModels.end() && "Getting mesh for invalid submodel");
+    ecs->AddComponent<Mesh>(part, meshIt->second);
+
+    auto subIt = m_SubModelMaterials.find(partPath);
+    ASSERT(subIt != m_SubModelMaterials.end() && "Getting submaterial name for invalid submodel");
+    auto materialIt = m_AllocatedMaterials.find(subIt->second);
+    ASSERT(materialIt != m_AllocatedMaterials.end() && "Getting submaterial for invalid submodel");
+    ecs->AddComponent<Material>(part, materialIt->second);
 
     return part;
 }
 
-void RenderSystem::CreatePointLight(ECS *ecs, const LightCreateInfo& info, Entity& result)
+Entity RenderSystem::CreatePointLight(ECS *ecs, const LightCreateInfo& info)
 {
     Entity e = ecs->CreateEntity();
 
     ecs->GetComponent<Transform>(e).Translate(info.position);
     ecs->AddComponent(e, Light(POINT, info.color, info.intensity, info.radius));
 
-    result = e;
+    return e;
 }
 
-void RenderSystem::CreateSpotLight(ECS *ecs, const LightCreateInfo& info, Entity& result, VulkanBackend *backend)
+Entity RenderSystem::CreateSpotLight(ECS *ecs, const LightCreateInfo& info, VulkanBackend *backend)
 {
     Entity e = ecs->CreateEntity();
 
@@ -320,10 +166,10 @@ void RenderSystem::CreateSpotLight(ECS *ecs, const LightCreateInfo& info, Entity
     ecs->AddComponent<Light>(e, light);
     ecs->GetComponent<Transform>(e).Translate(info.position).Rotate(angle, axis);
 
-    result = e;
+    return e;
 }
 
-void RenderSystem::CreateDirectionalLight(ECS *ecs, const LightCreateInfo& info, Entity& result, VulkanBackend *backend)
+Entity RenderSystem::CreateDirectionalLight(ECS *ecs, const LightCreateInfo& info, VulkanBackend *backend)
 {
     Entity e = ecs->CreateEntity();
 
@@ -342,7 +188,150 @@ void RenderSystem::CreateDirectionalLight(ECS *ecs, const LightCreateInfo& info,
     ecs->AddComponent<Light>(e, light);
     ecs->GetComponent<Transform>(e).Rotate(angle, axis).Translate(info.position - glm::normalize(info.direction) * info.distance);
 
-    result = e;
+    return e;
+}
+
+Entity RenderSystem::CreateText(ECS *ecs, const TextCreateInfo& info, VulkanBackend *backend)
+{
+    Entity e = ecs->CreateEntity();
+
+    const fs::path fontPath = info.fontPath.empty() ? m_DefaultFont : info.fontPath;
+    ASSERT(m_Fonts.contains(fontPath) && "Specified font not loaded");
+    auto it = m_Fonts[fontPath].lower_bound(info.fontSize);
+    ASSERT(it != m_Fonts[fontPath].end() && "Requested font size too large");
+    const auto& [fontSize, glyphs] = *it;
+    if (fontSize != info.fontSize) {
+        WARN("Desired font size not available (" << info.fontSize << "). Using " << fontSize);
+        HINT("Select a multiple of 4 between or including 12 and 68");
+    }
+
+    Text text = {
+        .fontSize = fontSize,
+        .color = info.color,
+        .text = info.text,
+        .fontPath = fontPath
+    };
+
+    ecs->AddComponent<Text>(e, text);
+    ecs->GetComponent<Transform>(e).Translate(info.position);
+
+    // Break into lines
+    std::vector<std::string> lines(5);
+    if (info.maxWidth > 0.0) {
+        std::string remaining = text.text;
+        while (!remaining.empty()) {
+            size_t split = 0;
+            float width = 0.0;
+            for (uint32_t i = 0; i < remaining.size(); i++) {
+                char c = remaining[i];
+                const GlyphInfo& g = glyphs.GetGlyph(c);
+                if (width + g.advance > info.maxWidth) {
+                    size_t lastSpace = remaining.rfind(' ', i);
+                    if (lastSpace != std::string::npos && lastSpace > 0) {
+                        split = lastSpace;
+                    } else {
+                        split = i;
+                    }
+                } else {
+                    width += g.advance;
+                    if (i == remaining.size() - 1) {
+                        split = remaining.size();
+                    }
+                }
+            }
+
+            // Fallback
+            if (split == 0) split += remaining.size();
+
+            std::string line = remaining.substr(0, split);
+            lines.push_back(line);
+
+            // Skip a space if we split cleanly
+            if (split < remaining.size() && remaining[split] == ' ') {
+                split++;
+            }
+
+            remaining = remaining.substr(split);
+        }
+    } else {
+        lines.push_back(text.text);
+    }
+
+    // Create mesh
+
+    // Bounding box padded on z axis because it is flat
+    AABB boundingBox = {
+        .min = glm::vec3(0.0, 0.0, -0.05),
+        .max = glm::vec3(0.0, 0.0, 0.05)
+    };
+    std::vector<Vertex> vertices(6 * text.text.size());
+
+    float baseline = 0.0;
+    for (const std::string& line : lines) {
+        if (line.empty()) continue;
+
+        INFO("Generating mesh for line: " << line);
+
+        // Alignment
+        float lineWidth = 0.0;
+        float startX = 0.0;
+        for (char c : line) {
+            lineWidth += glyphs.GetGlyph(c).advance;
+        }
+        switch (info.align) {
+            case TEXT_ALIGN_CENTRE: startX = (info.maxWidth - lineWidth) * 0.5 * METRES_PER_PIXEL; break;
+            case TEXT_ALIGN_RIGHT: startX = (info.maxWidth - lineWidth); break;
+            default: break;
+        }
+
+        // Create quads
+        float penX = startX;
+        float penY = baseline;
+        for (char c : line) {
+            const GlyphInfo& g = glyphs.GetGlyph(c);
+
+            float x0 = penX + g.offset.x * METRES_PER_PIXEL;
+            float y0 = penY - g.offset.y * METRES_PER_PIXEL;
+            float x1 = x0 + (g.uv1.x - g.uv0.x) * static_cast<float>(FONT_ATLAS_RESOLUTION) * METRES_PER_PIXEL;
+            float y1 = y0 - (g.uv1.y - g.uv0.y) * static_cast<float>(FONT_ATLAS_RESOLUTION) * METRES_PER_PIXEL;
+
+            vertices.emplace_back(glm::vec3(x0, y0, 0.0), glm::vec3(0.0, 0.0, 1.0), glm::vec2(g.uv0.x, g.uv0.y), glm::vec4(1.0, glm::vec3(0.0))); // 0
+            vertices.emplace_back(glm::vec3(x0, y1, 0.0), glm::vec3(0.0, 0.0, 1.0), glm::vec2(g.uv0.x, g.uv1.y), glm::vec4(1.0, glm::vec3(0.0))); // 1
+            vertices.emplace_back(glm::vec3(x1, y1, 0.0), glm::vec3(0.0, 0.0, 1.0), glm::vec2(g.uv1.x, g.uv1.y), glm::vec4(1.0, glm::vec3(0.0))); // 2
+            vertices.emplace_back(glm::vec3(x0, y0, 0.0), glm::vec3(0.0, 0.0, 1.0), glm::vec2(g.uv0.x, g.uv0.y), glm::vec4(1.0, glm::vec3(0.0))); // 0
+            vertices.emplace_back(glm::vec3(x1, y1, 0.0), glm::vec3(0.0, 0.0, 1.0), glm::vec2(g.uv1.x, g.uv1.y), glm::vec4(1.0, glm::vec3(0.0))); // 2
+            vertices.emplace_back(glm::vec3(x1, y0, 0.0), glm::vec3(0.0, 0.0, 1.0), glm::vec2(g.uv1.x, g.uv0.y), glm::vec4(1.0, glm::vec3(0.0))); // 3
+
+            boundingBox.Update(vertices[vertices.size() - 2]);
+            boundingBox.Update(vertices[vertices.size() - 6]);
+
+            penX += g.advance * METRES_PER_PIXEL;
+        }
+
+        // Move down a line (origin top left)
+        baseline -= info.lineHeight * METRES_PER_PIXEL;
+    }
+
+    Mesh mesh = {
+        .vertexCount = static_cast<int32_t>(vertices.size()),
+        .vertexBuffer = AllocateVertexBuffer(vertices.data(), vertices.size(), backend),
+        .bounds = boundingBox,
+        .allocated = true,
+    };
+    ecs->AddComponent<Mesh>(e, mesh);
+    INFO("Mesh has: " << mesh.vertexCount << " vertices");
+
+    ASSERT(m_Textures.contains(text.fontPath) && "Font atlas not allocated");
+    Material material = {
+        .baseColor = text.color,
+        .ambientTexture = m_Textures[text.fontPath],
+        .diffuseTexture = m_Textures[m_DefaultColor],
+        .normalTexture = m_Textures[m_DefaultNormal],
+        .flags = MATERIAL_FLAG_TRANSPARENT,
+    };
+    ecs->AddComponent<Material>(e, material);
+
+    return e;
 }
 
 void RenderSystem::AllocateShadowcaster(Light& light, Shadowcaster& shadowcaster, VulkanBackend *backend)
@@ -350,4 +339,135 @@ void RenderSystem::AllocateShadowcaster(Light& light, Shadowcaster& shadowcaster
     ShadowAllocation allocation = m_ShadowArrayHandler.AllocateTexture(backend);
     light.shadowIndex = allocation.textureID;
     shadowcaster.shadowIndex = allocation.textureID;
+}
+
+void RenderSystem::UploadTexture(Resource resource, ResourceManager *manager, VulkanBackend *backend)
+{
+    fs::path path = manager->GetPath(resource);
+    if (m_Textures.contains(path)) {
+        return;
+    }
+
+    ImageResource& imageData = manager->GetData<ImageResource>(resource);
+    m_Textures.insert({path, m_ArrayHandler.AllocateTexture(imageData, backend)});
+}
+
+void RenderSystem::UploadMaterial(Resource resource, ResourceManager *manager, VulkanBackend *backend)
+{
+    fs::path path = manager->GetPath(resource);
+    const MaterialResource& data = manager->GetData<MaterialResource>(resource);
+    for (const SubMaterialResource& subMaterial : data.subMaterials) {
+        if (m_AllocatedMaterials.contains(path / subMaterial.name)) {
+            WARN("Uploading submaterial that is already uploaded");
+            continue;
+        }
+
+        ASSERT(m_Textures.contains(subMaterial.ambientTexture) && "Material uses unspecified texture");
+        ASSERT(m_Textures.contains(subMaterial.diffuseTexture) && "Material uses unspecified texture");
+        ASSERT(m_Textures.contains(subMaterial.normalTexture) && "Material uses unspecified texture");
+        Material material = {
+            .baseColor = subMaterial.diffuseColor,
+            .specularExponent = subMaterial.specularExponent,
+            .ambientTexture = m_Textures[subMaterial.ambientTexture],
+            .diffuseTexture = m_Textures[subMaterial.diffuseTexture],
+            .normalTexture = m_Textures[subMaterial.normalTexture],
+        };
+
+        const ImageResource& ambientImage = manager->GetData<ImageResource>(manager->GetResource(subMaterial.ambientTexture));
+        const ImageResource& diffuseImage = manager->GetData<ImageResource>(manager->GetResource(subMaterial.diffuseTexture));
+        if (FLAGS_HAVE_BIT(ambientImage.flags, IMAGE_FLAG_TRANSPARENT) || FLAGS_HAVE_BIT(diffuseImage.flags, IMAGE_FLAG_TRANSPARENT)) {
+            material.flags |= MATERIAL_FLAG_TRANSPARENT;
+        }
+        m_AllocatedMaterials.insert({path / subMaterial.name, material});
+    }
+}
+
+void RenderSystem::UploadModel(Resource resource, ResourceManager *manager, VulkanBackend *backend)
+{
+    fs::path path = manager->GetPath(resource);
+    if (m_ModelParts.contains(path)) {
+        WARN("Uploading model that is already uploaded");
+        return;
+    }
+    const ModelResource& modelData = manager->GetData<ModelResource>(resource);
+    const MaterialResource& materialData = manager->GetData<MaterialResource>(manager->GetResource(modelData.materialFilePath));
+
+    std::set<fs::path> subModels;
+    for (const SubModelResource& subModel : modelData.subModels) {
+        if (m_SubModels.contains(path / subModel.name) || m_SubModelMaterials.contains(path / subModel.name)) {
+            WARN("Uploading submodel that is already uploaded");
+            continue;
+        }
+
+        m_SubModelMaterials.insert({path / subModel.name, modelData.materialFilePath / subModel.materialName});
+
+        Mesh mesh;
+        mesh.vertexCount = subModel.indices.size();
+        std::vector<Vertex> vertices(mesh.vertexCount);
+        for (int32_t i = 0; i < mesh.vertexCount; i++)  {
+            // NOTE: the indices stored start from 1
+            vertices[i] = (Vertex) {
+                .position = modelData.positions[subModel.indices[i][0] - 1],
+                .normal = modelData.normals[subModel.indices[i][2] - 1],
+                .uv = modelData.uvs[subModel.indices[i][1] - 1]
+            };
+            mesh.bounds.Update(vertices[i]);
+
+            // Calculate tangents for every tri
+            if ((i + 1) % 3 == 0) {
+                Vertex& v1 = vertices[i - 2];
+                Vertex& v2 = vertices[i - 1];
+                Vertex& v3 = vertices[i];
+                glm::vec3 edge1 = v2.position - v1.position;
+                glm::vec3 edge2 = v3.position - v1.position;
+                glm::vec2 deltaUV1 = v2.uv - v1.uv;
+                glm::vec2 deltaUV2 = v3.uv - v1.uv;
+
+                float f = (deltaUV1.x * deltaUV2.y - deltaUV2.x * deltaUV1.y);
+                float fInv = 1.0 / f;
+                glm::vec4 tangent(
+                    fInv * (deltaUV2.y * edge1.x - deltaUV1.y * edge2.x),
+                    fInv * (deltaUV2.y * edge1.y - deltaUV1.y * edge2.y),
+                    fInv * (deltaUV2.y * edge1.z - deltaUV1.y * edge2.z),
+                    f < 0.0 ? -1.0 : 1.0
+                );
+
+                v1.tangent = tangent;
+                v2.tangent = tangent;
+                v3.tangent = tangent;
+            }
+        }
+
+        mesh.vertexBuffer = AllocateVertexBuffer(vertices.data(), vertices.size(), backend);
+        mesh.allocated = true;
+
+        m_SubModels.insert({path / subModel.name, mesh});
+        subModels.insert({path / subModel.name});
+    }
+
+    m_ModelParts.insert({path, subModels});
+}
+
+void RenderSystem::UploadFont(Resource resource, ResourceManager *manager, VulkanBackend *backend)
+{
+    fs::path path = manager->GetPath(resource);
+    INFO("path: " << path);
+    if (m_Fonts.contains(path)) {
+        WARN("Uploading font that is already uploaded");
+        return;
+    }
+
+    FontResource& fontResource = manager->GetData<FontResource>(resource);
+    m_Fonts.insert({path, fontResource.Pack({12, 20, 28, 36, 44, 52, 60, 68, 76})});
+    m_Textures.insert({path, m_ArrayHandler.AllocateRaw(fontResource.bitmap, glm::ivec2(FONT_ATLAS_RESOLUTION), IMAGE_FLAG_FONT_ATLAS, 1, backend)});
+}
+
+AllocatedBuffer RenderSystem::AllocateVertexBuffer(const Vertex *const vertices, uint32_t count, VulkanBackend *backend)
+{
+    AllocatedBuffer res = backend->CreateBuffer<Vertex>(vertices, count);
+    VmaAllocator allocator = backend->allocator;
+    m_DeletionQueue.PushFunction([allocator, res] {
+        vmaDestroyBuffer(allocator, res.buffer, res.allocation);
+    });
+    return res;
 }

@@ -17,8 +17,9 @@ namespace fs = std::filesystem;
       - relative/path/to/material1.mtl
       - relative/path/to/material2.mtl
  */
+
+// TODO: Add fonts
 struct ResourceManifest {
-    // Explicitly defined
     std::string sceneName = "";
     bool shadowsEnabled = false;
     bool perspectiveProjection = true;

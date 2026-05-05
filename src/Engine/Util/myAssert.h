@@ -3,12 +3,9 @@
 #include <cstdlib>
 #include "logger.h"
 
-#define VERIFY(expr) if (!(expr)) { ERROR("Verification failure"); abort(); }
-#define SUGGEST_IF(expr, suggestion) if (expr) { fprintf(stderr, "\033[94m[SUGGESTION] %s:%s:%d: \033[0m", __FILE_NAME__, __func__, __LINE__); std::cerr << suggestion << std::endl; }
-#define QUOTE(...) #__VA_ARGS__
-
 #ifdef DEBUG 
-    #define ASSERT(expr) if (!(expr)) { ERROR("Assertion failure: " << QUOTE(expr)); abort(); }
+    #define QUOTE(...) #__VA_ARGS__
+    #define ASSERT(expr) if (!(expr)) { FATAL("Assertion failure: " << QUOTE(expr)); }
 #elifdef RELEASE
     #define ASSERT(expr)
 #else 

@@ -20,7 +20,7 @@ int main(int argc, const char *argv[]) {
     engine.RegisterScene<ApesScene>("src/Application/ApesScene");
 
     // Scene name specified in its MANIFEST.yaml under the `manifest` tag
-    engine.Run("SponzaScene");
+    engine.Run("ApesScene");
 
     PROFILER_END_SESSION();
 }

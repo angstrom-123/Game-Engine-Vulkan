@@ -27,12 +27,13 @@ public:
         m_CurrentBit++;
     }
 
-    template<typename T> uint64_t GetBit()
+    template<typename T> uint64_t GetBit() const
     {
         std::type_index index = std::type_index(typeid(T));
         ASSERT(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Getting bit of unregistered component");
-
-        return m_RegisteredTypeBits[index];
+        auto it = m_RegisteredTypeBits.find(index);
+        ASSERT(it != m_RegisteredTypeBits.end() && "Getting bit for unregistered component");
+        return it->second;
     }
 
     template<typename T> std::pair<uint32_t, T *> GetData()

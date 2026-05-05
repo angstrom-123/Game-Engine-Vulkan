@@ -1,4 +1,5 @@
 #include "apesScene.h"
+#include "Component/text.h"
 #include <cstdlib>
 
 #include <Engine/ECS/ecsTypes.h>
@@ -30,7 +31,6 @@ void ApesScene::OnInit(const SceneConfig& config)
     core.ecs->GetComponent<Transform>(m_RightApeParent).Translate(3.0, 0.0, -5.0);
 
     // Directional light
-    Entity sun;
     LightCreateInfo sunLightInfo = {
         .position           = glm::vec3(0.0),
         .color              = glm::vec3(1.0),
@@ -39,7 +39,18 @@ void ApesScene::OnInit(const SceneConfig& config)
         .radius             = 60.0,
         .distance           = 40.0,
     };
-    core.renderSystem->CreateDirectionalLight(core.ecs, sunLightInfo, sun, core.graphicsBackend);
+    core.renderSystem->CreateDirectionalLight(core.ecs, sunLightInfo, core.graphicsBackend);
+
+    // Text
+    TextCreateInfo textInfo = {
+        .fontSize = 68,
+        .position = glm::vec3(0.0, 0.0, -5.0),
+        .color = glm::vec3(1.0, 0.0, 0.0),
+        .text = "Hello, World!",
+        .align = TEXT_ALIGN_CENTRE
+    };
+    Entity text = core.renderSystem->CreateText(core.ecs, textInfo, core.graphicsBackend);
+    core.ecs->GetComponent<Transform>(text).Scale(0.1);
 }
 
 void ApesScene::OnUpdate(double deltaTime)

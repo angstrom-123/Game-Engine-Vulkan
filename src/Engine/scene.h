@@ -4,6 +4,7 @@
 #include "Component/light.h"
 #include "Component/material.h"
 #include "Component/mesh.h"
+#include "Component/screenSpace.h"
 #include "Component/shadowcaster.h"
 #include "ECS/ecs.h"
 #include "ResourceManager/resourceManifest.h"
@@ -40,6 +41,8 @@ public:
         core.ecs->RegisterComponent<Material>();
         core.ecs->RegisterComponent<Light>();
         core.ecs->RegisterComponent<Shadowcaster>();
+        core.ecs->RegisterComponent<Text>();
+        core.ecs->RegisterComponent<ScreenSpace>();
 
         core.renderSystem = core.ecs->RegisterSystem<RenderSystem>();
 

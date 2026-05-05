@@ -78,7 +78,7 @@ public:
         return m_ComponentManager.GetComponent<T>(entity);
     }
 
-    template<typename T> uint64_t GetBit()
+    template<typename T> uint64_t GetBit() const
     {
         return m_ComponentManager.GetBit<T>();
     }

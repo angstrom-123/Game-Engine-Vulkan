@@ -5,7 +5,9 @@
 
 #include <vulkan/vulkan_core.h>
 
+#include "Component/camera.h"
 #include "ECS/ecs.h"
+#include "Geometry/frustum.h"
 #include "System/Render/shadowArrayHandler.h"
 #include "config.h"
 #include "commandSubmitter.h"
@@ -17,12 +19,74 @@ class VulkanBackend {
 public:
     ~VulkanBackend();
     void Init(struct GLFWwindow *window, Config &config);
-    void Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHandler, std::set<Entity>& entities);
+    void Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHandler, const std::set<Entity>& entities);
     void RequestResize(Entity camera);
     void TMP(ECS *ecs);
     static void WaitForIdle(VkDevice device);
-
     uint64_t GetFrameNumber() { return m_FrameNum; };
+
+    template<typename T> AllocatedBuffer CreateBuffer(const T *const data, uint32_t count)
+    {
+        const size_t bufferSize = count * sizeof(T);
+        ASSERT(bufferSize > 0 && "Creating empty buffer");
+
+        // Staging buffer
+        VkBufferCreateInfo stagingBufferInfo = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = nullptr,
+            .size = bufferSize,
+            .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT // Only for data transfer, not rendering
+        };
+        VmaAllocationCreateInfo allocInfo = {
+            .usage = VMA_MEMORY_USAGE_CPU_ONLY
+        };
+
+        AllocatedBuffer stagingBuffer;
+        vmaCreateBuffer(allocator, &stagingBufferInfo, &allocInfo, &stagingBuffer.buffer, &stagingBuffer.allocation, nullptr);
+        VMA_NAME_ALLOCATION(allocator, stagingBuffer.allocation, "Mesh_Staging_Buffer");
+
+        vmaMapMemory(allocator, stagingBuffer.allocation, &stagingBuffer.data);
+        memcpy(stagingBuffer.data, data, bufferSize);
+        vmaUnmapMemory(allocator, stagingBuffer.allocation);
+
+        VkBufferCreateInfo vertexBufferInfo = {
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .size = bufferSize,
+            .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT // Data transfer destination
+        };
+
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY; // Target buffer is only for the gpu (faster)
+        AllocatedBuffer res;
+        vmaCreateBuffer(allocator, &vertexBufferInfo, &allocInfo, &res.buffer, &res.allocation, nullptr);
+        VMA_NAME_ALLOCATION(allocator, res.allocation, "Mesh_Vertex_Buffer");
+
+        // Copy the buffer to the GPU
+        submitter.ImmediateSubmit(device, graphicsQueue, [&](VkCommandBuffer commandBuffer) {
+            VkBufferCopy copy = {
+                .srcOffset = 0,
+                .dstOffset = 0,
+                .size = bufferSize,
+            };
+            vkCmdCopyBuffer(commandBuffer, stagingBuffer.buffer, res.buffer, 1, &copy);
+        });
+
+        // Clean up mesh and staging buffer
+        vmaDestroyBuffer(allocator, stagingBuffer.buffer, stagingBuffer.allocation);
+        return res;
+    }
+
+public:
+    struct VmaAllocator_T *allocator = nullptr;
+    CommandSubmitter submitter;
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+    VkDevice device = VK_NULL_HANDLE;
+    VkQueue graphicsQueue = VK_NULL_HANDLE;
+    uint32_t graphicsQueueFamily = 0;
+    VkDescriptorSetLayout arrayDescriptorLayout = VK_NULL_HANDLE;
+    FrameData frames[FRAMES_IN_FLIGHT];
+    VkRenderPass depthRenderPass = VK_NULL_HANDLE;
+    VkRenderPass shadowRenderPass = VK_NULL_HANDLE;
+    VkRenderPass renderPass = VK_NULL_HANDLE;
 
 private:
     void InitVulkan(struct GLFWwindow *window);
@@ -48,23 +112,13 @@ private:
     void InitShadowPipeline();
     void Resize(ECS *ecs);
     void LoadShaderModule(const std::filesystem::path& path, VkShaderModule& module);
-
-public:
-    struct VmaAllocator_T *allocator = nullptr;
-    CommandSubmitter submitter;
-    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
-    VkDevice device = VK_NULL_HANDLE;
-    VkQueue graphicsQueue = VK_NULL_HANDLE;
-    uint32_t graphicsQueueFamily = 0;
-    VkDescriptorSetLayout arrayDescriptorLayout = VK_NULL_HANDLE;
-    FrameData frames[FRAMES_IN_FLIGHT];
-    VkRenderPass depthRenderPass = VK_NULL_HANDLE;
-    VkRenderPass shadowRenderPass = VK_NULL_HANDLE;
-    VkRenderPass renderPass = VK_NULL_HANDLE;
+    bool IsVisible(ECS *ecs, const Frustum& frustum, Entity e);
+    bool IsOpaque(ECS *ecs, Entity e);
+    bool IsScreenSpace(ECS *ecs, Entity e);
 
 private:
-    // For Drawing
-    std::vector<Entity> m_DrawOrder;
+    // For Drawing Screenspace
+    Camera m_ScreenCamera = {};
 
     // Global Descriptor
     VkDescriptorSetLayout m_DescriptorLayout = VK_NULL_HANDLE;

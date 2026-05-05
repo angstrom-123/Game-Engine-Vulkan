@@ -9,19 +9,12 @@
 
 #include "Util/myAssert.h"
 
-constexpr int32_t CHANNEL_COUNT = 4;
-
 bool ImageResource::Load(const std::filesystem::path& path, uint32_t imageLoadFlags)
 {
     stbi_set_flip_vertically_on_load(1);
-    int channels;
     pixels = stbi_load(path.c_str(), &size.x, &size.y, &channels, STBI_rgb_alpha);
-    if (!pixels) {
-        return false;
-    }
-
-    if (channels != CHANNEL_COUNT) {
-        ERROR("Loading image with missing channels");
+    if (!pixels || channels != STBI_rgb_alpha) {
+        ERROR("Failed to load image");
         return false;
     }
 
@@ -41,12 +34,6 @@ bool ImageResource::Load(const std::filesystem::path& path, uint32_t imageLoadFl
     return true;
 }
 
-void ImageResource::Cleanup()
-{
-    ASSERT(pixels != nullptr && "Cleaning up unloaded image");
-    stbi_image_free(pixels);
-}
-
 bool ImageResource::Resize(glm::ivec2 newSize)
 {
     uint8_t *newPixels = stbir_resize_uint8_linear(pixels, size.x, size.y, 0, 0, newSize.x, newSize.y, 0, STBIR_RGBA);
@@ -58,9 +45,4 @@ bool ImageResource::Resize(glm::ivec2 newSize)
     pixels = newPixels;
     size = newSize;
     return true;
-}
-
-size_t ImageResource::SizeBytes()
-{
-    return size.x * size.y * CHANNEL_COUNT;
 }

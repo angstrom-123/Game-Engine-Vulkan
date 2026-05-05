@@ -25,11 +25,6 @@ constexpr uint32_t HASH_MAP_DISP = HashString("map_Disp");
 constexpr uint32_t HASH_MAP_KA = HashString("map_Ka");
 constexpr uint32_t HASH_MAP_KD = HashString("map_Kd");
 
-MaterialResource::MaterialResource()
-{
-    subMaterials.reserve(5);
-}
-
 bool MaterialResource::Load(const fs::path& path)
 {
     std::ios::sync_with_stdio(false);
@@ -50,6 +45,7 @@ bool MaterialResource::Load(const fs::path& path)
     fs::path basePath(path);
     basePath = basePath.remove_filename();
 
+    subMaterials.reserve(5);
     while (std::getline(file, line)) {
         bool res = ProcessLine(iss, line, basePath);
         if (!res) {
@@ -61,11 +57,6 @@ bool MaterialResource::Load(const fs::path& path)
     file.close();
 
     return true;
-}
-
-void MaterialResource::Cleanup()
-{
-
 }
 
 bool MaterialResource::ProcessLine(std::istringstream& iss, const std::string& line, const fs::path& path)

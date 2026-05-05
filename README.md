@@ -5,7 +5,7 @@ a high quality 3D engine and game for personal use.
 
 ## Libraries
 
-- STB (image)
+- STB (image, image_resize2, truetype)
 - VMA
 - VkBootstrap
 - GLM
@@ -15,7 +15,7 @@ a high quality 3D engine and game for personal use.
 
 ## Known Issues
 
-- Extremely small memory leak after xcb_register_for_special_xge when first creating Swapchain. Known faulty interaction between GPU drivers, Vulkan, and GLFW - especially on Linux. The leaked amount is always constant.
+- Extremely small memory leak after xcb_register_for_special_xge when first creating Swapchain. Known faulty interaction between GPU drivers, Vulkan, and GLFW - especially on Linux. This leak occurs at cleanup and is always measured at between 88 and 200 bytes.
 
 ## Screenshots
 

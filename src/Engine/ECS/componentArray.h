@@ -14,11 +14,6 @@ public:
 
 template<typename T> class ComponentArray : public ComponentArrayBase {
 public:
-    ComponentArray()
-    {
-        m_Count = 0;
-    }
-
     void Insert(Entity entity, T component)
     {
         ASSERT(entity != INVALID_HANDLE);
@@ -58,7 +53,7 @@ public:
         return m_Components;
     }
 
-    int32_t Size()
+    int32_t Size() const
     {
         return m_Count;
     }
@@ -71,8 +66,8 @@ public:
     }
 
 private:
-    int32_t m_Count;
-    T m_Components[MAX_ENTITIES];
+    int32_t m_Count = 0;
+    T m_Components[MAX_ENTITIES] = {};
     std::unordered_map<Entity, int32_t> m_EntityToIndex;
     std::unordered_map<int32_t, Entity> m_IndexToEntity;
 };

@@ -107,7 +107,7 @@ uint32_t TextureArray::Allocate(ImageResource& imageData, VulkanBackend *backend
     ASSERT(imageData.size.x == static_cast<int>(m_Resolution) && "Image width doesn't match array texture");
     ASSERT(imageData.size.y == static_cast<int>(m_Resolution) && "Image height doesn't match array texture");
 
-    VkDeviceSize imageSize = imageData.SizeBytes();
+    VkDeviceSize imageSize = imageData.size.x * imageData.size.y * imageData.channels;
 
     // Staging buffer
     VkBufferCreateInfo stagingBufferInfo = {

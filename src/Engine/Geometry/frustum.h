@@ -9,5 +9,5 @@ struct Frustum {
     Plane planes[6];
 
     Frustum(const glm::mat4x4& vpMatrix);
-    bool Intersects(const CentreExtents& aabb); // NOTE: May have false positives (but no false negatives)
+    bool Intersects(const CentreExtents& aabb) const;
 };

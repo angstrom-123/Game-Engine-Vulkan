@@ -43,8 +43,7 @@ public:
 
     Signature& GetSignature(Entity entity)
     {
-        ASSERT(entity != INVALID_HANDLE && entity < m_LiveEntities && "Destroying invalid entity"); 
-
+        ASSERT(entity != INVALID_HANDLE && entity < m_LiveEntities && "Getting signature for invalid entity"); 
         return m_Signatures[entity];
     }
 

@@ -15,3 +15,6 @@ struct DefaultTextures {
     Resource normal;
 };
 
+struct DefaultFonts {
+    Resource robotoRegular;
+};

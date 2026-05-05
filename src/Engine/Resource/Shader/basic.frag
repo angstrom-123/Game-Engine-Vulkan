@@ -1,6 +1,7 @@
 #version 450 
 
 #define SSAO_SAMPLES 8
+#define TEXTURE_ARRAY_COUNT 5
 
 struct Light {
     vec4 position;      // xyz + light type  - all                 (0: Point, 1: Spot, 2: Directional)
@@ -17,7 +18,7 @@ layout (set = 0, binding = 0) uniform GlobalUniforms {
     mat4 vp; 
     vec4 ssaoKernel[SSAO_SAMPLES];
 } uniforms;
-layout (set = 1, binding = 0) uniform sampler2DArray uTextures[4];
+layout (set = 1, binding = 0) uniform sampler2DArray uTextures[TEXTURE_ARRAY_COUNT];
 layout (set = 1, binding = 1) uniform sampler2DArrayShadow uShadowmaps;
 layout (set = 1, binding = 2) uniform sampler2D uNoiseTexture;
 layout (set = 2, binding = 0) uniform Camera {
@@ -157,6 +158,12 @@ void main()
     vec4 ambientMap = texture(uTextures[constants.ambientIndex >> 16], vec3(vUV, constants.ambientIndex & 0xFFFF));
     vec4 diffuseMap = texture(uTextures[constants.diffuseIndex >> 16], vec3(vUV, constants.diffuseIndex & 0xFFFF));
     vec4 normalMap = texture(uTextures[constants.normalIndex >> 16], vec3(vUV, constants.normalIndex & 0xFFFF));
+
+    // Rendering text (font array is the last one)
+    if (constants.ambientIndex >> 16 == TEXTURE_ARRAY_COUNT - 1) {
+        outFragColor = vec4(vec3(1.0) * pow(constants.baseColor, vec3(0.7)), ambientMap.r);
+        return;
+    }
 
     vec3 normal = normalMap.xyz * 2.0 - 1.0;
     normal = normalize(vTBN * normal);

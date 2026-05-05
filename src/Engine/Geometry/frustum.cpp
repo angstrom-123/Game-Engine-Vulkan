@@ -17,7 +17,7 @@ Frustum::Frustum(const glm::mat4x4& vp)
     }
 }
 
-bool Frustum::Intersects(const CentreExtents& aabb)
+bool Frustum::Intersects(const CentreExtents& aabb) const
 {
     for (const Plane& plane : planes) {
         float radius = aabb.extents.x * std::abs(plane.x) 

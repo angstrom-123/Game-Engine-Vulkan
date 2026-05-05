@@ -9,5 +9,6 @@
 #define ERROR(msg) fprintf(stderr, "\033[91m[ERROR] %s:%s:%d: \033[0m", __FILE_NAME__, __func__, __LINE__); std::cerr << msg << std::endl
 #define FATAL(msg) fprintf(stderr, "\033[91m[FATAL] %s:%s:%d: \033[0m", __FILE_NAME__, __func__, __LINE__); std::cerr << msg << std::endl; abort()
 #define WARN(msg) fprintf(stderr, "\033[93m[WARNING] %s:%s:%d: \033[0m", __FILE_NAME__, __func__, __LINE__); std::cerr << msg << std::endl
+#define HINT(suggestion) fprintf(stderr, "\033[94m[HINT] %s:%s:%d: \033[0m", __FILE_NAME__, __func__, __LINE__); std::cerr << suggestion << std::endl
 #define UNIMPLEMENTED() fprintf(stderr, "\033[91m[UNIMPLEMENTED] %s:%s:%d: \033[0m", __FILE_NAME__, __func__, __LINE__); abort()
 #define UNREACHABLE(msg) fprintf(stderr, "\033[91m[UNREACHABLE] %s:%s:%d: \033[0m", __FILE_NAME__, __func__, __LINE__); std::cerr << msg << std::endl; abort()

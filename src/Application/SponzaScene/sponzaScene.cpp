@@ -33,21 +33,19 @@ void SponzaScene::OnInit(const SceneConfig& config)
 
     // Add a lot of random lights
     m_LightsParent = core.ecs->CreateEntity();
-    srand(time(NULL));
+    srand(time(nullptr));
     for (uint32_t i = 0; i < 128; i++) {
-        Entity point;
         LightCreateInfo pointLightInfo = {
             .position = glm::vec3(Random(-15.0, 15.0), Random(-5.0, 25.0), Random(-15.0, 15.0)),
             .color = glm::vec3(Random(0.0, 1.0), Random(0.0, 1.0), Random(0.0, 1.0)),
             .intensity = Random(0.5, 1.5),
             .radius = Random(1.0, 7.0)
         };
-        core.renderSystem->CreatePointLight(core.ecs, pointLightInfo, point);
+        Entity point = core.renderSystem->CreatePointLight(core.ecs, pointLightInfo);
         core.ecs->GetComponent<Transform>(point).InheritFrom(m_LightsParent);
     }
 
     // Directional shadowcasting light
-    Entity sun;
     LightCreateInfo sunLightInfo = {
         .position           = glm::vec3(0.0),
         .color              = glm::vec3(1.0),
@@ -62,10 +60,9 @@ void SponzaScene::OnInit(const SceneConfig& config)
         .projectionBottom   = -40.0,
         .projectionTop      = 40.0
     };
-    core.renderSystem->CreateDirectionalLight(core.ecs, sunLightInfo, sun, core.graphicsBackend);
+    core.renderSystem->CreateDirectionalLight(core.ecs, sunLightInfo, core.graphicsBackend);
 
     // Spot shadowcasting light
-    Entity spot;
     LightCreateInfo spotLightInfo = {
         .position           = glm::vec3(0.0, 6.0, 0.0),
         .color              = glm::vec3(1.0, 0.0, 1.0),
@@ -77,7 +74,7 @@ void SponzaScene::OnInit(const SceneConfig& config)
         .shadowcaster       = true,
         .shadowBias         = 0.005,
     };
-    core.renderSystem->CreateSpotLight(core.ecs, spotLightInfo, spot, core.graphicsBackend);
+    core.renderSystem->CreateSpotLight(core.ecs, spotLightInfo, core.graphicsBackend);
 }
 
 void SponzaScene::OnUpdate(double deltaTime)

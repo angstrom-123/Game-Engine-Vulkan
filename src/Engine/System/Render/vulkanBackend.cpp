@@ -8,6 +8,7 @@
 #include "Component/light.h"
 #include "Component/camera.h"
 #include "Component/mesh.h"
+#include "Component/screenSpace.h"
 #include "Component/shadowcaster.h"
 #include "ECS/ecs.h"
 #include "ECS/ecsTypes.h"
@@ -27,6 +28,7 @@
 #include <VkBootstrap/VkBootstrap.h>
 #include <GLFW/glfw3.h>
 #include <random>
+#include <ranges>
 #include <vulkan/vulkan_core.h>
 #include <stb/stb_image.h>
 
@@ -42,9 +44,12 @@
 //       - Perhaps the depth pass can be a subpass?
 void VulkanBackend::Init(GLFWwindow *window, Config& config)
 {
+    int w, h;
+    glfwGetFramebufferSize(window, &w, &h);
+    m_ScreenCamera = Camera(CAMERA_ORTHOGRAPHIC, glm::vec3(0.0), glm::vec2(w, h));
+
     m_Swapchain = VK_NULL_HANDLE;
     m_PresentMode = config.vsync ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
-    m_DrawOrder.reserve(MAX_ENTITIES);
 
     // Viewport and scissor rect for on-screen passes
     m_Extent.width = config.windowWidth;
@@ -157,7 +162,7 @@ VulkanBackend::~VulkanBackend()
     vkDestroyInstance(m_Instance, nullptr);
 }
 
-void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHandler, std::set<Entity>& entities)
+void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHandler, const std::set<Entity>& entities)
 {
     PROFILER_PROFILE_SCOPE("VulkanBackend::Draw");
 
@@ -165,6 +170,7 @@ void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHand
         Resize(ecs);
     }
 
+    // Sort Entities
     Camera& cam = ecs->GetComponent<Camera>(camera);
     Transform& camTransform = ecs->GetComponent<Transform>(camera);
     glm::vec3 camTranslation = camTransform.translation;
@@ -174,36 +180,11 @@ void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHand
     glm::mat4x4 camVP = cam.projection * cam.view;
     Frustum camFrustum = Frustum(camVP);
 
-    // Split up opaque and translucent entities, and perform frustum culling 
-    int32_t entityCount = entities.size();
-    int32_t frontPtr = 0;
-    int32_t backPtr = entityCount - 1;
-
-    { PROFILER_PROFILE_SCOPE("Sort_Entities");
-
-    for (const Entity e : entities) {
-        // Frustum culling
-        Mesh& mesh = ecs->GetComponent<Mesh>(e);
-        Transform& transform = ecs->GetComponent<Transform>(e);
-        glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
-        CentreExtents centreExtents = CentreExtents(mesh.bounds);
-        if (camFrustum.Intersects(centreExtents.ToWorldSpace(model))) {
-            if (FLAGS_HAVE_BIT(ecs->GetComponent<Material>(e).flags, MATERIAL_FLAG_TRANSPARENT)) {
-                m_DrawOrder[backPtr--] = e; // Transparent to back
-            } else {
-                m_DrawOrder[frontPtr++] = e; // Opaque to front
-            }
-        } else {
-            // Keep the entity vector packed while skipping one
-            if (backPtr < entityCount - 1) {
-                m_DrawOrder[backPtr] = m_DrawOrder[entityCount - 1];
-            }
-            backPtr--;
-            entityCount--;
-        }
-    }
-
-    } // PROFILER_PROFILE_SCOPE("Sort_Entities");
+    auto camVisibleEntities = entities | std::views::filter([ecs, &camFrustum, this](Entity e) { return IsVisible(ecs, camFrustum, e); });
+    auto camOpaqueEntities = camVisibleEntities | std::views::filter([ecs, this](Entity e) { return IsOpaque(ecs, e); });
+    auto camTransparentEntities = camVisibleEntities | std::views::filter([ecs, this](Entity e) { return !IsOpaque(ecs, e); });
+    // TODO: (Maybe in a new renderer)
+    auto screenSpaceEntities = entities | std::views::filter([ecs, this](Entity e) { return IsScreenSpace(ecs, e); });
 
     VkClearValue colorClear = { .color = {{ 0.5, 0.7, 1.0, 1.0 }} };
     VkClearValue resolveClear = { .color = {{ 0.0, 0.0, 0.0, 0.0 }} };
@@ -223,7 +204,6 @@ void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHand
 
     VkResult acquireErr = vkAcquireNextImageKHR(device, m_Swapchain, UINT64_MAX, frame.acquireSemaphore, nullptr, &imageIndex);
     if (acquireErr == VK_ERROR_OUT_OF_DATE_KHR || acquireErr == VK_SUBOPTIMAL_KHR) {
-        INFO("Resize because of swapchain acquire error (" << ((acquireErr == VK_ERROR_OUT_OF_DATE_KHR) ? "out of date" : "suboptimal") << ")");
         m_ResizeCamera = camera;
         return;
     } else if (acquireErr == VK_NOT_READY) {
@@ -273,9 +253,7 @@ void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHand
     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_DepthPipeline);
 
     // Only draw opaque entities to depth buffer
-    for (int32_t i = 0; i < frontPtr; i++) {
-        const Entity e = m_DrawOrder[i];
-
+    for (const Entity e : camOpaqueEntities) {
         Mesh& mesh = ecs->GetComponent<Mesh>(e);
         Transform& transform = ecs->GetComponent<Transform>(e);
         glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
@@ -535,30 +513,21 @@ void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHand
 
             glm::mat4x4 lightVP = shadowcaster.projection * shadowcaster.view;
             Frustum lightFrustum = Frustum(lightVP);
+            auto lightOpaqueEntities = entities | std::views::filter([ecs, &lightFrustum, this](Entity e) { return IsVisible(ecs, lightFrustum, e); })
+                                                | std::views::filter([ecs, this](Entity e) { return IsOpaque(ecs, e); });
 
-            // Only draw opaque entities to depth buffer from the light's perspective
-            // TODO: Frustum culling on the light's matrix
-            for (const Entity e : entities) {
-                if (FLAGS_HAVE_BIT(ecs->GetComponent<Material>(e).flags, MATERIAL_FLAG_TRANSPARENT)) {
-                    continue;
-                }
-
+            for (const Entity e : lightOpaqueEntities) {
                 Mesh& mesh = ecs->GetComponent<Mesh>(e);
                 Transform& transform = ecs->GetComponent<Transform>(e);
                 glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
-
-                // Frustum culling
-                CentreExtents centreExtents = CentreExtents(mesh.bounds);
-                if (lightFrustum.Intersects(centreExtents.ToWorldSpace(model))) {
-                    DepthPushConstants constants = {
-                        .model = model,
-                        .vp = shadowcaster.projection * shadowcaster.view
-                    };
-                    vkCmdPushConstants(frame.commandBuffer, m_ShadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(DepthPushConstants), &constants);
-                    VkDeviceSize offset = 0;
-                    vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offset);
-                    vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
-                }
+                DepthPushConstants constants = {
+                    .model = model,
+                    .vp = shadowcaster.projection * shadowcaster.view
+                };
+                vkCmdPushConstants(frame.commandBuffer, m_ShadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(DepthPushConstants), &constants);
+                VkDeviceSize offset = 0;
+                vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offset);
+                vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
             }
 
             vkCmdEndRenderPass(frame.commandBuffer);
@@ -625,9 +594,7 @@ void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHand
     vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_PipelineLayout, 0, 3, sets, 0, nullptr);
 
     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline);
-    for (int32_t i = 0; i < frontPtr; i++) {
-        const Entity e = m_DrawOrder[i];
-
+    for (const Entity e : camOpaqueEntities) {
         Mesh& mesh = ecs->GetComponent<Mesh>(e);
         Transform& transform = ecs->GetComponent<Transform>(e);
 
@@ -642,9 +609,9 @@ void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHand
             .model              = model,
             .baseColor          = material.baseColor,
             .specularExponent   = material.specularExponent,
-            .ambientIndex       = (material.ambientTexture.arrayID << 16) | material.ambientTexture.textureID,
-            .diffuseIndex       = (material.diffuseTexture.arrayID << 16) | material.diffuseTexture.textureID,
-            .normalIndex        = (material.normalTexture.arrayID << 16) | material.normalTexture.textureID,
+            .ambientIndex       = (material.ambientTexture.arrayID << 16) | material.ambientTexture.layerID,
+            .diffuseIndex       = (material.diffuseTexture.arrayID << 16) | material.diffuseTexture.layerID,
+            .normalIndex        = (material.normalTexture.arrayID << 16) | material.normalTexture.layerID,
             .tileSize           = TILE_SIZE,
             .tilesX             = m_TilesX,
             .tilesY             = m_TilesY,
@@ -672,9 +639,7 @@ void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHand
 #endif
 
     vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_TransparencyPipeline);
-    for (int32_t i = frontPtr; i < entityCount; i++) {
-        const Entity e = m_DrawOrder[i];
-
+    for (const Entity e : camTransparentEntities) {
         Mesh& mesh = ecs->GetComponent<Mesh>(e);
         Transform& transform = ecs->GetComponent<Transform>(e);
         glm::mat4x4 model = transform.GlobalModelMatrix(ecs);
@@ -687,9 +652,9 @@ void VulkanBackend::Draw(ECS *ecs, Entity camera, ShadowArrayHandler *shadowHand
             .model              = model,
             .baseColor          = material.baseColor,
             .specularExponent   = material.specularExponent,
-            .ambientIndex       = (material.ambientTexture.arrayID << 16) | material.ambientTexture.textureID,
-            .diffuseIndex       = (material.diffuseTexture.arrayID << 16) | material.diffuseTexture.textureID,
-            .normalIndex        = (material.normalTexture.arrayID << 16) | material.normalTexture.textureID,
+            .ambientIndex       = (material.ambientTexture.arrayID << 16) | material.ambientTexture.layerID,
+            .diffuseIndex       = (material.diffuseTexture.arrayID << 16) | material.diffuseTexture.layerID,
+            .normalIndex        = (material.normalTexture.arrayID << 16) | material.normalTexture.layerID,
             .tileSize           = TILE_SIZE,
             .tilesX             = m_TilesX,
             .tilesY             = m_TilesY,
@@ -847,13 +812,15 @@ void VulkanBackend::Resize(ECS *ecs)
 
     // Resize the camera in use at the time of the resize
     Camera& cam = ecs->GetComponent<Camera>(m_ResizeCamera);
+    glm::vec2 dimensions = (glm::vec2(m_Extent.width, m_Extent.height) * cam.scale) / 2.0f;
     if (cam.perspective) {
         float aspect = static_cast<float>(m_Extent.width) / static_cast<float>(m_Extent.height);
         cam.projection = Camera::VulkanPerspective(cam.fov, aspect, cam.near, cam.far);
     } else {
-        glm::vec2 dimensions = (glm::vec2(m_Extent.width, m_Extent.height) * cam.scale) / 2.0f;
         cam.projection = Camera::VulkanOrthographic(-dimensions.x, dimensions.x, -dimensions.y, dimensions.y, cam.near, cam.far);
     }
+
+    m_ScreenCamera.projection = Camera::VulkanOrthographic(-dimensions.x, dimensions.x, -dimensions.y, dimensions.y, m_ScreenCamera.near, m_ScreenCamera.far);
 
     m_ResizeCamera = INVALID_HANDLE;
 }
@@ -879,7 +846,9 @@ void VulkanBackend::InitVulkan(GLFWwindow *window)
                                                .select_device_names()
                                                .value();
 
-    VERIFY(devices.size() > 0 && "Failed to find a physical device");
+    if (devices.size() == 0) {
+        FATAL("Failed to find a physical device");
+    }
     if (devices.size() == 1) { 
         WARN("Only available physical device is: " << devices.front());
     }
@@ -1489,7 +1458,7 @@ void VulkanBackend::InitShadowPipeline()
                        vkinit::ShaderStageCreateInfo(VK_SHADER_STAGE_FRAGMENT_BIT, frag));
 
     VertexInputDesc inputDesc = Vertex::GetDepthVertexDesc();
-    VkPipelineRasterizationStateCreateInfo rasterizerInfo = vkinit::RasterizationStateCreateInfo(VK_POLYGON_MODE_FILL);
+    VkPipelineRasterizationStateCreateInfo rasterizerInfo = vkinit::RasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT);
     rasterizerInfo.cullMode = VK_CULL_MODE_FRONT_BIT; // Helps with Peter-Panning
     builder.SetVertexInput(vkinit::VertexInputStateCreateInfo(&inputDesc.bindings, &inputDesc.attributes))
            .SetInputAssembly(vkinit::InputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
@@ -1570,7 +1539,7 @@ void VulkanBackend::InitDepthPipeline()
     VertexInputDesc inputDesc = Vertex::GetDepthVertexDesc();
     builder.SetVertexInput(vkinit::VertexInputStateCreateInfo(&inputDesc.bindings, &inputDesc.attributes))
            .SetInputAssembly(vkinit::InputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
-           .SetRasterizer(vkinit::RasterizationStateCreateInfo(VK_POLYGON_MODE_FILL))
+           .SetRasterizer(vkinit::RasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT))
            .SetMultisampling(vkinit::MultisampleStateCreateInfo(m_MSAASamples, false))
            .SetColorBlend(vkinit::ColorBlendAttachmentState())
            .SetDepthStencil(vkinit::DepthStencilStateCreateInfo(true, true, VK_COMPARE_OP_LESS_OR_EQUAL))
@@ -1705,7 +1674,7 @@ void VulkanBackend::InitMainPipelines()
     VertexInputDesc inputDesc = Vertex::GetVertexDesc();
     builder.SetVertexInput(vkinit::VertexInputStateCreateInfo(&inputDesc.bindings, &inputDesc.attributes))
            .SetInputAssembly(vkinit::InputAssemblyStateCreateInfo(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST))
-           .SetRasterizer(vkinit::RasterizationStateCreateInfo(VK_POLYGON_MODE_FILL))
+           .SetRasterizer(vkinit::RasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_BACK_BIT))
            .SetMultisampling(vkinit::MultisampleStateCreateInfo(m_MSAASamples, false))
            .SetColorBlend(vkinit::ColorBlendAttachmentState())
            .SetDepthStencil(vkinit::DepthStencilStateCreateInfo(true, false, VK_COMPARE_OP_LESS_OR_EQUAL))
@@ -1714,6 +1683,7 @@ void VulkanBackend::InitMainPipelines()
     m_Pipeline = builder.BuildPipeline(device, renderPass, m_Viewport, m_Scissor);
 
     builder.SetMultisampling(vkinit::MultisampleStateCreateInfo(m_MSAASamples, true))
+           .SetRasterizer(vkinit::RasterizationStateCreateInfo(VK_POLYGON_MODE_FILL, VK_CULL_MODE_NONE))
            .SetDepthStencil(vkinit::DepthStencilStateCreateInfo(true, true, VK_COMPARE_OP_LESS_OR_EQUAL));
     m_TransparencyPipeline = builder.BuildPipeline(device, renderPass, m_Viewport, m_Scissor);
 
@@ -2019,4 +1989,21 @@ void VulkanBackend::LoadShaderModule(const std::filesystem::path& path, VkShader
     delete[] buf;
 
     module = shaderModule;
+}
+
+bool VulkanBackend::IsVisible(ECS *ecs, const Frustum& frustum, Entity e)
+{
+    glm::mat4x4 model = ecs->GetComponent<Transform>(e).GlobalModelMatrix(ecs);
+    CentreExtents centreExtents = CentreExtents(ecs->GetComponent<Mesh>(e).bounds);
+    return frustum.Intersects(centreExtents.ToWorldSpace(model));
+}
+
+bool VulkanBackend::IsOpaque(ECS *ecs, Entity e)
+{
+    return !FLAGS_HAVE_BIT(ecs->GetComponent<Material>(e).flags, MATERIAL_FLAG_TRANSPARENT);
+}
+
+bool VulkanBackend::IsScreenSpace(ECS *ecs, Entity e)
+{
+    return ecs->HasComponent<ScreenSpace>(e);
 }

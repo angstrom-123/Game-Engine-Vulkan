@@ -18,8 +18,7 @@ void ShadowSystem::Update(ECS *ecs)
 
         ASSERT(shadowcaster.shadowIndex == light.shadowIndex && "Shadow index mismatch");
 
-        glm::vec3 up = glm::vec3(0.0, 1.0, 0.0);
-        shadowcaster.view = glm::lookAt(transform.translation, transform.translation - glm::vec3(light.direction), up);
+        shadowcaster.view = glm::lookAt(transform.translation, transform.translation - glm::vec3(light.direction), glm::vec3(0.0, 1.0, 0.0));
 
         light.lightVP = shadowcaster.projection * shadowcaster.view;
     }

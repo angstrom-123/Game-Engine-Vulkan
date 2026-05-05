@@ -23,35 +23,30 @@ constexpr uint32_t HASH_G = HashString("g");
 constexpr uint32_t HASH_USEMTL = HashString("usemtl");
 constexpr uint32_t HASH_MTLLIB = HashString("mtllib");
 
-ModelResource::ModelResource()
-{
-    subModels.reserve(5);
-}
-
 bool ModelResource::Load(const fs::path& path)
 {
     std::ios::sync_with_stdio(false);
 
-    constexpr size_t BUFFER_SIZE = 1024 * 1024;
-    char buffer[BUFFER_SIZE];
-
-    std::ifstream file(path, std::ios::in | std::ios::binary);
-    file.rdbuf()->pubsetbuf(buffer, BUFFER_SIZE);
+    std::ifstream file(path, std::ios::in | std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
         ERROR("Failed to open file: " << path);
         return false;
     }
 
-    file.seekg(std::ios::end);
-
     size_t fileSize = file.tellg();
     size_t reserveSize = fileSize / 3; // Overallocation is fine, I want to avoid resizing
-
-    file.seekg(std::ios::beg);
 
     positions.reserve(reserveSize);
     uvs.reserve(reserveSize);
     normals.reserve(reserveSize);
+
+    file.seekg(std::ios::beg);
+
+    constexpr size_t BUFFER_SIZE = 1024 * 1024;
+    char buffer[BUFFER_SIZE];
+    file.rdbuf()->pubsetbuf(buffer, BUFFER_SIZE);
+
+    subModels.reserve(5);
 
     SubModelResource subModel = {};
     std::string line;
@@ -68,10 +63,6 @@ bool ModelResource::Load(const fs::path& path)
     }
 
     return true;
-}
-
-void ModelResource::Cleanup()
-{
 }
 
 bool ModelResource::ProcessLine(std::istringstream& iss, const std::string& line, const fs::path& path, SubModelResource *subModel)

@@ -1,9 +1,12 @@
 #include "resourceManager.h"
-#include "ResourceManager/imageResource.h"
-#include "ResourceManager/materialResource.h"
-#include "ResourceManager/modelResource.h"
-#include "ResourceManager/resourceTypes.h"
+#include "Util/myAssert.h"
+#include "fontResource.h"
+#include "imageResource.h"
+#include "materialResource.h"
+#include "modelResource.h"
+#include "resourceTypes.h"
 #include "System/Render/textureArrayHandler.h"
+#include <cmath>
 #include <filesystem>
 #include <future>
 #include <set>
@@ -18,14 +21,11 @@ ResourceManager::ResourceManager()
     RegisterResource<ImageResource>();
     RegisterResource<MaterialResource>();
     RegisterResource<ModelResource>();
+    RegisterResource<FontResource>();
 }
 
 ResourceManager::~ResourceManager()
 {
-    GetData<ImageResource>(m_DefaultTextures.white).Cleanup();
-    GetData<ImageResource>(m_DefaultTextures.gray).Cleanup();
-    GetData<ImageResource>(m_DefaultTextures.black).Cleanup();
-    GetData<ImageResource>(m_DefaultTextures.normal).Cleanup();
     for (auto& [index, array] : m_ResourceArrays) {
         delete array;
     }
@@ -39,18 +39,26 @@ void ResourceManager::Init()
         .black = LoadTexture("src/Engine/Resource/Texture/black.png", IMAGE_LOAD_FLAG_NONE),
         .normal = LoadTexture("src/Engine/Resource/Texture/normal.png", IMAGE_LOAD_FLAG_NON_COLOR)
     };
+
+    m_DefaultFonts = {
+        .robotoRegular = LoadFont("src/Engine/Resource/Font/Roboto-Regular.ttf"),
+    };
 }
 
-Resource ResourceManager::GetResource(const fs::path& path)
+Resource ResourceManager::GetResource(const fs::path& path) const
 {
-    ASSERT(m_ResourceMap.contains(path) && "Getting invalid resource");
-    return m_ResourceMap[path];
+    // ASSERT(m_ResourceMap.contains(path) && "Getting invalid resource");
+    // return m_ResourceMap[path];
+    auto it = m_ResourceMap.find(path);
+    ASSERT(it != m_ResourceMap.end() && "Getting invalid resource");
+    return it->second;
 }
 
-fs::path ResourceManager::GetPath(Resource resource)
+fs::path ResourceManager::GetPath(Resource resource) const
 {
-    ASSERT(m_PathMap.contains(resource) && "Getting invalid resource path");
-    return m_PathMap[resource];
+    auto it = m_PathMap.find(resource);
+    ASSERT(it != m_PathMap.end() && "Getting invalid resource path");
+    return it->second;
 }
 
 Resource ResourceManager::LoadTexture(const fs::path& path, uint32_t imageLoadFlags)
@@ -58,7 +66,59 @@ Resource ResourceManager::LoadTexture(const fs::path& path, uint32_t imageLoadFl
     ImageResource png;
     bool res = png.Load(path, imageLoadFlags);
     ASSERT(res && "Failed to load texture");
-    Resource resource = CreateResource<ImageResource>(png);
+    Resource resource = CreateResource<ImageResource>(std::move(png));
+    m_ResourceMap.insert({path, resource});
+    m_PathMap.insert({resource, path});
+    return resource;
+}
+
+void ResourceManager::LoadMaterial(const fs::path& path, std::vector<Resource>& results)
+{
+    MaterialResource mtl;
+    bool res = mtl.Load(path);
+    ASSERT(res && "Failed to load material");
+    for (SubMaterialResource& subMaterial : mtl.subMaterials) {
+        if (subMaterial.ambientTexture.empty()) {
+            subMaterial.ambientTexture = m_PathMap[m_DefaultTextures.white];
+        } else if (!m_ResourceMap.contains(subMaterial.ambientTexture)) {
+            results.push_back(LoadTexture(subMaterial.ambientTexture, IMAGE_LOAD_FLAG_CHECK_TRANSPARENCY));
+        }
+
+        if (subMaterial.diffuseTexture.empty()) {
+            subMaterial.diffuseTexture = m_PathMap[m_DefaultTextures.white];
+        } else if (!m_ResourceMap.contains(subMaterial.diffuseTexture)) {
+            results.push_back(LoadTexture(subMaterial.diffuseTexture, IMAGE_LOAD_FLAG_CHECK_TRANSPARENCY));
+        }
+
+        if (subMaterial.normalTexture.empty()) {
+            subMaterial.normalTexture = m_PathMap[m_DefaultTextures.normal];
+        } else if (!m_ResourceMap.contains(subMaterial.normalTexture)) {
+            results.push_back(LoadTexture(subMaterial.normalTexture, IMAGE_LOAD_FLAG_NON_COLOR));
+        }
+    }
+    Resource resource = CreateResource<MaterialResource>(std::move(mtl));
+    m_ResourceMap.insert({path, resource});
+    m_PathMap.insert({resource, path});
+    results.push_back(resource);
+}
+
+Resource ResourceManager::LoadModel(const fs::path& path)
+{
+    ModelResource obj;
+    bool res = obj.Load(path);
+    ASSERT(res && "Failed to load model");
+    Resource resource = CreateResource<ModelResource>(std::move(obj));
+    m_ResourceMap.insert({path, resource});
+    m_PathMap.insert({resource, path});
+    return resource;
+}
+
+Resource ResourceManager::LoadFont(const fs::path& path)
+{
+    FontResource ttf;
+    bool res = ttf.Load(path);
+    ASSERT(res && "Failed to load font");
+    Resource resource = CreateResource<FontResource>(std::move(ttf));
     m_ResourceMap.insert({path, resource});
     m_PathMap.insert({resource, path});
     return resource;
@@ -79,43 +139,12 @@ std::vector<Resource> ResourceManager::LoadAll(const fs::path& sceneDir)
     //       In the future, if multiple scenes access the same exact resource we may have an issue 
     //       For now, enforce each scene having its own resources.
     for (const fs::path& path : manifest.materials) {
-        MaterialResource mtl;
-        bool res = mtl.Load(sceneDir / path);
-        ASSERT(res && "Failed to load material");
-        for (SubMaterialResource& subMaterial : mtl.subMaterials) {
-            if (subMaterial.ambientTexture.empty()) {
-                subMaterial.ambientTexture = m_PathMap[m_DefaultTextures.white];
-            } else if (!m_ResourceMap.contains(subMaterial.ambientTexture)) {
-                results.push_back(LoadTexture(subMaterial.ambientTexture, IMAGE_LOAD_FLAG_CHECK_TRANSPARENCY));
-            }
-
-            if (subMaterial.diffuseTexture.empty()) {
-                subMaterial.diffuseTexture = m_PathMap[m_DefaultTextures.white];
-            } else if (!m_ResourceMap.contains(subMaterial.diffuseTexture)) {
-                results.push_back(LoadTexture(subMaterial.diffuseTexture, IMAGE_LOAD_FLAG_CHECK_TRANSPARENCY));
-            }
-
-            if (subMaterial.normalTexture.empty()) {
-                subMaterial.normalTexture = m_PathMap[m_DefaultTextures.normal];
-            } else if (!m_ResourceMap.contains(subMaterial.normalTexture)) {
-                results.push_back(LoadTexture(subMaterial.normalTexture, IMAGE_LOAD_FLAG_NON_COLOR));
-            }
-        }
-        Resource resource = CreateResource<MaterialResource>(mtl);
-        results.push_back(resource);
-        m_ResourceMap.insert({sceneDir / path, resource});
-        m_PathMap.insert({resource, sceneDir / path});
+        LoadMaterial(sceneDir / path, results);
     }
 
     // Models
     for (const fs::path& path : manifest.models) {
-        ModelResource obj;
-        bool res = obj.Load(sceneDir / path);
-        ASSERT(res && "Failed to load model");
-        Resource resource = CreateResource<ModelResource>(obj);
-        results.push_back(resource);
-        m_ResourceMap.insert({sceneDir / path, resource});
-        m_PathMap.insert({resource, sceneDir / path});
+        results.push_back(LoadModel(sceneDir / path));
     }
 
     m_ManifestMap.insert({sceneDir, manifest});
@@ -183,29 +212,35 @@ void ResourceManager::DestroyResource(Resource resource)
     m_LiveResources--;
 }
 
-ResourceManifest ResourceManager::GetManifest(const fs::path& sceneDir)
+ResourceManifest ResourceManager::GetManifest(const fs::path& sceneDir) const
 {
-    ASSERT(m_ManifestMap.find(sceneDir) != m_ManifestMap.end() && "Getting manifest before it is loaded");
-    return m_ManifestMap[sceneDir];
+    // ASSERT(m_ManifestMap.find(sceneDir) != m_ManifestMap.end() && "Getting manifest before it is loaded");
+    // return m_ManifestMap[sceneDir];
+    auto it = m_ManifestMap.find(sceneDir);
+    ASSERT(it != m_ManifestMap.end() && "Getting manifest before it is loaded");
+    return it->second;
 }
 
-TextureArraySizes ResourceManager::GetArraySizes(const ResourceManifest& manifest)
+TextureArraySizes ResourceManager::GetArraySizes(const ResourceManifest& manifest) const
 {
     // Enough space for default textures
     TextureArraySizes sizes = {
         .color1024 = 3,
         .color2048 = 0,
         .data1024 = 1,
-        .data2048 = 0
+        .data2048 = 0,
+        .font = 1
     };
 
     std::set<fs::path> counted;
+
+    // TODO: Count fonts
 
     for (const fs::path& path : manifest.materials) {
         Resource resource = GetResource(manifest.sceneDir / path);
         for (const SubMaterialResource& subMaterial : GetData<MaterialResource>(resource).subMaterials) {
             if (!counted.contains(subMaterial.ambientTexture)) {
-                ImageResource img = GetData<ImageResource>(GetResource(subMaterial.ambientTexture));
+                const ImageResource& img = GetData<ImageResource>(GetResource(subMaterial.ambientTexture));
                 if (img.size.x <= 1024 && img.size.y <= 1024) {
                     sizes.color1024++;
                 } else if (img.size.y <= 2048 && img.size.y <= 2048) {
@@ -217,7 +252,7 @@ TextureArraySizes ResourceManager::GetArraySizes(const ResourceManifest& manifes
             }
 
             if (!counted.contains(subMaterial.diffuseTexture)) {
-                ImageResource img = GetData<ImageResource>(GetResource(subMaterial.diffuseTexture));
+                const ImageResource& img = GetData<ImageResource>(GetResource(subMaterial.diffuseTexture));
                 if (img.size.x <= 1024 && img.size.y <= 1024) {
                     sizes.color1024++;
                 } else if (img.size.y <= 2048 && img.size.y <= 2048) {
@@ -229,7 +264,7 @@ TextureArraySizes ResourceManager::GetArraySizes(const ResourceManifest& manifes
             }
 
             if (!counted.contains(subMaterial.normalTexture)) {
-                ImageResource img = GetData<ImageResource>(GetResource(subMaterial.normalTexture));
+                const ImageResource& img = GetData<ImageResource>(GetResource(subMaterial.normalTexture));
                 if (img.size.x <= 1024 && img.size.y <= 1024) {
                     sizes.data1024++;
                 } else if (img.size.y <= 2048 && img.size.y <= 2048) {
@@ -247,6 +282,7 @@ TextureArraySizes ResourceManager::GetArraySizes(const ResourceManifest& manifes
     sizes.color2048 = std::max(sizes.color2048, 1u);
     sizes.data1024 = std::max(sizes.data1024, 1u);
     sizes.data2048 = std::max(sizes.data2048, 1u);
+    sizes.font = std::max(sizes.font, 1u);
 
     return sizes;
 }

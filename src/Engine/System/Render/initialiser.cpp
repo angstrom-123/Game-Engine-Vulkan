@@ -171,7 +171,7 @@ vkinit::InputAssemblyStateCreateInfo(VkPrimitiveTopology topology)
 
 // NOTE: Polygon mode here lets us toggle between things like wireframe and solid
 VkPipelineRasterizationStateCreateInfo 
-vkinit::RasterizationStateCreateInfo(VkPolygonMode polygonMode)
+vkinit::RasterizationStateCreateInfo(VkPolygonMode polygonMode, VkCullModeFlags cullMode)
 {
     return (VkPipelineRasterizationStateCreateInfo) {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
@@ -179,7 +179,7 @@ vkinit::RasterizationStateCreateInfo(VkPolygonMode polygonMode)
         .depthClampEnable = VK_FALSE,
         .rasterizerDiscardEnable = VK_FALSE,
         .polygonMode = polygonMode,
-        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .cullMode = cullMode,
         .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .depthBiasEnable = VK_FALSE,
         .depthBiasConstantFactor = 0.0, 
