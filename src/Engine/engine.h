@@ -18,7 +18,7 @@ public:
     void SetScene(const std::string& name, bool showLoadingScene);
     template<Derived<SceneBase> T> void RegisterScene(const fs::path& path) { m_SceneManager.RegisterScene<T>(path); }
 
-    double GetTime() { return glfwGetTime(); }
+    double GetTime() { return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count() / 1000000.0; }
     uint64_t GetFrameNumber() { return m_GraphicsBackend.frameNumber; }
     glm::vec2 GetFrameMouseDelta() { return m_EventManager.mousePos - m_EventManager.mousePosLastFrame; }
     glm::ivec2 GetWindowSize() { glm::ivec2 res; glfwGetFramebufferSize(m_Window, &res.x, &res.y); return res; }

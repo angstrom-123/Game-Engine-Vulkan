@@ -58,7 +58,10 @@ bool MaterialResource::Load(const fs::path& path)
 
 bool MaterialResource::ProcessLine(std::istringstream& iss, const std::string& line, const fs::path& path)
 {
-    if (line.empty()) return true;
+    // On windows this check is required
+    if (line.empty() || (line.size() == 1 && line.at(0) == '\r')) {
+        return true;
+    }
 
     iss.clear();
     iss.str(line);

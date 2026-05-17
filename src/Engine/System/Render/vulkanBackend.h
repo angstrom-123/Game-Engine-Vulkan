@@ -1,22 +1,5 @@
 #pragma once
 
-// Pipeline:
-//      - GBuffer Pass 
-//          - Albedo r8g8b8
-//          - Normal r10g10b10a2
-//          - Material r8g8b8a8
-//          - Depth d32
-//      - SSAO Pass (1/2 resolution, upscale blur)
-//      - Light Culling Compute 
-//      - Shading r16g16b16
-//      - Bloom
-//          - downscale upscale 
-//      - Transparent Forward 
-//          - Sorted back to front 
-//      - Post process
-//          - Tone map, color grade, anti alias, present
-//      - UI / Text
-//          - ortho cam, unlit
 #include "ECS/ecs.h"
 #include "ECS/ecsTypes.h"
 #include "Geometry/vertex.h"
@@ -59,7 +42,7 @@ public:
     void WaitForIdle() { VK_CHECK(vkDeviceWaitIdle(device)); }
     
 public:
-    // A bit of a funny idiom, viewable externally but not editable without getter - controller by m_InternalFrameNumber
+    // A funny idiom, publicly viewable but not editable without need for a getter
     const uint64_t& frameNumber{m_InternalFrameNumber};
 
     VkPhysicalDevice physicalDevice{VK_NULL_HANDLE};

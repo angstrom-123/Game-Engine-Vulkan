@@ -90,6 +90,7 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
 
     ASSERT(info.camera != INVALID_HANDLE && "Invalid camera");
     frontend.camera = info.camera;
+    m_ResizeCameras.push_back(frontend.camera);
 
     // ================================================== Texture Arrays ==================================================
 
@@ -2104,15 +2105,12 @@ VkPipeline VulkanBackend::CreateGraphicsPipeline(const GraphicsPipelineCreateInf
 
 VkShaderModule VulkanBackend::LoadShaderModule(const std::filesystem::path& path)
 {
-    INFO("Loading shader module: " << path);
-
     std::ifstream file(path, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
         FATAL("Failed to open shader file");
     }
 
     size_t fileSize = file.tellg();
-    INFO("  Shader module bytes: " << fileSize);
     uint32_t *buf = new uint32_t[fileSize];
 
     file.seekg(0);

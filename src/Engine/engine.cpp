@@ -38,6 +38,7 @@ Engine::Engine(Config& config)
     m_EventManager.SetEventCallback(Engine::EventHook, this);
 
     m_SceneManager.Init();
+    glfwPollEvents();
     m_SceneManager.RegisterLoadingScene<LoadingScene>(this, &m_GraphicsBackend, &m_ResourceManager, "src/Engine/Scenes/LoadingScene");
 }
 
