@@ -1,9 +1,5 @@
 #pragma once
 
-#include "ResourceManager/resourceManifest.h"
-#include "ResourceManager/resourceTypes.h"
-#include "System/Render/textureArrayHandler.h"
-#include "resourceArray.h"
 #include <filesystem>
 #include <future>
 #include <queue>
@@ -11,6 +7,11 @@
 #include <typeindex>
 #include <unordered_map>
 #include <vector>
+
+#include "System/Render/backendV2Types.h"
+#include "resourceManifest.h"
+#include "resourceTypes.h"
+#include "resourceArray.h"
 
 namespace fs = std::filesystem;
 
@@ -29,10 +30,10 @@ public:
     [[nodiscard]] ResourceFuture LoadAllAsync(const fs::path& sceneDir);
     void UnloadAll(const fs::path& sceneDir);
     Resource GetResource(const fs::path& path) const;
-    fs::path GetPath(Resource resource) const;
+    PathString GetPath(Resource resource) const;
     void DestroyResource(Resource resource);
     ResourceManifest GetManifest(const fs::path& sceneDir) const;
-    TextureArraySizes GetArraySizes(const ResourceManifest& manifest) const;
+    void GetArraySizes(const ResourceManifest& manifest, uint32_t (&results)[TEXTURE_ARRAY_MAX_ENUM]) const;
     DefaultTextures GetDefaultTextures() const { return m_DefaultTextures; }
     DefaultFonts GetDefaultFonts() const { return m_DefaultFonts; }
 
@@ -87,11 +88,11 @@ private:
 private:
     DefaultTextures m_DefaultTextures;
     DefaultFonts m_DefaultFonts;
-    std::unordered_map<fs::path, ResourceManifest> m_ManifestMap;
+    std::unordered_map<PathString, ResourceManifest> m_ManifestMap;
 
     std::queue<Resource> m_FreeResources;
     int32_t m_LiveResources;
     std::unordered_map<std::type_index, ResourceArrayBase *> m_ResourceArrays;
-    std::unordered_map<fs::path, Resource> m_ResourceMap;
-    std::unordered_map<Resource, fs::path> m_PathMap;
+    std::unordered_map<PathString, Resource> m_ResourceMap;
+    std::unordered_map<Resource, PathString> m_PathMap;
 };

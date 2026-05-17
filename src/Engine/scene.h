@@ -8,7 +8,7 @@
 #include "Component/shadowcaster.h"
 #include "ECS/ecs.h"
 #include "ResourceManager/resourceManifest.h"
-#include "System/Render/renderSystem.h"
+#include "System/Render/renderSystemV2.h"
 #include "event.h"
 
 using Scene = int32_t;
@@ -29,7 +29,7 @@ public:
     virtual ~SceneBase() = default;
     SceneBase() = default;
 
-    void PreInit(Engine *engine, VulkanBackend *backend, ResourceManager *manager, const SceneBaseConfig&& baseConfig)
+    void PreInit(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, const SceneBaseConfig&& baseConfig)
     {
         core.engine = engine;
         core.graphicsBackend = backend;
@@ -44,7 +44,11 @@ public:
         core.ecs->RegisterComponent<Text>();
         core.ecs->RegisterComponent<ScreenSpace>();
 
-        core.renderSystem = core.ecs->RegisterSystem<RenderSystem>();
+        INFO("ECS initialized");
+
+        core.renderSystem = core.ecs->RegisterSystem<RenderSystemV2>();
+
+        INFO("Render system registered");
 
         core.camera = core.ecs->CreateEntity();
         if (baseConfig.manifest.perspectiveProjection) {
@@ -52,7 +56,8 @@ public:
         } else {
             core.ecs->AddComponent<Camera>(core.camera, Camera(CAMERA_ORTHOGRAPHIC, glm::vec3(0.0), baseConfig.windowSize));
         }
-        core.renderSystem->SetCamera(core.camera);
+
+        INFO("Camera created");
     }
 
     void Init(const SceneConfig&& config)
@@ -73,13 +78,13 @@ public:
 public:
     struct {
         // External
-        Engine                *engine           = nullptr;
-        ECS                   *ecs              = nullptr;
-        VulkanBackend         *graphicsBackend  = nullptr;
-        // Local
-        std::filesystem::path path              = "";
-        RenderSystem          *renderSystem     = nullptr;
-        Entity                camera            = INVALID_HANDLE;
+        Engine                *engine          = nullptr;
+        ECS                   *ecs             = nullptr;
+        VulkanBackendV2       *graphicsBackend = nullptr;
+        // Internal
+        std::filesystem::path path             = "";
+        RenderSystemV2        *renderSystem    = nullptr;
+        Entity                camera           = INVALID_HANDLE;
     } core;
 
 protected:

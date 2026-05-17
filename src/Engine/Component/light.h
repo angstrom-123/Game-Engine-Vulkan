@@ -18,7 +18,6 @@ struct LightCreateInfo {
     float outerConeRadians;         // Spot
     float distance;                 // Directional
     bool shadowcaster;              // Shadow - Spot / Directional
-    float shadowBias;               // Shadow - Spot / Directional
     float projectionLeft;           // Shadow - Directional
     float projectionRight;          // Shadow - Directional
     float projectionBottom;         // Shadow - Directional

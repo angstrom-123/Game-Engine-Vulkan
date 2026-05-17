@@ -25,6 +25,9 @@ struct Transform {
     Transform& Scale(float factor);
     Transform& Translate(const glm::vec3& translation);
     Transform& Translate(float x, float y, float z);
+    glm::vec3 GlobalTranslation(ECS *ecs) const;
+    glm::quat GlobalRotation(ECS *ecs) const;
+    glm::vec3 GlobalScale(ECS *ecs) const;
     glm::mat4x4 LocalModelMatrix();
     glm::mat4x4 GlobalModelMatrix(ECS *ecs);
 };

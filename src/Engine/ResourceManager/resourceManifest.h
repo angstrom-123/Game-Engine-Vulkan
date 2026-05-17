@@ -8,7 +8,7 @@ namespace fs = std::filesystem;
 /*  Example MANIFEST.yaml
     manifest: scene name
     camera:
-      shadows: true
+      maxShadows: 4
       perspective: true
     models:
       - relative/path/to/model1.obj
@@ -21,7 +21,7 @@ namespace fs = std::filesystem;
 // TODO: Add fonts
 struct ResourceManifest {
     std::string sceneName = "";
-    bool shadowsEnabled = false;
+    uint32_t maxShadows = 0;
     bool perspectiveProjection = true;
     std::vector<fs::path> models;
     std::vector<fs::path> materials;

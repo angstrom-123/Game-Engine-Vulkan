@@ -9,7 +9,8 @@ enum ImageFlag {
     IMAGE_FLAG_NONE         = 0x0,
     IMAGE_FLAG_NON_COLOR    = 0x1,
     IMAGE_FLAG_TRANSPARENT  = 0x2,
-    IMAGE_FLAG_FONT_ATLAS   = 0x4
+    IMAGE_FLAG_CUTOUT       = 0x4,
+    IMAGE_FLAG_FONT_ATLAS   = 0x8
 };
 
 enum ImageLoadFlag {

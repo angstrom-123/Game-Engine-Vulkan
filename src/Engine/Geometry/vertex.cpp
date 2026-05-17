@@ -18,8 +18,15 @@ VertexInputDesc Vertex::GetDepthVertexDesc()
         .format = VK_FORMAT_R32G32B32_SFLOAT,
         .offset = offsetof(Vertex, position)
     };
+    VkVertexInputAttributeDescription uvAttr = {
+        .location = 1,
+        .binding = 0,
+        .format = VK_FORMAT_R32G32_SFLOAT,
+        .offset = offsetof(Vertex, uv)
+    };
 
     res.attributes.push_back(positionAttr);
+    res.attributes.push_back(uvAttr);
 
     return res;
 }

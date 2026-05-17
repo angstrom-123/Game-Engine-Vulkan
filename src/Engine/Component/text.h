@@ -1,9 +1,11 @@
 #pragma once 
 
-#include "System/Render/textureArrayHandler.h"
+// #include "System/Render/textureArrayHandler.h"
+#include "System/Render/backendV2Types.h"
 #include "glm/ext/vector_float3.hpp"
 #include <glm/vec4.hpp>
 #include <string>
+#include <filesystem>
 
 enum TextFlag {
     TEXT_FLAG_NONE = 0x0,
@@ -34,6 +36,6 @@ struct Text {
     uint32_t          flags         = TEXT_FLAG_NONE;
     glm::vec3         color         = glm::vec3(1.0);
     std::string       text          = "";
-    TextureAllocation atlasTexture;
+    AllocatedTexture  atlasTexture;
     fs::path          fontPath      = "";
 };

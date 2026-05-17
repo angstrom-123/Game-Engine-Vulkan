@@ -49,7 +49,7 @@ void SceneManager::DispatchEvents(Event event)
     }
 }
 
-void SceneManager::SwitchScene(Engine *engine, VulkanBackend *backend, ResourceManager *manager, const std::string& name, bool showLoadingScene)
+void SceneManager::SwitchScene(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, const std::string& name, bool showLoadingScene)
 {
     ASSERT(m_RegisteredScenes.contains(name) && "Switching to unregistered scene");
     Scene scene = m_RegisteredScenes[name];
@@ -75,7 +75,7 @@ void SceneManager::SwitchScene(Engine *engine, VulkanBackend *backend, ResourceM
     m_SceneFuture = LoadSceneAsync(engine, backend, manager, scene);
 }
 
-void SceneManager::LoadScene(Engine *engine, VulkanBackend *backend, ResourceManager *manager, Scene scene)
+void SceneManager::LoadScene(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, Scene scene)
 {
     ASSERT(!m_LoadedScenes.contains(scene) && "Loading scene that is already loaded");
     SceneBase *sceneBase = m_Scenes[scene];
@@ -85,7 +85,16 @@ void SceneManager::LoadScene(Engine *engine, VulkanBackend *backend, ResourceMan
         .windowSize = engine->GetWindowSize(),
         .manifest = manifest
     });
-    sceneBase->core.renderSystem->Init(sceneBase->core.ecs, manager->GetArraySizes(manifest), manifest.shadowsEnabled, backend);
+
+    RenderSystemInfo renderInfo = {
+        // Empty for now
+    };
+    GraphicsFrontendInfo graphicsInfo = {
+        .camera = sceneBase->core.camera,
+        .maxShadows = manifest.maxShadows,
+    };
+    manager->GetArraySizes(manifest, graphicsInfo.arrayLayers);
+    sceneBase->core.renderSystem->Init(sceneBase->core.ecs, renderInfo, graphicsInfo, backend);
     sceneBase->core.renderSystem->UploadResources(resources, sceneBase->core.path, manager, backend);
     sceneBase->Init((SceneConfig) {
         .windowSize = engine->GetWindowSize()
@@ -93,7 +102,7 @@ void SceneManager::LoadScene(Engine *engine, VulkanBackend *backend, ResourceMan
     m_LoadedScenes.insert(scene);
 }
 
-SceneFuture SceneManager::LoadSceneAsync(Engine *engine, VulkanBackend *backend, ResourceManager *manager, Scene scene)
+SceneFuture SceneManager::LoadSceneAsync(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, Scene scene)
 {
     ASSERT(!m_LoadedScenes.contains(scene) && "Loading scene that is already loaded");
     INFO("Async load started");
@@ -105,7 +114,7 @@ SceneFuture SceneManager::LoadSceneAsync(Engine *engine, VulkanBackend *backend,
     };
 }
 
-void SceneManager::Update(Engine *engine, VulkanBackend *backend, ResourceManager *manager, double deltaTime)
+void SceneManager::Update(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, double deltaTime)
 {
     // Make progress on loading a scene if required
     switch (m_SceneFuture.status) {
@@ -127,7 +136,15 @@ void SceneManager::Update(Engine *engine, VulkanBackend *backend, ResourceManage
                 SceneBase *sceneBase = m_Scenes[m_SceneFuture.scene];
 
                 const ResourceManifest& manifest = manager->GetManifest(sceneBase->core.path);
-                sceneBase->core.renderSystem->Init(sceneBase->core.ecs, manager->GetArraySizes(manifest), manifest.shadowsEnabled, backend);
+                RenderSystemInfo renderInfo = {
+                    // Empty for now
+                };
+                GraphicsFrontendInfo graphicsInfo = {
+                    .camera = sceneBase->core.camera,
+                    .maxShadows = manifest.maxShadows
+                };
+                manager->GetArraySizes(manifest, graphicsInfo.arrayLayers);
+                sceneBase->core.renderSystem->Init(sceneBase->core.ecs, renderInfo, graphicsInfo, backend);
                 sceneBase->core.renderSystem->UploadResources(m_SceneFuture.resourceFuture.get(), sceneBase->core.path, manager, backend);
                 sceneBase->Init((SceneConfig) {
                     .windowSize = engine->GetWindowSize()

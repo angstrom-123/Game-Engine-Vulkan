@@ -23,8 +23,10 @@ ENGINE_OBJ	:= $(patsubst %.cpp, $(OBJ_DIR)/%.o, $(ENGINE_SRC))
 APP_OBJ		:= $(patsubst %.cpp, $(OBJ_DIR)/%.o, $(APP_SRC))
 MAIN_OBJ	:= $(OBJ_DIR)/main.o
 
+DEP_FILES	:= $(ENGINE_OBJ:.o=.d) $(APP_OBJ:.o=.d) $(MAIN_OBJ:.o-.d)
+
 LIBRARY		:= $(BUILD_DIR)/libengine.a 
-TARGET		:= $(BUILD_DIR)/output
+TARGET		:= $(BUILD_DIR)/output$(EXE_EXT)
 
 # Engine sources (.o)
 $(OBJ_DIR)/Engine/%.o: Engine/%.cpp
@@ -49,7 +51,9 @@ $(LIBRARY): $(ENGINE_OBJ)
 # Final app
 $(TARGET): $(LIBRARY) $(APP_OBJ) $(MAIN_OBJ)
 	@echo "LINKING APPLICATION ($(BUILD_TYPE))"
-	@$(BEAR) $(CC) $(APP_OBJ) $(MAIN_OBJ) $(FLAGS) -L$(BUILD_DIR) -lengine $(LINKS) -o $@
+	@$(CC) $(APP_OBJ) $(MAIN_OBJ) $(FLAGS) -L$(BUILD_DIR) -lengine $(LINKS) -o $@
+
+-include $(DEP_FILES)
 
 .PHONY: debug 
 debug: $(TARGET)

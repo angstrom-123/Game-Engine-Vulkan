@@ -1,7 +1,7 @@
 manifest: "LoadingScene"
 camera:
   projection: "orthographic"
-  shadows: false
+  maxShadows: 0
 models:
   - path: "Resource/loadingSpinner.obj"
   - path: "Resource/loadingBackground.obj"

@@ -49,12 +49,11 @@ void SponzaScene::OnInit(const SceneConfig& config)
     LightCreateInfo sunLightInfo = {
         .position           = glm::vec3(0.0),
         .color              = glm::vec3(1.0),
-        .direction          = glm::vec3(0.6, -1.0, 0.2),
-        .intensity          = 2.0,
+        .direction          = glm::vec3(0.2, -1.0, 0.1),
+        .intensity          = 10.0,
         .radius             = 50.0,
         .distance           = 40.0,
         .shadowcaster       = true,
-        .shadowBias         = 0.005,
         .projectionLeft     = -40.0,
         .projectionRight    = 40.0,
         .projectionBottom   = -40.0,
@@ -71,8 +70,7 @@ void SponzaScene::OnInit(const SceneConfig& config)
         .radius             = 20.0,
         .innerConeRadians   = glm::radians(20.0),
         .outerConeRadians   = glm::radians(45.0),
-        .shadowcaster       = true,
-        .shadowBias         = 0.005,
+        .shadowcaster       = true
     };
     core.renderSystem->CreateSpotLight(core.ecs, spotLightInfo, core.graphicsBackend);
 }

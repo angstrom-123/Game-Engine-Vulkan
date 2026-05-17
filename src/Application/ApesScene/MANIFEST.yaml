@@ -1,7 +1,7 @@
 manifest: "ApesScene"
 camera:
   projection: "perspective"
-  shadows: false
+  maxShadows: 0
 models:
   - path: "Resource/ape.obj"
 materials:

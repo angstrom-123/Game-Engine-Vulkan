@@ -5,6 +5,11 @@
 - Cleaner internal set up 
 - Support for screenspace rendering 
 - Support for multiple viewports (multiple cameras)
+- HDRI
+- Custom output resolution in fullscreen
+- Blurring of SSAO
+- Deferred rendering with shader MSAA
+- Bloom
 
 ## Fix Memory Leak
 - Small bug between glfw, vulkan, and linux

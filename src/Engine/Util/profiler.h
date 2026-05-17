@@ -92,7 +92,7 @@ namespace profiling {
                            << "    \"cat\": \"default\","
                            << "    \"ph\": \"X\","
                            << "    \"ts\": \"" << result.start - m_FirstTimepoint << "\","
-                           << "    \"dur\": \"" << std::max(result.end - result.start, 1ul) << "\","
+                           << "    \"dur\": \"" << std::max(result.end - result.start, static_cast<uint64_t>(1)) << "\","
                            << "    \"pid\": \"0000\","
                            << "    \"tid\": \"" << result.thread << "\""
                            << "},";

@@ -1,0 +1,240 @@
+#version 450
+
+#define PI 3.14159265359
+#define EPSILON 0.00001
+
+#define ALBEDO 0
+#define NORMAL 1
+#define MATERIAL 2 
+#define DEPTH 3
+
+#define POINT_LIGHT 0
+#define SPOT_LIGHT 1 
+#define DIRECTIONAL_LIGHT 2
+
+layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+struct Light {
+    vec4 position;      // w = light type (0: Point, 1: Spot, 2: Directional)
+    vec4 color;         // rgb + intensity
+    vec4 direction;     // spot / directional
+    float radius;       // spot / point
+    float innerCone;    // spot
+    float outerCone;    // spot
+    uint shadowIndex;   // spot / directional
+    mat4 lightVP;       // spot / directional
+};
+
+layout (set = 0, binding = 0) uniform PerFrameUniforms { 
+    // Camera
+    mat4 view;
+    mat4 proj;
+    mat4 invView;
+    mat4 invProj;
+    vec4 position;
+    // Settings
+    float exposure;
+    float gamma;
+    float ambientIntensity;
+    uint lightCount;
+    ivec2 screenSize;
+    ivec2 shadowSize;
+} uniforms;
+
+layout (set = 1, binding = 0) uniform sampler2D gBufferTextures[4];
+layout (set = 1, binding = 1, rgba16f) uniform image2D hdrOutput;
+
+layout (set = 2, binding = 0) readonly buffer LightBuffer { 
+    Light lights[]; 
+} lightBuffer;
+layout (set = 2, binding = 1) uniform sampler2DArrayShadow shadowTextures;
+
+vec3 ReconstructWorldPosition(ivec2 pixel, float depth)
+{
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(uniforms.screenSize);
+    vec4 clip = vec4(uv.x * 2.0 - 1.0, uv.y * 2.0 - 1.0, depth, 1.0);
+
+    vec4 view = uniforms.invProj * clip;
+    view /= view.w;
+
+    vec4 world = uniforms.invView * view;
+    return world.xyz;
+}
+
+float Attenuate(float dist, float radius)
+{
+    float d = dist / radius;
+    float att = max(0.0, 1.0 - d * d);
+    return att * att;
+}
+
+float SpotFactor(vec3 lightDir, vec3 spotDir, float inner, float outer)
+{
+    float cosTheta = dot(lightDir, spotDir);
+    float smoothed = clamp((cosTheta - outer) / (inner - outer), 0.0, 1.0);
+    return smoothed;
+}
+
+float DistributionGGX(vec3 normal, vec3 halfway, float roughness)
+{
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float nh = max(dot(normal, halfway), 0.0);
+    float nh2 = nh * nh;
+
+    float num = a2;
+    float den = nh2 * (a2 - 1.0) + 1.0;
+    den = PI * den * den;
+
+    return num / den;
+}
+
+float SchlickGGX(float nv, float roughness)
+{
+    float r = roughness + 1.0;
+    float k = (r * r) / 8.0;
+
+    float num = nv;
+    float den = nv * (1.0 - k) + k;
+
+    return num / den;
+}
+
+float GeometrySmith(vec3 normal, vec3 viewDir, vec3 lightDir, float roughness)
+{
+    float nv = max(dot(normal, viewDir), 0.0);
+    float nl = max(dot(normal, lightDir), 0.0);
+    
+    float ggx2 = SchlickGGX(nv, roughness);
+    float ggx1 = SchlickGGX(nl, roughness);
+    
+    return ggx1 * ggx2;}
+
+vec3 FresnelSchlick(float cosTheta, vec3 F0)
+{
+    return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+}
+
+float ComputeShadow(Light light, vec3 worldPos, vec3 normal, vec3 lightDir)
+{
+    // In case of non-shadowcasting lights
+    if (light.shadowIndex == 0xFFFFFFFF) return 0.0;
+
+    // Depth reconstruction and sampling
+    vec4 positionLightspace = light.lightVP * vec4(worldPos, 1.0);
+    vec3 projectionCoords = positionLightspace.xyz / positionLightspace.w;
+    projectionCoords.xy = projectionCoords.xy * 0.5 + 0.5;
+
+    vec2 texelSize = 1.0 / vec2(uniforms.shadowSize);
+    float shadow = 0.0;
+    for (int x = -2; x <= 2; x++) {
+        for (int y = -2; y <= 2; y++) {
+            vec4 shadowCoord = vec4(projectionCoords.xy + texelSize * vec2(x, y), light.shadowIndex, projectionCoords.z);
+            shadow += texture(shadowTextures, shadowCoord);
+        }
+    }
+    shadow /= 25.0;
+
+    return shadow;
+}
+
+vec3 ComputePBR(Light light, vec3 worldPos, vec3 viewDir, vec3 normal, vec3 albedo, float metallic, float roughness, vec3 F0, float nv)
+{
+    uint lightKind = uint(light.position.w);
+    vec3 lightDir;
+    vec3 radiance = light.color.rgb * light.color.a;
+    float attenuation = 1.0;
+    float spotFactor = 1.0;
+    
+    if (lightKind == DIRECTIONAL_LIGHT) {
+        lightDir = normalize(light.direction.xyz);
+        radiance *= (1.0 - ComputeShadow(light, worldPos, normal, lightDir));
+    } else if (lightKind == POINT_LIGHT) {
+        vec3 delta = light.position.xyz - worldPos;
+        float dist = length(delta);
+        lightDir = delta / dist;
+        attenuation = Attenuate(dist, light.radius);
+    } else if (lightKind == SPOT_LIGHT) {
+        vec3 delta = light.position.xyz - worldPos;
+        float dist = length(delta);
+        lightDir = delta / dist;
+        attenuation = Attenuate(dist, light.radius);
+        spotFactor = SpotFactor(lightDir, light.direction.xyz, light.innerCone, light.outerCone);
+        radiance *= (1.0 - ComputeShadow(light, worldPos, normal, lightDir));
+    }
+    
+    if (attenuation <= EPSILON || spotFactor <= EPSILON) {
+        return vec3(0.0);
+    }
+    
+    float nl = max(dot(normal, lightDir), 0.0);
+    if (nl <= 0.0) return vec3(0.0);
+    
+    vec3 halfway = normalize(viewDir + lightDir);
+    float NDF = DistributionGGX(normal, halfway, roughness);
+    float G = GeometrySmith(normal, viewDir, lightDir, roughness);
+    vec3 F = FresnelSchlick(max(dot(halfway, viewDir), 0.0), F0);
+    
+    vec3 num = NDF * G * F;
+    float den = 4.0 * nv * nl + EPSILON;
+    vec3 specular = num / den;
+    
+    vec3 kS = F;
+    vec3 kD = vec3(1.0) - kS;
+    kD *= 1.0 - metallic;
+    
+    return (kD * albedo / PI + specular) * radiance * nl * attenuation * spotFactor;
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (pixel.x >= uniforms.screenSize.x || pixel.y >= uniforms.screenSize.y) {
+        return;
+    }
+
+    // Sample GBuffer
+    vec4 albedoData = texelFetch(gBufferTextures[ALBEDO], pixel, 0);
+    vec4 normalData = texelFetch(gBufferTextures[NORMAL], pixel, 0);
+    vec4 materialData = texelFetch(gBufferTextures[MATERIAL], pixel, 0);
+    float depth = texelFetch(gBufferTextures[DEPTH], pixel, 0).r;
+
+    vec3 albedo = albedoData.rgb;
+    vec3 normal = normalize(normalData.xyz * 2.0 - 1.0 + EPSILON);
+    float roughness = materialData.x;
+    float metallic = materialData.y;
+    float ao = materialData.z;
+    float emissive = materialData.w;
+
+    // imageStore(hdrOutput, pixel, vec4(normal * 0.5 + 0.5, 1.0));
+    // return;
+
+    // Out of range = no geometry
+    if (depth >= 1.0) {
+        imageStore(hdrOutput, pixel, vec4(0.0));
+        return;
+    }
+
+    // World space
+    vec3 worldPos = ReconstructWorldPosition(pixel, depth);
+    vec3 viewDir = normalize(uniforms.position.xyz - worldPos);
+
+    // Light accumulation
+    vec3 F0 = mix(vec3(0.04), albedo, metallic);
+    float nv = max(dot(normal, viewDir), 0.0);
+    vec3 accumulatedColor = vec3(0.0);
+    for (uint i = 0; i < uniforms.lightCount; i++) {
+        Light light = lightBuffer.lights[i];
+        accumulatedColor += ComputePBR(light, worldPos, viewDir, normal, albedo, metallic, roughness, F0, nv);
+    }
+
+    // TODO: Add IBL (image based lighting)
+    vec3 ambientColor = albedo.xyz * uniforms.ambientIntensity * ao;
+
+    // TODO: Add emissive to materials
+    vec3 emissiveColor = albedo.xyz * emissive;
+
+    // Result 
+    vec3 finalColor = accumulatedColor + ambientColor + emissiveColor;
+    imageStore(hdrOutput, pixel, vec4(finalColor, 1.0));
+}

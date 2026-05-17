@@ -43,7 +43,7 @@ Engine::Engine(Config& config)
 
 Engine::~Engine()
 {
-    VulkanBackend::WaitForIdle(m_GraphicsBackend.device);
+    m_GraphicsBackend.WaitForIdle();
     glfwDestroyWindow(m_Window);
     glfwTerminate();
 }

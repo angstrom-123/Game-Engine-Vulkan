@@ -15,14 +15,11 @@ constexpr uint32_t HashString(const char *str)
 }
 
 constexpr uint32_t HASH_NEWMTL = HashString("newmtl");
-constexpr uint32_t HASH_KA = HashString("Ka");
 constexpr uint32_t HASH_KD = HashString("Kd");
-constexpr uint32_t HASH_KS = HashString("Ks");
 constexpr uint32_t HASH_NS = HashString("Ns");
 constexpr uint32_t HASH_NI = HashString("Ni");
 constexpr uint32_t HASH_D = HashString("d");
 constexpr uint32_t HASH_MAP_DISP = HashString("map_Disp");
-constexpr uint32_t HASH_MAP_KA = HashString("map_Ka");
 constexpr uint32_t HASH_MAP_KD = HashString("map_Kd");
 
 bool MaterialResource::Load(const fs::path& path)
@@ -87,25 +84,9 @@ bool MaterialResource::ProcessLine(std::istringstream& iss, const std::string& l
             }
             break;
         } 
-        case HASH_KA: {
-            SubMaterialResource &material = subMaterials.back();
-            if (!(iss >> material.ambientColor[0] >> material.ambientColor[1] >> material.ambientColor[2])) {
-                ERROR("Failed to read ambient color");
-                return false;
-            }
-            break;
-        }
         case HASH_KD: {
             SubMaterialResource &material = subMaterials.back();
             if (!(iss >> material.diffuseColor[0] >> material.diffuseColor[1] >> material.diffuseColor[2])) {
-                ERROR("Failed to read diffuse color");
-                return false;
-            }
-            break;
-        }
-        case HASH_KS: {
-            SubMaterialResource &material = subMaterials.back();
-            if (!(iss >> material.specularColor[0] >> material.specularColor[1] >> material.specularColor[2])) {
                 ERROR("Failed to read diffuse color");
                 return false;
             }
@@ -140,15 +121,6 @@ bool MaterialResource::ProcessLine(std::istringstream& iss, const std::string& l
                 return false;
             }
             subMaterials.back().normalTexture = path / filePath;
-            break;
-        }
-        case HASH_MAP_KA: {
-            fs::path filePath = "";
-            if (!(iss >> filePath)) {
-                ERROR("Failed to read ambient texture path");
-                return false;
-            }
-            subMaterials.back().ambientTexture = path / filePath;
             break;
         }
         case HASH_MAP_KD: {

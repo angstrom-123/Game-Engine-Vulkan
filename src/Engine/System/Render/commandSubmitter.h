@@ -10,7 +10,7 @@ public:
     void ImmediateSubmit(VkDevice device, VkQueue graphicsQueue, std::function<void (VkCommandBuffer)>&& function);
 
 private:
-    VkFence m_UploadFence;
-    VkCommandPool m_CommandPool;
-    VkCommandBuffer m_CommandBuffer;
+    VkFence m_UploadFence{VK_NULL_HANDLE};
+    VkCommandPool m_CommandPool{VK_NULL_HANDLE};
+    VkCommandBuffer m_CommandBuffer{VK_NULL_HANDLE};
 };

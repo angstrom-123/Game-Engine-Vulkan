@@ -1,5 +1,4 @@
 #include "shadowSystem.h"
-#include "System/Render/renderTypes.h"
 #include "Util/profiler.h"
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -8,8 +7,6 @@
 void ShadowSystem::Update(ECS *ecs)
 {
     PROFILER_PROFILE_SCOPE("ShadowSystem::Update");
-
-    ASSERT(entities.size() <= MAX_SHADOWCASTERS && "Too many shadowcasters");
 
     for (const Entity e : entities) {
         Transform& transform = ecs->GetComponent<Transform>(e);

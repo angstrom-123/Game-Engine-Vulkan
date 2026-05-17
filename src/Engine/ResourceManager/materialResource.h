@@ -9,14 +9,11 @@ namespace fs = std::filesystem;
 
 struct SubMaterialResource {
     std::string name = "";
-    glm::vec3 ambientColor = glm::vec3(1.0);
     glm::vec3 diffuseColor = glm::vec3(1.0);
-    glm::vec3 specularColor = glm::vec3(1.0);
     float specularExponent = 1.0;
     float transparency = 0.0;
     glm::vec3 transmissionColor = glm::vec3(1.0);
     float refractiveIndex = 1.0;
-    fs::path ambientTexture = "";
     fs::path diffuseTexture = "";
     fs::path normalTexture = "";
 };

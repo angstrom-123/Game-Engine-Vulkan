@@ -1,6 +1,6 @@
 #pragma once
 
-#include "System/Render/textureArrayHandler.h"
+#include "System/Render/backendV2Types.h"
 #include "Util/myAssert.h"
 #include "glm/ext/vector_float2.hpp"
 #include <filesystem>
@@ -12,7 +12,6 @@
 // Printable ascii
 const char FIRST_CHAR = 32;
 const char LAST_CHAR = 126;
-const size_t FONT_ATLAS_RESOLUTION = 2048;
 
 struct GlyphInfo {
     glm::vec2 uv0;
@@ -34,7 +33,7 @@ struct GlyphSet {
 using FontMetrics = std::map<int32_t, GlyphSet>;
 
 struct FontInfo {
-    TextureAllocation atlas;
+    AllocatedTexture atlas;
     GlyphSet glyphSet;
 };
 

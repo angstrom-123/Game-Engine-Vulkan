@@ -1,7 +1,7 @@
 manifest: "SponzaScene"
 camera:
   projection: "perspective"
-  shadows: true
+  maxShadows: 4
 models:
   - path: "Resource/sponza.obj"
 materials:

@@ -25,8 +25,8 @@ bool ResourceManifest::Load(const fs::path& path)
         if (rootNode.contains("camera")) {
             const auto& cameraNode = rootNode["camera"];
 
-            if (cameraNode.contains("shadows")) {
-                shadowsEnabled = cameraNode["shadows"].as_bool();
+            if (cameraNode.contains("maxShadows")) {
+                maxShadows = cameraNode["maxShadows"].as_int();
             }
 
             if (cameraNode.contains("projection")) {

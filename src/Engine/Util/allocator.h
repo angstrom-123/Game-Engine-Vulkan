@@ -8,13 +8,13 @@
 #endif
 
 struct AllocatedImage {
-    VkImage image;
-    VmaAllocation allocation;
-    void *data = nullptr;
+    VkImage image{VK_NULL_HANDLE};
+    VmaAllocation allocation{VK_NULL_HANDLE};
+    void *data{nullptr};
 };
 
 struct AllocatedBuffer {
-    VkBuffer buffer;
-    VmaAllocation allocation;
-    void *data = nullptr;
+    VkBuffer buffer{VK_NULL_HANDLE};
+    VmaAllocation allocation{VK_NULL_HANDLE};
+    void *data{nullptr};
 };

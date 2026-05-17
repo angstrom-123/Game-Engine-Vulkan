@@ -33,6 +33,33 @@ Transform& Transform::Translate(float x, float y, float z)
     return *this;
 }
 
+glm::vec3 Transform::GlobalTranslation(ECS *ecs) const 
+{
+    glm::vec3 t = translation;
+    if (inherit != INVALID_HANDLE) {
+        t += ecs->GetComponent<Transform>(inherit).GlobalTranslation(ecs);
+    }
+    return t;
+}
+
+glm::quat Transform::GlobalRotation(ECS *ecs) const
+{
+    glm::quat r = rotation;
+    if (inherit != INVALID_HANDLE) {
+        r += ecs->GetComponent<Transform>(inherit).GlobalRotation(ecs);
+    }
+    return r;
+}
+
+glm::vec3 Transform::GlobalScale(ECS *ecs) const
+{
+    glm::vec3 s = scale;
+    if (inherit != INVALID_HANDLE) {
+        s += ecs->GetComponent<Transform>(inherit).GlobalScale(ecs);
+    }
+    return s;
+}
+
 glm::mat4x4 Transform::LocalModelMatrix()
 {
     glm::mat4x4 model = glm::mat4x4(1.0);

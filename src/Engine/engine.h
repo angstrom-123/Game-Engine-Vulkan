@@ -1,7 +1,7 @@
 #pragma once 
 
 #include "ResourceManager/resourceManager.h"
-#include "System/Render/vulkanBackend.h"
+#include "System/Render/vulkanBackendV2.h"
 #include "config.h"
 #include "eventManager.h"
 #include "scene.h"
@@ -19,18 +19,15 @@ public:
     template<Derived<SceneBase> T> void RegisterScene(const fs::path& path) { m_SceneManager.RegisterScene<T>(path); }
 
     double GetTime() { return glfwGetTime(); }
-    uint64_t GetFrameNumber() { return m_GraphicsBackend.GetFrameNumber(); }
+    uint64_t GetFrameNumber() { return m_GraphicsBackend.frameNumber; }
     glm::vec2 GetFrameMouseDelta() { return m_EventManager.mousePos - m_EventManager.mousePosLastFrame; }
     glm::ivec2 GetWindowSize() { glm::ivec2 res; glfwGetFramebufferSize(m_Window, &res.x, &res.y); return res; }
     bool *GetKeysDown() { return m_EventManager.keysDown; }
 
 private:
     struct GLFWwindow *m_Window = nullptr;
-    VulkanBackend m_GraphicsBackend;
+    VulkanBackendV2 m_GraphicsBackend;
     EventManager m_EventManager;
     SceneManager m_SceneManager;
     ResourceManager m_ResourceManager;
-
-private:
-    void CalculateTangents(Vertex& v1, Vertex& v2, Vertex& v3);
 };

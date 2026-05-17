@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include "handle.h"
 
 constexpr int32_t MAX_RESOURCES = 4096;
 constexpr int32_t MAX_OF_EACH_RESOURCE = 256;
 
+using PathString = std::string;
 using Resource = int32_t;
 
 struct DefaultTextures {

@@ -1,5 +1,5 @@
 #include "lightSystem.h"
-#include "System/Render/renderTypes.h"
+#include "System/Render/backendV2Types.h"
 #include "Util/profiler.h"
 
 void LightSystem::Update(ECS *ecs)
@@ -12,10 +12,7 @@ void LightSystem::Update(ECS *ecs)
         Transform& transform = ecs->GetComponent<Transform>(e);
         Light& light = ecs->GetComponent<Light>(e);
 
-        glm::vec3 position = transform.translation;
-        if (transform.inherit != INVALID_HANDLE) {
-            position += ecs->GetComponent<Transform>(transform.inherit).translation;
-        }
+        glm::vec3 position = transform.GlobalTranslation(ecs);
 
         light.position.x = position.x;
         light.position.y = position.y;

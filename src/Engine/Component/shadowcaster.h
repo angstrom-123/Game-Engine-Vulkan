@@ -12,13 +12,13 @@ struct Shadowcaster {
 
     Shadowcaster(Perspective, float fovRadians, float near, float far)
     {
-        this->projection = Camera::VulkanPerspective(fovRadians, 1.0, near, far);
+        projection = Camera::VulkanPerspective(fovRadians, 1.0, near, far);
         shadowIndex = UINT32_MAX;
     }
 
     Shadowcaster(Orthographic, float minX, float maxX, float minY, float maxY, float near, float far)
     {
-        this->projection = Camera::VulkanOrthographic(minX, maxX, minY, maxY, near, far);
+        projection = Camera::VulkanOrthographic(minX, maxX, minY, maxY, near, far);
         shadowIndex = UINT32_MAX;
     }
 };
