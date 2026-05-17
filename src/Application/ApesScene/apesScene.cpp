@@ -65,8 +65,11 @@ void ApesScene::OnUpdate(double deltaTime)
     }
 
     // Spin the apes
-    core.ecs->GetComponent<Transform>(m_LeftApeParent).Rotate(glm::radians(static_cast<float>(core.engine->GetFrameNumber() % 360)), Y_AXIS);
-    core.ecs->GetComponent<Transform>(m_RightApeParent).Rotate(glm::radians(static_cast<float>(core.engine->GetFrameNumber() % 360 + 180)), X_AXIS);
+    m_ElapsedTime += deltaTime;
+    float rotate = 1.5 * m_ElapsedTime;
+    rotate = std::fmod(rotate, 2.0 * glm::pi<float>());
+    core.ecs->GetComponent<Transform>(m_LeftApeParent).Rotate(rotate, Y_AXIS);
+    core.ecs->GetComponent<Transform>(m_RightApeParent).Rotate(rotate, X_AXIS);
 
     // Update our systems
     m_CameraController->Update(core.ecs, core.engine->GetKeysDown(), core.engine->GetFrameMouseDelta(), deltaTime);

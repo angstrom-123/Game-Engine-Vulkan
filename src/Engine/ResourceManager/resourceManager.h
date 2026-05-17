@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "System/Render/backendV2Types.h"
+#include "System/Render/backendTypes.h"
 #include "resourceManifest.h"
 #include "resourceTypes.h"
 #include "resourceArray.h"

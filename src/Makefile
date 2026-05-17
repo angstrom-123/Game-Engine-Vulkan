@@ -48,10 +48,19 @@ $(LIBRARY): $(ENGINE_OBJ)
 	@echo "BUILDING ENGINE LIBRARY"
 	@ar rcs $@ $^
 
+
 # Final app
+ifeq ($(TARGET_OS), windows)
 $(TARGET): $(LIBRARY) $(APP_OBJ) $(MAIN_OBJ)
 	@echo "LINKING APPLICATION ($(BUILD_TYPE))"
 	@$(CC) $(APP_OBJ) $(MAIN_OBJ) $(FLAGS) -L$(BUILD_DIR) -lengine $(LINKS) -o $@
+	@cp $(MAKE_DIR)/vendor/windows_dlls/libgcc_s_seh-1.dll $(BUILD_DIR)
+	@cp $(MAKE_DIR)/vendor/windows_dlls/libstdc++-6.dll $(BUILD_DIR)
+else
+$(TARGET): $(LIBRARY) $(APP_OBJ) $(MAIN_OBJ)
+	@echo "LINKING APPLICATION ($(BUILD_TYPE))"
+	@$(CC) $(APP_OBJ) $(MAIN_OBJ) $(FLAGS) -L$(BUILD_DIR) -lengine $(LINKS) -o $@
+endif
 
 -include $(DEP_FILES)
 

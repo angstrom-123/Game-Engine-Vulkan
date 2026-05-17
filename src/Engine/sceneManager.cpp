@@ -49,7 +49,7 @@ void SceneManager::DispatchEvents(Event event)
     }
 }
 
-void SceneManager::SwitchScene(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, const std::string& name, bool showLoadingScene)
+void SceneManager::SwitchScene(Engine *engine, VulkanBackend *backend, ResourceManager *manager, const std::string& name, bool showLoadingScene)
 {
     ASSERT(m_RegisteredScenes.contains(name) && "Switching to unregistered scene");
     Scene scene = m_RegisteredScenes[name];
@@ -75,7 +75,7 @@ void SceneManager::SwitchScene(Engine *engine, VulkanBackendV2 *backend, Resourc
     m_SceneFuture = LoadSceneAsync(engine, backend, manager, scene);
 }
 
-void SceneManager::LoadScene(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, Scene scene)
+void SceneManager::LoadScene(Engine *engine, VulkanBackend *backend, ResourceManager *manager, Scene scene)
 {
     ASSERT(!m_LoadedScenes.contains(scene) && "Loading scene that is already loaded");
     SceneBase *sceneBase = m_Scenes[scene];
@@ -102,7 +102,7 @@ void SceneManager::LoadScene(Engine *engine, VulkanBackendV2 *backend, ResourceM
     m_LoadedScenes.insert(scene);
 }
 
-SceneFuture SceneManager::LoadSceneAsync(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, Scene scene)
+SceneFuture SceneManager::LoadSceneAsync(Engine *engine, VulkanBackend *backend, ResourceManager *manager, Scene scene)
 {
     ASSERT(!m_LoadedScenes.contains(scene) && "Loading scene that is already loaded");
     INFO("Async load started");
@@ -114,7 +114,7 @@ SceneFuture SceneManager::LoadSceneAsync(Engine *engine, VulkanBackendV2 *backen
     };
 }
 
-void SceneManager::Update(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, double deltaTime)
+void SceneManager::Update(Engine *engine, VulkanBackend *backend, ResourceManager *manager, double deltaTime)
 {
     // Make progress on loading a scene if required
     switch (m_SceneFuture.status) {

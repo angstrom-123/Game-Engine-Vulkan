@@ -13,11 +13,12 @@ public:
     void OnCleanup() override;
 
 private:
-    Entity m_LeftApeParent = INVALID_HANDLE;
-    Entity m_RightApeParent = INVALID_HANDLE;
+    Entity m_LeftApeParent{INVALID_HANDLE};
+    Entity m_RightApeParent{INVALID_HANDLE};
 
-    double m_LastTime = 0.0;
-    uint64_t m_LastFrame = 0;
+    double m_ElapsedTime{0.0};
+    double m_LastTime{0.0};
+    uint64_t m_LastFrame{0};
 
-    DefaultCameraControlSystem *m_CameraController = nullptr;
+    DefaultCameraControlSystem *m_CameraController{nullptr};
 };

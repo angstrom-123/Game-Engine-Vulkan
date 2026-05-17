@@ -13,9 +13,10 @@ public:
     void OnCleanup() override;
 
 private:
-    double m_LastTime = 0.0;
-    uint64_t m_LastFrame = 0;
+    double m_LastTime{0.0};
+    double m_ElapsedTime{0.0};
+    uint64_t m_LastFrame{0};
 
-    DefaultCameraControlSystem *m_CameraController = nullptr;
-    Entity m_LightsParent = INVALID_HANDLE;
+    DefaultCameraControlSystem *m_CameraController{nullptr};
+    Entity m_LightsParent{INVALID_HANDLE};
 };

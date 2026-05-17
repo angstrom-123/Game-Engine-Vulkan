@@ -1,5 +1,5 @@
 #include "lightSystem.h"
-#include "System/Render/backendV2Types.h"
+#include "System/Render/backendTypes.h"
 #include "Util/profiler.h"
 
 void LightSystem::Update(ECS *ecs)

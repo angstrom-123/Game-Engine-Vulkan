@@ -27,12 +27,12 @@ public:
     ~SceneManager();
     void Init();
     void DispatchEvents(Event event);
-    void Update(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, double deltaTime);
+    void Update(Engine *engine, VulkanBackend *backend, ResourceManager *manager, double deltaTime);
 
     // In the future, have a flag for showing a loading indicator instead of the loading screen
-    void SwitchScene(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, const std::string& name, bool showLoadingScene);
+    void SwitchScene(Engine *engine, VulkanBackend *backend, ResourceManager *manager, const std::string& name, bool showLoadingScene);
 
-    template<Derived<SceneBase> T> void RegisterLoadingScene(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, const std::filesystem::path& path)
+    template<Derived<SceneBase> T> void RegisterLoadingScene(Engine *engine, VulkanBackend *backend, ResourceManager *manager, const std::filesystem::path& path)
     {
         m_LoadingScene = RegisterScene<T>(path);
         LoadScene(engine, backend, manager, m_LoadingScene);
@@ -60,9 +60,9 @@ public:
     }
 
 private:
-    void LoadScene(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, Scene scene);
+    void LoadScene(Engine *engine, VulkanBackend *backend, ResourceManager *manager, Scene scene);
     void UnloadScene(Scene scene);
-    [[nodiscard]] SceneFuture LoadSceneAsync(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, Scene scene);
+    [[nodiscard]] SceneFuture LoadSceneAsync(Engine *engine, VulkanBackend *backend, ResourceManager *manager, Scene scene);
 
 private:
     Scene m_ActiveScene = INVALID_HANDLE;

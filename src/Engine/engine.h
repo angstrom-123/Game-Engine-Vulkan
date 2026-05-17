@@ -1,7 +1,7 @@
 #pragma once 
 
 #include "ResourceManager/resourceManager.h"
-#include "System/Render/vulkanBackendV2.h"
+#include "System/Render/vulkanBackend.h"
 #include "config.h"
 #include "eventManager.h"
 #include "scene.h"
@@ -26,7 +26,7 @@ public:
 
 private:
     struct GLFWwindow *m_Window = nullptr;
-    VulkanBackendV2 m_GraphicsBackend;
+    VulkanBackend m_GraphicsBackend;
     EventManager m_EventManager;
     SceneManager m_SceneManager;
     ResourceManager m_ResourceManager;

@@ -1,5 +1,5 @@
 #include "attachmentArray.h"
-#include "vulkanBackendV2.h"
+#include "vulkanBackend.h"
 #include "vulkan_core.h"
 
 AttachmentArray::AttachmentArray(uint32_t resolution, VkFormat format)
@@ -8,7 +8,7 @@ AttachmentArray::AttachmentArray(uint32_t resolution, VkFormat format)
     this->format = format;
 }
 
-void AttachmentArray::Init(uint32_t layerCount, VulkanBackendV2& backend)
+void AttachmentArray::Init(uint32_t layerCount, VulkanBackend& backend)
 {
     this->layerCount = layerCount;
     for (uint32_t i = 0; i < layerCount; i++) {

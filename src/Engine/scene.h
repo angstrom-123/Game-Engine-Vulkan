@@ -8,7 +8,7 @@
 #include "Component/shadowcaster.h"
 #include "ECS/ecs.h"
 #include "ResourceManager/resourceManifest.h"
-#include "System/Render/renderSystemV2.h"
+#include "System/Render/renderSystem.h"
 #include "event.h"
 
 using Scene = int32_t;
@@ -29,7 +29,7 @@ public:
     virtual ~SceneBase() = default;
     SceneBase() = default;
 
-    void PreInit(Engine *engine, VulkanBackendV2 *backend, ResourceManager *manager, const SceneBaseConfig&& baseConfig)
+    void PreInit(Engine *engine, VulkanBackend *backend, ResourceManager *manager, const SceneBaseConfig&& baseConfig)
     {
         core.engine = engine;
         core.graphicsBackend = backend;
@@ -46,7 +46,7 @@ public:
 
         INFO("ECS initialized");
 
-        core.renderSystem = core.ecs->RegisterSystem<RenderSystemV2>();
+        core.renderSystem = core.ecs->RegisterSystem<RenderSystem>();
 
         INFO("Render system registered");
 
@@ -80,10 +80,10 @@ public:
         // External
         Engine                *engine          = nullptr;
         ECS                   *ecs             = nullptr;
-        VulkanBackendV2       *graphicsBackend = nullptr;
+        VulkanBackend       *graphicsBackend = nullptr;
         // Internal
         std::filesystem::path path             = "";
-        RenderSystemV2        *renderSystem    = nullptr;
+        RenderSystem          *renderSystem    = nullptr;
         Entity                camera           = INVALID_HANDLE;
     } core;
 

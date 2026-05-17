@@ -1,8 +1,6 @@
 #include "loadingScene.h"
 #include <tuple>
 
-#include "engine.h"
-
 void LoadingScene::OnInit(const SceneConfig& config)
 {
     m_Parent = core.ecs->CreateEntity();
@@ -20,7 +18,10 @@ void LoadingScene::OnInit(const SceneConfig& config)
 
 void LoadingScene::OnUpdate(double deltaTime)
 {
-    core.ecs->GetComponent<Transform>(m_SpinnerParent).Rotate(glm::radians(static_cast<float>(core.engine->GetFrameNumber() % 360) * 3.0), Z_AXIS);
+    m_ElapsedTime += deltaTime;
+    float rotate = 7.0 * m_ElapsedTime;
+    rotate = std::fmod(rotate, 2.0 * glm::pi<float>());
+    core.ecs->GetComponent<Transform>(m_SpinnerParent).Rotate(rotate, Z_AXIS);
     core.renderSystem->Update(core.ecs, core.graphicsBackend);
 }
 

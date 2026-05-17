@@ -7,7 +7,7 @@
 class AttachmentArray {
 public:
     AttachmentArray(uint32_t resolution, VkFormat format);
-    void Init(uint32_t layerCount, class VulkanBackendV2& backend);
+    void Init(uint32_t layerCount, class VulkanBackend& backend);
     void Cleanup(VkDevice device, VmaAllocator allocator);
     uint32_t Allocate();
 

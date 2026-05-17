@@ -1,8 +1,8 @@
 MAKE_DIR		:= $(PWD)
 
-RELEASE_DIR		:= $(MAKE_DIR)/bin/release
-PROFILING_DIR	:= $(MAKE_DIR)/bin/profiling
-DEBUG_DIR		:= $(MAKE_DIR)/bin/debug
+RELEASE_DIR		:= 
+PROFILING_DIR	:= 
+DEBUG_DIR		:= 
 
 C_FLAGS			:= -I$(MAKE_DIR)/src
 C_FLAGS			+= -I$(MAKE_DIR)/src/Engine
@@ -21,13 +21,9 @@ TARGET_OS		?= linux
 CC				:= clang++
 
 EXE_EXT			:=
-
-LINKS			:= -lglfw
-LINKS			+= -lvulkan
-LINKS			+= -lm
+LINKS			:=
 
 DEBUG_FLAGS 	:= -DDEBUG
-DEBUG_FLAGS 	+= -fsanitize=address -fsanitize=undefined
 DEBUG_FLAGS 	+= -O0
 
 ifeq ($(TARGET_OS), windows)
@@ -47,16 +43,20 @@ ifeq ($(TARGET_OS), windows)
 	LINKS			+= -lvulkan-1
 	LINKS			+= -lgdi32 -luser32 -lkernel32
 
-	DEBUG_FLAGS 	:= -DDEBUG
-	DEBUG_FLAGS 	+= -O0
+else
+	RELEASE_DIR		:= $(MAKE_DIR)/bin/release
+	PROFILING_DIR	:= $(MAKE_DIR)/bin/profiling
+	DEBUG_DIR		:= $(MAKE_DIR)/bin/debug
+
+	DEBUG_FLAGS 	+= -fsanitize=address -fsanitize=undefined
+
+	LINKS			+= -lglfw
+	LINKS			+= -lvulkan
+	LINKS			+= -lm
 endif
 
 BEAR			:= bear
 SHADERC			:= glslangValidator
-
-DEBUG_FLAGS 	:= -DDEBUG
-DEBUG_FLAGS 	+= -fsanitize=address -fsanitize=undefined
-DEBUG_FLAGS 	+= -O0
 
 RELEASE_FLAGS 	:= -DRELEASE
 RELEASE_FLAGS   += -O3
@@ -64,7 +64,7 @@ RELEASE_FLAGS   += -O3
 PROFILING_FLAGS := $(RELEASE_FLAGS) 
 PROFILING_FLAGS += -DPROFILING
 
-export MAKE_DIR RELEASE_DIR DEBUG_DIR PROFILING_DIR CC EXE_EXT SHADERC LINKS C_FLAGS DEBUG_FLAGS RELEASE_FLAGS PROFILING_FLAGS
+export MAKE_DIR RELEASE_DIR DEBUG_DIR PROFILING_DIR CC EXE_EXT SHADERC LINKS C_FLAGS DEBUG_FLAGS RELEASE_FLAGS PROFILING_FLAGS TARGET_OS
 
 .PHONY: shaders
 shaders:

@@ -1,4 +1,5 @@
 #include "sponzaScene.h"
+#include "glm/ext/scalar_constants.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdlib>
 
@@ -87,10 +88,14 @@ void SponzaScene::OnUpdate(double deltaTime)
     }
 
     // Move all the point lights around
+    m_ElapsedTime += deltaTime;
+    const float AMPLITUDE = 5.0;
+    const glm::vec3 FREQUENCY = { 0.2, 0.1, 0.15 };
+    const glm::vec3 PHASE = { 0.0, 0.5, 1.0 };
     glm::vec3 lightOffset = glm::vec3(
-        std::sin(static_cast<float>(core.engine->GetFrameNumber()) / 60.0) * 5.0,
-        std::cos(static_cast<float>(core.engine->GetFrameNumber()) / 60.0) * 5.0,
-        std::cos(static_cast<float>(core.engine->GetFrameNumber() + 47) / 45.0) * 5.0
+        AMPLITUDE * std::sin(2.0 * glm::pi<float>() * m_ElapsedTime * FREQUENCY.x + PHASE.x),
+        AMPLITUDE * std::sin(2.0 * glm::pi<float>() * m_ElapsedTime * FREQUENCY.y + PHASE.y),
+        AMPLITUDE * std::sin(2.0 * glm::pi<float>() * m_ElapsedTime * FREQUENCY.z + PHASE.z)
     );
     core.ecs->GetComponent<Transform>(m_LightsParent).Translate(lightOffset);
 

@@ -4,7 +4,5 @@ compile_commands.json
 results.tracing.json
 gpu_results.txt
 renderdoc_settings.cap
-copy_dlls_debug.sh
-copy_dlls_release.sh
 .git/
 .cache/
