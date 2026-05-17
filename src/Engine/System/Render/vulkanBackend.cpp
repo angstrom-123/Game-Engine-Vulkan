@@ -1905,7 +1905,7 @@ void VulkanBackend::InitPipelines()
         .scissor = &m_ScissorRect,
         .pipelineLayout = m_TransparencyPipelineLayout,
         .vertexInput = &vertexDesc,
-        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .cullMode = VK_CULL_MODE_NONE,
         .blendEnable = true,
         .depthFlags = PIPELINE_DEPTH_TEST,
         .depthCompare = VK_COMPARE_OP_LESS_OR_EQUAL,

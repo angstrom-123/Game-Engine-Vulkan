@@ -43,7 +43,7 @@ void ApesScene::OnInit(const SceneConfig& config)
 
     // Text
     TextCreateInfo textInfo = {
-        .fontSize = 68,
+        .fontSize = 76,
         .position = glm::vec3(0.0, 0.0, -5.0),
         .color = glm::vec3(1.0, 0.0, 0.0),
         .text = "Hello, World!",

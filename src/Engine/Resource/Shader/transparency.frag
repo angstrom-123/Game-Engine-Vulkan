@@ -190,10 +190,14 @@ vec3 ComputeNormal()
 
 void main()
 {
-    vec4 albedo = ComputeAlbedo();
-    if (albedo.a <= 0.05) {
-        discard;
+    // Special case for rendering world-space text
+    if (constants.diffuseTexture >> 16 == TEXTURE_ARRAY_COUNT - 1) {
+        float alpha = texture(textures[constants.diffuseTexture >> 16], vec3(vUV, constants.diffuseTexture & 0xFFFF)).r;
+        outColor = vec4(constants.albedo.rgb, alpha * constants.albedo.a);
+        return;
     }
+
+    vec4 albedo = ComputeAlbedo();
 
     vec3 normal = ComputeNormal();
     if ((constants.flags & MATERIAL_FLAG_DOUBLE_SIDED) == MATERIAL_FLAG_DOUBLE_SIDED && !gl_FrontFacing) {

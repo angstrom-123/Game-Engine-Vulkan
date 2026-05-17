@@ -306,7 +306,7 @@ Entity RenderSystem::CreateText(ECS *ecs, const TextCreateInfo& info, VulkanBack
     ASSERT(m_Textures.contains(text.fontPath.generic_string()) && "Font atlas not allocated");
     Material material = {
         .albedo = glm::vec4(text.color, 1.0),
-        .diffuseTexture = m_Textures[m_DefaultColor.generic_string()],
+        .diffuseTexture = m_Textures[text.fontPath.generic_string()],
         .normalTexture = m_Textures[m_DefaultNormal.generic_string()],
         .flags = MATERIAL_FLAG_TRANSPARENT | MATERIAL_FLAG_DOUBLE_SIDED,
     };

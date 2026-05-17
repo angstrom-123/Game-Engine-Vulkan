@@ -19,7 +19,7 @@ void LoadingScene::OnInit(const SceneConfig& config)
 void LoadingScene::OnUpdate(double deltaTime)
 {
     m_ElapsedTime += deltaTime;
-    float rotate = 7.0 * m_ElapsedTime;
+    float rotate = 3.0 * m_ElapsedTime;
     rotate = std::fmod(rotate, 2.0 * glm::pi<float>());
     core.ecs->GetComponent<Transform>(m_SpinnerParent).Rotate(rotate, Z_AXIS);
     core.renderSystem->Update(core.ecs, core.graphicsBackend);

@@ -23,5 +23,4 @@ struct Material {
     uint32_t flags{0};
 
     FragmentPushConstants::Material Pack();
-    void UseTrueTransparency() { flags |= MATERIAL_FLAG_TRANSPARENT; }
 };
