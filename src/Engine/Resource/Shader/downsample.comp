@@ -1,0 +1,56 @@
+#version 450
+
+#define MAX_MIP_LEVELS 16
+#define KERNEL_RADIUS 3
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout (set = 3, binding = 0, r11f_g11f_b10f) uniform image2D brightSource;
+layout (set = 3, binding = 2, r11f_g11f_b10f) uniform image2D pyramid[MAX_MIP_LEVELS];
+
+layout (push_constant) uniform Constants {
+    uint currentIndex;
+} constants;
+
+void main()
+{
+    ivec2 outCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(pyramid[constants.currentIndex]);
+
+    if (outCoord.x >= outSize.x || outCoord.y >= outSize.y) {
+        return;
+    }
+
+    ivec2 inCoord = outCoord * 2;
+    vec4 sum = vec4(0.0);
+    int samples = 0;
+
+    if (constants.currentIndex == 0) {
+        ivec2 inSize = imageSize(brightSource);
+
+        for (int x = -KERNEL_RADIUS; x <= KERNEL_RADIUS; x++) {
+            for (int y = -KERNEL_RADIUS; y <= KERNEL_RADIUS; y++) {
+                ivec2 coord = inCoord + ivec2(x, y);
+                if (coord.x < inSize.x && coord.y < inSize.y) {
+                    sum += imageLoad(brightSource, coord);
+                    samples++;
+                }
+            }
+        }
+    } else {
+        ivec2 inSize = imageSize(pyramid[constants.currentIndex - 1]);
+
+        for (int x = -KERNEL_RADIUS; x <= KERNEL_RADIUS; x++) {
+            for (int y = -KERNEL_RADIUS; y <= KERNEL_RADIUS; y++) {
+                ivec2 coord = inCoord + ivec2(x, y);
+                if (coord.x < inSize.x && coord.y < inSize.y) {
+                    sum += imageLoad(pyramid[constants.currentIndex - 1], coord);
+                    samples++;
+                }
+            }
+        }
+    }
+
+    vec4 average = sum / float(samples);
+    imageStore(pyramid[constants.currentIndex], outCoord, average);
+}

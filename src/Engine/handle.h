@@ -2,4 +2,4 @@
 
 #include <cstdint>
 
-constexpr int32_t INVALID_HANDLE = -1;
+const int32_t INVALID_HANDLE = -1;

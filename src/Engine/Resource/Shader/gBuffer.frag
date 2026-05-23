@@ -27,15 +27,22 @@ layout (set = 0, binding = 0) uniform PerFrameUniforms {
     mat4 invView;
     mat4 invProj;
     vec4 position;
+    float near;
+    float far;
     // Settings
     float exposure;
     float gamma;
     float ambientIntensity;
     uint lightCount;
     ivec2 screenSize;
+    // Light culling
+    uint tileSize;
+    uint tilesX;
+    uint tilesY;
+    uint maxLightsPerTile;
 } uniforms;
 
-layout (set = 3, binding = 0) uniform sampler2DArray textures[TEXTURE_ARRAY_COUNT];
+layout (set = 1, binding = 0) uniform sampler2DArray textures[TEXTURE_ARRAY_COUNT];
 
 layout (location = 0) in vec3 vPosition;
 layout (location = 1) in vec2 vUV;

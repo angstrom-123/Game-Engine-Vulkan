@@ -5,10 +5,6 @@
 #define FXAA_REDUCE_MIN 1.0 / 128.0
 #define FXAA_LUMA_THRESHOLD 0.5
 
-layout (push_constant) uniform Constants {
-    vec4 padding;
-} constants;
-
 layout (set = 0, binding = 0) uniform PerFrameUniforms { 
     // Camera
     mat4 view;
@@ -16,15 +12,22 @@ layout (set = 0, binding = 0) uniform PerFrameUniforms {
     mat4 invView;
     mat4 invProj;
     vec4 position;
+    float near;
+    float far;
     // Settings
     float exposure;
     float gamma;
     float ambientIntensity;
     uint lightCount;
     ivec2 screenSize;
+    // Light culling
+    uint tileSize;
+    uint tilesX;
+    uint tilesY;
+    uint maxLightsPerTile;
 } uniforms;
 
-layout (set = 0, binding = 2) uniform sampler2D ldrSampler;
+layout (set = 1, binding = 3) uniform sampler2D ldrSampler;
 
 layout (location = 0) in vec2 vUV;
 
@@ -34,50 +37,6 @@ float Luminance(vec3 rgb)
 {
     return dot(rgb, vec3(0.2126, 0.7152, 0.0722));
 }
-
-// void main()
-// {
-//     vec2 texelSize = vec2(1.0) / vec2(uniforms.screenSize);
-//
-//     vec3 rgbNW = texture(ldrSampler, vUV + vec2(-texelSize.x, -texelSize.y)).xyz;
-//     vec3 rgbNE = texture(ldrSampler, vUV + vec2(texelSize.x, -texelSize.y)).xyz;
-//     vec3 rgbSW = texture(ldrSampler, vUV + vec2(-texelSize.x, texelSize.y)).xyz;
-//     vec3 rgbSE = texture(ldrSampler, vUV + vec2(texelSize.x, texelSize.y)).xyz;
-//     vec3 rgbM = texture(ldrSampler, vUV).xyz;
-//
-//     vec3 luma = vec3(0.299, 0.587, 0.114);
-//     float lumaNW = dot(rgbNW, luma);
-//     float lumaNE = dot(rgbNE, luma);
-//     float lumaSW = dot(rgbSW, luma);
-//     float lumaSE = dot(rgbSE, luma);
-//     float lumaM  = dot(rgbM,  luma);
-//
-//     float lumaMin = min(lumaM, min(min(lumaNW, lumaNE), min(lumaSW, lumaSE)));
-//     float lumaMax = max(lumaM, max(max(lumaNW, lumaNE), max(lumaSW, lumaSE)));
-//
-//     vec2 dir = vec2(-((lumaNW + lumaNE) - (lumaSW + lumaSE)), ((lumaNW + lumaSW) - (lumaNE + lumaSE)));
-//
-//     float dirReduce = max((lumaNW + lumaNE + lumaSW + lumaSE) * (0.25 * FXAA_REDUCE_MUL), FXAA_REDUCE_MIN);
-//
-//     float rcpDirMin = 1.0/(min(abs(dir.x), abs(dir.y)) + dirReduce);
-//
-//     dir = min(vec2( FXAA_SPAN_MAX,  FXAA_SPAN_MAX), max(vec2(-FXAA_SPAN_MAX, -FXAA_SPAN_MAX), dir * rcpDirMin));
-//     dir /= uniforms.screenSize;
-//
-//     vec3 rgbA = (1.0 / 2.0) * (
-//         texture(ldrSampler, vUV + dir * (1.0 / 3.0 - 0.5)).xyz +
-//         texture(ldrSampler, vUV + dir * (2.0 / 3.0 - 0.5)).xyz);
-//     vec3 rgbB = rgbA * (1.0 / 2.0) + (1.0 / 4.0) * (
-//         texture(ldrSampler, vUV + dir * (0.0 / 3.0 - 0.5)).xyz +
-//         texture(ldrSampler, vUV + dir * (3.0 / 3.0 - 0.5)).xyz);
-//     float lumaB = dot(rgbB, luma);
-//
-//     if ((lumaB < lumaMin) || (lumaB > lumaMax)) {
-//         outColor = vec4(rgbA, 1.0);
-//     } else {
-//         outColor = vec4(rgbB, 1.0);
-//     }
-// }
 
 void main()
 {

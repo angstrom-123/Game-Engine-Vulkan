@@ -51,7 +51,7 @@ void SponzaScene::OnInit(const SceneConfig& config)
         .position           = glm::vec3(0.0),
         .color              = glm::vec3(1.0),
         .direction          = glm::vec3(0.2, -1.0, 0.1),
-        .intensity          = 10.0,
+        .intensity          = 15.0,
         .radius             = 50.0,
         .distance           = 40.0,
         .shadowcaster       = true,

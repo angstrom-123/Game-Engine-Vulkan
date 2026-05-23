@@ -1,0 +1,38 @@
+#version 450
+
+#define MAX_MIP_LEVELS 16
+#define BLUR_KERNEL_RADIUS 7
+
+layout (local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (set = 3, binding = 1, r11f_g11f_b10f) uniform image2D tempImage;
+layout (set = 3, binding = 2, r11f_g11f_b10f) uniform image2D pyramid[MAX_MIP_LEVELS];
+
+layout (push_constant) uniform Constants {
+    uint currentIndex;
+    uint blurKernelRadius;
+    float blurKernelWeights[BLUR_KERNEL_RADIUS * 2 + 1];
+} constants;
+
+void main()
+{
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(pyramid[constants.currentIndex]);
+    if (coord.x >= size.x || coord.y >= size.y) {
+        return;
+    }
+
+    // Read from pyramid and write to tempImage
+    vec4 sum = vec4(0.0);
+    int start = -int(constants.blurKernelRadius);
+    int end = int(constants.blurKernelRadius);
+    for (int x = start; x < end; x++) {
+        ivec2 sampleCoord = coord + ivec2(x, 0);
+        sampleCoord.x = clamp(sampleCoord.x, 0, size.x - 1);
+        vec4 sampleColor = imageLoad(pyramid[constants.currentIndex], sampleCoord);
+        float weight = constants.blurKernelWeights[x - start];
+        sum += sampleColor * weight;
+    }
+
+    imageStore(tempImage, coord, sum);
+}

@@ -13,25 +13,32 @@ const VkFormat ALBEDO_FORMAT = VK_FORMAT_R8G8B8A8_UNORM;
 const VkFormat NORMAL_FORMAT = VK_FORMAT_A2R10G10B10_UNORM_PACK32; 
 const VkFormat MATERIAL_FORMAT = VK_FORMAT_R8G8B8A8_UNORM; 
 const VkFormat LIGHTING_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT; 
+const VkFormat BLOOM_FORMAT = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
 const VkFormat TONE_MAP_FORMAT = VK_FORMAT_R8G8B8A8_SRGB;
-const uint32_t SHADOW_RESOLUTION = 1024;
+const uint32_t SHADOW_RESOLUTION = 2048;
 const uint32_t COLOR_SMALL_RESOLUTION = 1024;
 const uint32_t COLOR_LARGE_RESOLUTION = 2048;
 const uint32_t DATA_SMALL_RESOLUTION = 1024;
 const uint32_t DATA_LARGE_RESOLUTION = 2048;
 const uint32_t FONT_RESOLUTION = 2048;
-const uint32_t MAX_LIGHTS = 512;
+const uint32_t MAX_LIGHTS = 1024;
+const uint32_t MAX_LIGHTS_PER_TILE = 256;
+const uint32_t COMPUTE_TILE_SIZE = 16;
+const uint32_t MAX_BLOOM_MIPS = 16;
+const uint32_t BLOOM_BLUR_RADIUS = 7;
 
 struct PerFrameUniforms {
-    alignas(16) struct {
+    struct {
         glm::mat4x4 view{0.0};
         glm::mat4x4 proj{0.0};
         glm::mat4x4 invView{0.0};
         glm::mat4x4 invProj{0.0};
         glm::vec4 position{0.0};
+        float near{0.0};
+        float far{0.0};
     } camera;
 
-    alignas(16) struct {
+    struct {
         float exposure{0.0};
         float gamma{0.0};
         float ambientIntensity{0.0};
@@ -39,25 +46,35 @@ struct PerFrameUniforms {
         glm::ivec2 screenSize{0};
         glm::ivec2 shadowSize{0};
     } settings;
+
+    struct {
+        uint32_t tileSize{COMPUTE_TILE_SIZE};
+        uint32_t tilesX{0};
+        uint32_t tilesY{0};
+        uint32_t maxLightsPerTile{MAX_LIGHTS_PER_TILE};
+    } lightCulling;
+};
+
+struct BloomPushConstants {
+    uint32_t currentIndex{0};
+    uint32_t blurKernelRadius{0};
+    float blurKernelWeights[BLOOM_BLUR_RADIUS * 2 + 1];
+    float accumulationFactor{0.0};
 };
 
 struct ShadowPushConstants {
-    glm::mat4x4 model;
-    glm::mat4x4 vp;
-};
-
-struct AntiAliasingPushConstants {
-    glm::vec4 padding{0.0};
+    glm::mat4x4 model{0.0};
+    glm::mat4x4 vp{0.0};
 };
 
 struct VertexPushConstants {
-    glm::mat4x4 model;
+    glm::mat4x4 model{0.0};
 };
 
 // 64 byte offset, maximum size: 128-64 = 64 bytes
 struct FragmentPushConstants {
-    alignas(16) struct Material {
-        glm::vec4 albedo{1.0};        // rgb + alpha
+    struct Material {
+        glm::vec4 albedo{1.0}; // rgba
         float roughness{1.0};
         float metallic{0.0};
         float ao{0.0};
@@ -81,7 +98,9 @@ struct FrameData {
     VkDescriptorSet descriptorSet3{VK_NULL_HANDLE};
 
     AllocatedBuffer uniformBuffer;
-    AllocatedBuffer lightBuffer;
+    AllocatedBuffer lightBuffer;            // Stores the lights in a flat array
+    AllocatedBuffer lightIndexBuffer;       // Stores the indices into the light buffer / tile
+    AllocatedBuffer lightTileCountBuffer;   // Stores the number of lights / tile
 
 #ifdef PROFILING
     VkQueryPool queryPool;
@@ -95,6 +114,13 @@ struct SwapchainImageData {
     VkSemaphore renderSemaphore{VK_NULL_HANDLE};
     VkImage image{VK_NULL_HANDLE};
     VkImageView view{VK_NULL_HANDLE};
+};
+
+struct OffscreenTargetArray {
+    uint32_t count{0};
+    AllocatedImage images[MAX_BLOOM_MIPS];
+    VkImageView views[MAX_BLOOM_MIPS]{VK_NULL_HANDLE};
+    glm::ivec2 sizes[MAX_BLOOM_MIPS];
 };
 
 struct OffscreenTarget {

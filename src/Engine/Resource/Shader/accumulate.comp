@@ -1,0 +1,46 @@
+#version 450
+
+#define MAX_MIP_LEVELS 16
+#define BLUR_KERNEL_RADIUS 7
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout (set = 3, binding = 2, r11f_g11f_b10f) uniform image2D pyramid[MAX_MIP_LEVELS];
+
+layout (push_constant) uniform Constants {
+    uint currentIndex;
+    uint blurKernelRadius;
+    float blurKernelWeights[BLUR_KERNEL_RADIUS * 2 + 1];
+    float accumulationFactor;
+} constants;
+
+void main()
+{
+    ivec2 outCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(pyramid[constants.currentIndex]);
+
+    if (outCoord.x >= outSize.x || outCoord.y >= outSize.y) {
+        return;
+    }
+
+    ivec2 inSize = imageSize(pyramid[constants.currentIndex + 1]);
+
+    // Upsample
+    vec2 uv = (vec2(outCoord) + 0.5) / vec2(outSize);
+    vec2 texel = uv * inSize;
+    ivec2 coord = ivec2(floor(texel));
+    vec2 frac = fract(texel);
+
+    vec4 tl = imageLoad(pyramid[constants.currentIndex + 1], coord);
+    vec4 tr = imageLoad(pyramid[constants.currentIndex + 1], coord + ivec2(1, 0));
+    vec4 bl = imageLoad(pyramid[constants.currentIndex + 1], coord + ivec2(0, 1));
+    vec4 br = imageLoad(pyramid[constants.currentIndex + 1], coord + ivec2(1, 1));
+
+    vec4 contribution = mix(mix(tl, tr, frac.x), mix(bl, br, frac.x), frac.y);
+
+    // Accumulate
+    vec4 current = imageLoad(pyramid[constants.currentIndex], outCoord);
+    vec4 result = current + contribution * constants.accumulationFactor;
+
+    imageStore(pyramid[constants.currentIndex], outCoord, result);
+}

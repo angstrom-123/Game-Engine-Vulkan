@@ -7,6 +7,8 @@
     #define VMA_NAME_ALLOCATION(allocator, allocation, name)
 #endif
 
+#define ALLOC_ARRAY(type, count) static_cast<type *>(alloca((count) * sizeof(type) ))
+
 struct AllocatedImage {
     VkImage image{VK_NULL_HANDLE};
     VmaAllocation allocation{VK_NULL_HANDLE};

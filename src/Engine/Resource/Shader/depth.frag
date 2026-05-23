@@ -20,7 +20,7 @@ layout (push_constant) uniform Constants {
     uint flags;
 } constants;
 
-layout (set = 3, binding = 0) uniform sampler2DArray textures[TEXTURE_ARRAY_COUNT];
+layout (set = 1, binding = 0) uniform sampler2DArray textures[TEXTURE_ARRAY_COUNT];
 
 layout (location = 0) in vec2 vUV;
 

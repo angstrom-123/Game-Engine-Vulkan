@@ -1,5 +1,7 @@
 #version 450
 
+#define BLOOM_INTENSITY 0.2
+
 layout (set = 0, binding = 0) uniform PerFrameUniforms { 
     // Camera
     mat4 view;
@@ -7,15 +9,24 @@ layout (set = 0, binding = 0) uniform PerFrameUniforms {
     mat4 invView;
     mat4 invProj;
     vec4 position;
+    float near;
+    float far;
     // Settings
     float exposure;
     float gamma;
     float ambientIntensity;
     uint lightCount;
     ivec2 screenSize;
+    ivec2 shadowSize;
+    // Light culling
+    uint tileSize;
+    uint tilesX;
+    uint tilesY;
+    uint maxLightsPerTile;
 } uniforms;
 
-layout (set = 0, binding = 1) uniform sampler2D hdrTexture;
+layout (set = 1, binding = 2) uniform sampler2D hdrTexture;
+layout (set = 1, binding = 4) uniform sampler2D bloomTexture;
 
 layout (location = 0) in vec2 vUV;
 
@@ -52,6 +63,8 @@ vec3 LinearToSRGB(vec3 color)
 void main()
 {
     vec3 hdr = texture(hdrTexture, vUV).rgb;
+    vec3 bloom = texture(bloomTexture, vUV).rgb;
+    hdr += bloom * BLOOM_INTENSITY;
 
     vec3 ldr;
     ldr = ToneMapACES(hdr);

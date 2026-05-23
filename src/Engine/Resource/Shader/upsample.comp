@@ -1,0 +1,42 @@
+#version 450
+
+#define MAX_MIP_LEVELS 16
+#define BLUR_KERNEL_RADIUS 7
+
+layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout (set = 3, binding = 2, r11f_g11f_b10f) uniform image2D pyramid[MAX_MIP_LEVELS];
+
+layout (push_constant) uniform Constants {
+    uint currentIndex;
+    uint blurKernelRadius;                               // Unused here
+    float blurKernelWeights[BLUR_KERNEL_RADIUS * 2 + 1]; // Unused here
+    float accumulationFactor;
+} constants;
+
+vec4 Bilinear(vec2 uv)
+{
+    ivec2 size = imageSize(pyramid[constants.currentIndex - 1]);
+    vec2 texelPos = uv * vec2(size) - 0.5;
+    ivec2 texelCoord = ivec2(floor(texelPos));
+    vec2 fractional = fract(texelPos);
+
+    vec4 tl = imageLoad(pyramid[constants.currentIndex - 1], texelCoord);
+    vec4 tr = imageLoad(pyramid[constants.currentIndex - 1], texelCoord + ivec2(1, 0));
+    vec4 bl = imageLoad(pyramid[constants.currentIndex - 1], texelCoord + ivec2(0, 1));
+    vec4 br = imageLoad(pyramid[constants.currentIndex - 1], texelCoord + ivec2(1, 1));
+
+    return mix(mix(tl, tr, fractional.x), mix(bl, br, fractional.x), fractional.y);
+}
+
+void main()
+{
+    ivec2 outCoord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outSize = imageSize(pyramid[constants.currentIndex]);
+
+    vec2 uv = (vec2(outCoord) + 0.5) / vec2(outSize);
+    vec4 inColor = Bilinear(uv);
+    vec4 result = inColor * constants.accumulationFactor;
+
+    imageStore(pyramid[constants.currentIndex], outCoord, result);
+}

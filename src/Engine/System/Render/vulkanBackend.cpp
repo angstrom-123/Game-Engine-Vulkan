@@ -4,6 +4,7 @@
 #include "System/Render/backendTypes.h"
 
 #include <algorithm>
+#include <alloca.h>
 #include <functional>
 #include <ranges>
 
@@ -111,7 +112,7 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
     for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
         writes[i] = {
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = frames[i].descriptorSet3,
+            .dstSet = frames[i].descriptorSet1,
             .dstBinding = 0,
             .descriptorCount = TEXTURE_ARRAY_MAX_ENUM,
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -134,7 +135,7 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
     for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
         writes[i] = {
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = frames[i].descriptorSet2,
+            .dstSet = frames[i].descriptorSet1,
             .dstBinding = 1,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -207,6 +208,23 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
     std::memset(frame.lightBuffer.data, 0, MAX_LIGHTS * sizeof(Light));
     std::memcpy(frame.lightBuffer.data, lights, lightCount * sizeof(Light));
 
+     // Zero light culling outputs
+    uint32_t tilesX = (m_Extent.width + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+    uint32_t tilesY = (m_Extent.height + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+    vkCmdFillBuffer(frame.commandBuffer, frame.lightIndexBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
+    vkCmdFillBuffer(frame.commandBuffer, frame.lightTileCountBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
+    VkBufferMemoryBarrier fillBarrier = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        .pNext = nullptr,
+        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .buffer = frame.lightIndexBuffer.buffer,
+        .size = VK_WHOLE_SIZE
+    };
+    VkBufferMemoryBarrier fillBarriers[2] = { fillBarrier, fillBarrier };
+    fillBarriers[1].buffer = frame.lightTileCountBuffer.buffer;
+    vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 2, fillBarriers, 0, nullptr);
+
     // Update uniform buffer
     PerFrameUniforms *uniforms = static_cast<PerFrameUniforms *>(frame.uniformBuffer.data);
     uniforms->camera = {
@@ -214,7 +232,9 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         .proj = camera.projection,
         .invView = glm::inverse(camera.view),
         .invProj = glm::inverse(camera.projection),
-        .position = cameraPos
+        .position = cameraPos,
+        .near = camera.near,
+        .far = camera.far,
     };
     uniforms->settings = {
         .exposure = 1.0,
@@ -223,6 +243,12 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         .lightCount = lightCount,
         .screenSize = glm::ivec2(m_Extent.width, m_Extent.height),
         .shadowSize = glm::ivec2(SHADOW_RESOLUTION),
+    };
+    uniforms->lightCulling = {
+        .tileSize = COMPUTE_TILE_SIZE,
+        .tilesX = tilesX,
+        .tilesY = tilesY,
+        .maxLightsPerTile = MAX_LIGHTS_PER_TILE
     };
 
     // ================================================== Organize Entities ==================================================
@@ -311,21 +337,19 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
 
         // Render
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_DepthPipeline);
-        VkDescriptorSet descriptorSets[4] = { 
+        VkDescriptorSet descriptorSets[2] = { 
             frame.descriptorSet0, 
-            frame.dummyDescriptorSet, 
-            frame.dummyDescriptorSet, 
-            frame.descriptorSet3 
+            frame.descriptorSet1 
         };
         vkCmdBindDescriptorSets(frame.commandBuffer, 
-                VK_PIPELINE_BIND_POINT_GRAPHICS, m_DepthPipelineLayout, 
-                0, 4, descriptorSets, 0, nullptr);
+                VK_PIPELINE_BIND_POINT_GRAPHICS, m_MinimalPipelineLayout, 
+                0, 2, descriptorSets, 0, nullptr);
         for (const Entity e : visibleOpaqueEntities) {
             VertexPushConstants vertexConstants = {
                 .model = ecs->GetComponent<Transform>(e).GlobalModelMatrix(ecs),
             };
             vkCmdPushConstants(frame.commandBuffer, 
-                    m_DepthPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
+                    m_MinimalPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
                     0, sizeof(VertexPushConstants), 
                     &vertexConstants);
 
@@ -333,7 +357,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 .material = ecs->GetComponent<Material>(e).Pack(),
             };
             vkCmdPushConstants(frame.commandBuffer, 
-                    m_DepthPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 
+                    m_MinimalPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 
                     sizeof(VertexPushConstants), sizeof(FragmentPushConstants), 
                     &fragmentConstants);
 
@@ -421,21 +445,20 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
 
         // Render
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_GBufferPipeline);
-        VkDescriptorSet descriptorSets[4] = { 
-            frame.descriptorSet0, 
-            frame.dummyDescriptorSet, 
-            frame.dummyDescriptorSet, 
-            frame.descriptorSet3 
-        };
-        vkCmdBindDescriptorSets(frame.commandBuffer, 
-                VK_PIPELINE_BIND_POINT_GRAPHICS, m_GBufferPipelineLayout, 
-                0, 4, descriptorSets, 0, nullptr);
+        // Bound in depth pre-pass (same descriptor layout)
+        // VkDescriptorSet descriptorSets[2] = { 
+        //     frame.descriptorSet0, 
+        //     frame.descriptorSet1 
+        // };
+        // vkCmdBindDescriptorSets(frame.commandBuffer, 
+        //         VK_PIPELINE_BIND_POINT_GRAPHICS, m_MinimalPipelineLayout, 
+        //         0, 2, descriptorSets, 0, nullptr);
         for (const Entity e : visibleOpaqueEntities) {
             VertexPushConstants vertexConstants = {
                 .model = ecs->GetComponent<Transform>(e).GlobalModelMatrix(ecs),
             };
             vkCmdPushConstants(frame.commandBuffer, 
-                    m_GBufferPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
+                    m_MinimalPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
                     0, sizeof(VertexPushConstants), 
                     &vertexConstants);
 
@@ -443,7 +466,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 .material = ecs->GetComponent<Material>(e).Pack(),
             };
             vkCmdPushConstants(frame.commandBuffer, 
-                    m_GBufferPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 
+                    m_MinimalPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 
                     sizeof(VertexPushConstants), sizeof(FragmentPushConstants), 
                     &fragmentConstants);
 
@@ -525,16 +548,24 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
 
                 // Render
                 vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ShadowPipeline);
+                // Bound in depth pre-pass (same descriptor layout)
+                // VkDescriptorSet descriptorSets[2] = { 
+                //     frame.descriptorSet0, 
+                //     frame.descriptorSet1 
+                // };
+                // vkCmdBindDescriptorSets(frame.commandBuffer, 
+                //         VK_PIPELINE_BIND_POINT_GRAPHICS, m_MinimalPipelineLayout, 
+                //         0, 2, descriptorSets, 0, nullptr);
                 glm::mat4x4 shadowcasterVP = shadowcaster.projection * shadowcaster.view;
                 for (const Entity e : opaqueEntities) {
-                    ShadowPushConstants shadowConstants = {
+                    ShadowPushConstants constants = {
                         .model = ecs->GetComponent<Transform>(e).GlobalModelMatrix(ecs),
                         .vp = shadowcasterVP,
                     };
                     vkCmdPushConstants(frame.commandBuffer, 
                             m_ShadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
                             0, sizeof(ShadowPushConstants), 
-                            &shadowConstants);
+                            &constants);
 
                     const Mesh& mesh = ecs->GetComponent<Mesh>(e);
                     VkDeviceSize offsets = 0;
@@ -560,6 +591,21 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         }
 
     } // ================================================== (END) Shadowcaster Pass ==================================================
+
+    { // ================================================== Light Culling Compute Pass ==================================================
+
+        // Dispatch Compute
+        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_LightCullingPipeline);
+        VkDescriptorSet descriptorSets[3] = { 
+            frame.descriptorSet0, 
+            frame.dummyDescriptorSet,
+            frame.descriptorSet2 };
+        vkCmdBindDescriptorSets(frame.commandBuffer, 
+                VK_PIPELINE_BIND_POINT_COMPUTE, m_LightCullingPipelineLayout, 
+                0, 3, descriptorSets, 0, nullptr);
+        vkCmdDispatch(frame.commandBuffer, tilesX, tilesY, 1);
+
+    } // ================================================== (END) Light Culling Compute Pass ==================================================
 
     { // ================================================== Lighting Compute Pass ==================================================
 
@@ -587,14 +633,12 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         VkDescriptorSet descriptorSets[3] = { 
             frame.descriptorSet0, 
             frame.descriptorSet1, 
-            frame.descriptorSet2 };
+            frame.descriptorSet2 
+        };
         vkCmdBindDescriptorSets(frame.commandBuffer, 
                 VK_PIPELINE_BIND_POINT_COMPUTE, m_LightingPipelineLayout, 
                 0, 3, descriptorSets, 0, nullptr);
-        const uint32_t GROUP_SIZE = 16;
-        uint32_t groupsX = (m_Extent.width + GROUP_SIZE - 1) / GROUP_SIZE;
-        uint32_t groupsY = (m_Extent.height + GROUP_SIZE - 1) / GROUP_SIZE;
-        vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+        vkCmdDispatch(frame.commandBuffer, tilesX, tilesY, 1);
 
     } // ================================================== (END) Lighting Compute Pass ==================================================
 
@@ -604,7 +648,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         VkImageMemoryBarrier hdrBarrier = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
             .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
             .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
             .image = m_LightingTarget.image.image,
@@ -648,21 +692,21 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
 
         // Render
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_TransparencyPipeline);
-        VkDescriptorSet descriptorSets[4] = { 
-            frame.descriptorSet0, 
-            frame.dummyDescriptorSet, 
-            frame.descriptorSet2, 
-            frame.descriptorSet3 
-        };
-        vkCmdBindDescriptorSets(frame.commandBuffer, 
-                VK_PIPELINE_BIND_POINT_GRAPHICS, m_TransparencyPipelineLayout, 
-                0, 4, descriptorSets, 0, nullptr);
+        // Bound in lighting compute (same descriptor layout)
+        // VkDescriptorSet descriptorSets[3] = { 
+        //     frame.descriptorSet0, 
+        //     frame.descriptorSet1, 
+        //     frame.descriptorSet2 
+        // };
+        // vkCmdBindDescriptorSets(frame.commandBuffer, 
+        //         VK_PIPELINE_BIND_POINT_COMPUTE, m_LightingPipelineLayout, 
+        //         0, 3, descriptorSets, 0, nullptr);
         for (const auto& [_, e] : visibleTransparentEntities) {
             VertexPushConstants vertexConstants = {
                 .model = ecs->GetComponent<Transform>(e).GlobalModelMatrix(ecs),
             };
             vkCmdPushConstants(frame.commandBuffer, 
-                    m_TransparencyPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
+                    m_LightingPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
                     0, sizeof(VertexPushConstants), 
                     &vertexConstants);
 
@@ -670,7 +714,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 .material = ecs->GetComponent<Material>(e).Pack(),
             };
             vkCmdPushConstants(frame.commandBuffer, 
-                    m_TransparencyPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 
+                    m_LightingPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 
                     sizeof(VertexPushConstants), sizeof(FragmentPushConstants), 
                     &fragmentConstants);
 
@@ -681,17 +725,210 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         }
         m_PFNCmdEndRendering(frame.commandBuffer);
 
-        // Transition hdr image to shader readable
         hdrBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         hdrBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         hdrBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        hdrBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        hdrBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
         vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
                 0, 0, nullptr, 0, nullptr, 1, &hdrBarrier);
 
     } // ================================================== (END) Transparency ==================================================
+
+    { // ================================================== Bloom Compute ==================================================
+
+        // Transition Bright Spot image to general
+        VkImageMemoryBarrier barrierToGeneral = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .image = m_BloomLightExtractionTarget.image.image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .levelCount = 1,
+                .layerCount = 1
+            }
+        };
+        vkCmdPipelineBarrier(frame.commandBuffer, 
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                0, 0, nullptr, 0, nullptr, 1, &barrierToGeneral);
+
+        // Transition pyramid to general
+        VkImageMemoryBarrier pyramidBarriers[MAX_BLOOM_MIPS] = {};
+        for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
+            pyramidBarriers[i] = barrierToGeneral;
+            pyramidBarriers[i].srcAccessMask = 0;
+            pyramidBarriers[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            pyramidBarriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            pyramidBarriers[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            pyramidBarriers[i].image = m_BloomPyramidTarget.images[i].image;
+        }
+        vkCmdPipelineBarrier(frame.commandBuffer, 
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                0, 0, nullptr, 0, nullptr, m_BloomPyramidTarget.count, pyramidBarriers);
+
+        // Transition ping-pong image to general
+        barrierToGeneral.srcAccessMask = 0;
+        barrierToGeneral.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrierToGeneral.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barrierToGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrierToGeneral.image = m_BloomPingPongTarget.image.image;
+        vkCmdPipelineBarrier(frame.commandBuffer, 
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                0, 0, nullptr, 0, nullptr, 1, &barrierToGeneral);
+
+        // Light Extraction
+
+        // Dispatch Compute
+        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomLightExtractionPipeline);
+        VkDescriptorSet descriptorSets[4] = { 
+            frame.descriptorSet0, 
+            frame.dummyDescriptorSet, 
+            frame.descriptorSet2, 
+            frame.descriptorSet3, 
+        };
+        vkCmdBindDescriptorSets(frame.commandBuffer, 
+                VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomPipelineLayout, 
+                0, 4, descriptorSets, 0, nullptr);
+        vkCmdDispatch(frame.commandBuffer, tilesX, tilesY, 1);
+
+        // Wait for bright pass to complete
+        VkMemoryBarrier writeBarrier = {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT
+        };
+        vkCmdPipelineBarrier(frame.commandBuffer, 
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
+
+        // Downsample Pyramid
+
+        // Dispatch Compute for each layer
+        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomDownsamplePipeline);
+        for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
+            BloomPushConstants constants = {
+                .currentIndex = i,
+            };
+            vkCmdPushConstants(frame.commandBuffer, 
+                    m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
+                    0, sizeof(BloomPushConstants), 
+                    &constants);
+
+            const uint32_t PYRAMID_COMPUTE_GROUP_SIZE = 8;
+            uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
+            uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
+            uint32_t groupsX = (w + PYRAMID_COMPUTE_GROUP_SIZE - 1) / PYRAMID_COMPUTE_GROUP_SIZE;
+            uint32_t groupsY = (h + PYRAMID_COMPUTE_GROUP_SIZE - 1) / PYRAMID_COMPUTE_GROUP_SIZE;
+            vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+
+            // Wait for current layer to downsample before dispatching next
+            vkCmdPipelineBarrier(frame.commandBuffer, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
+        }
+
+        // Blur 
+
+        // Dispatch Compute for each layer
+        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomHorizontalBlurPipeline);
+        for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
+            BloomPushConstants constants = {
+                .currentIndex = i,
+                .blurKernelRadius = BLOOM_BLUR_RADIUS,
+                .blurKernelWeights = {
+                    // Gaussian
+                    0.000069, 0.000645, 0.002681, 0.007651, 0.015915, 0.022030, 0.015915, 0.007651, 0.002681, 0.000645, 0.000069
+                },
+            };
+            vkCmdPushConstants(frame.commandBuffer, 
+                    m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
+                    0, sizeof(BloomPushConstants), 
+                    &constants);
+
+            const uint32_t BLUR_COMPUTE_GROUP_SIZE = 256;
+            uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
+            uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
+
+            uint32_t groupsX = (w + BLUR_COMPUTE_GROUP_SIZE - 1) / BLUR_COMPUTE_GROUP_SIZE;
+            uint32_t groupsY = h;
+            vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+
+            // Wait for horizontal blurs to finish before the vertical ones are dispatched
+            vkCmdPipelineBarrier(frame.commandBuffer, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
+
+            groupsX = w;
+            groupsY = (h + BLUR_COMPUTE_GROUP_SIZE - 1) / BLUR_COMPUTE_GROUP_SIZE;
+            vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+
+            // Wait for vertical blurs to finish before next level or upsampling
+            vkCmdPipelineBarrier(frame.commandBuffer, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
+        }
+
+        // Upsample / Accumulate
+
+        // Dispatch Compute for each layer (starting from the second lowest level)
+        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomAccumulatePipeline);
+        // NOTE: Using int32_t instead of uint32_t for i because the decrement causes underflow when i = 0
+        for (int32_t i = m_BloomPyramidTarget.count - 2; i >= 0; i--) { // Shader upsamples the layer above (smaller)
+            BloomPushConstants constants = {
+                .currentIndex = static_cast<uint32_t>(i),
+                .accumulationFactor = 0.1,
+            };
+            vkCmdPushConstants(frame.commandBuffer, 
+                    m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
+                    0, sizeof(BloomPushConstants), 
+                    &constants);
+
+            const uint32_t UPSAMPLE_COMPUTE_GROUP_SIZE = 8;
+            uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
+            uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
+
+            uint32_t groupsX = (w + UPSAMPLE_COMPUTE_GROUP_SIZE - 1) / UPSAMPLE_COMPUTE_GROUP_SIZE;
+            uint32_t groupsY = h;
+            vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+
+            // Wait for current layer to accumulate before starting next
+            vkCmdPipelineBarrier(frame.commandBuffer, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
+        }
+
+        // Transition highest pyramid level (where the accumulated bloom is) to shader readable
+        VkImageMemoryBarrier bloomBarrier = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .image = m_BloomPyramidTarget.images[0].image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .levelCount = 1,
+                .layerCount = 1
+            }
+        };
+        vkCmdPipelineBarrier(frame.commandBuffer, 
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+                0, 0, nullptr, 0, nullptr, 1, &bloomBarrier);
+
+    } // ================================================== (END) Bloom Compute ==================================================
 
     { // ================================================== Tone-Mapping Pass ==================================================
 
@@ -713,6 +950,16 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, 
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
                 0, 0, nullptr, 0, nullptr, 1, &toneMapBarrier);
+
+        toneMapBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toneMapBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toneMapBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        toneMapBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toneMapBarrier.image = m_LightingTarget.image.image;
+        vkCmdPipelineBarrier(frame.commandBuffer, 
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+            0, 0, nullptr, 0, nullptr, 1, &toneMapBarrier);
 
         // Begin rendering
         VkRenderingAttachmentInfoKHR colorAttachment = {
@@ -736,9 +983,13 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
 
         // Render
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ToneMapPipeline);
+        VkDescriptorSet descriptorSets[2] = { 
+            frame.descriptorSet0, 
+            frame.descriptorSet1, 
+        };
         vkCmdBindDescriptorSets(frame.commandBuffer, 
-                VK_PIPELINE_BIND_POINT_GRAPHICS, m_ToneMapPipelineLayout, 
-                0, 1, &frame.descriptorSet0, 0, nullptr);
+                VK_PIPELINE_BIND_POINT_GRAPHICS, m_MinimalPipelineLayout, 
+                0, 2, &frame.descriptorSet0, 0, nullptr);
         vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
         m_PFNCmdEndRendering(frame.commandBuffer);
 
@@ -747,6 +998,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         toneMapBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         toneMapBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         toneMapBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toneMapBarrier.image = m_ToneMapTarget.image.image;
         vkCmdPipelineBarrier(frame.commandBuffer, 
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
@@ -797,16 +1049,15 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
 
         // Render
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_AntiAliasingPipeline);
-        AntiAliasingPushConstants antiAliasingConstants = {
-            .padding = glm::vec4(0.0)
-        };
-        vkCmdPushConstants(frame.commandBuffer, 
-                m_AntiAliasingPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 
-                0, sizeof(AntiAliasingPushConstants), 
-                &antiAliasingConstants);
-        vkCmdBindDescriptorSets(frame.commandBuffer, 
-                VK_PIPELINE_BIND_POINT_GRAPHICS, m_AntiAliasingPipelineLayout, 
-                0, 1, &frame.descriptorSet0, 0, nullptr);
+        // Already bound in tone mapping pass
+        // VkDescriptorSet descriptorSets[2] = { 
+        //     frame.descriptorSet0, 
+        //     frame.descriptorSet1 
+        // };
+        // vkCmdBindDescriptorSets(frame.commandBuffer, 
+        //         VK_PIPELINE_BIND_POINT_GRAPHICS, m_MinimalPipelineLayout, 
+        //         0, 2, descriptorSets, 0, nullptr);
+
         vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
         m_PFNCmdEndRendering(frame.commandBuffer);
 
@@ -1149,6 +1400,11 @@ void VulkanBackend::InitDynamics()
     viewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_DepthTarget.view));
 
+    m_DynamicDeleter.push_back([=, this] {
+        vkDestroyImageView(device, m_DepthTarget.view, nullptr);
+        vmaDestroyImage(allocator, m_DepthTarget.image.image, m_DepthTarget.image.allocation);
+    });
+
     // ================================================== Albedo Target ==================================================
 
     imageCreateInfo.format = ALBEDO_FORMAT;
@@ -1160,6 +1416,11 @@ void VulkanBackend::InitDynamics()
     viewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_AlbedoTarget.view));
 
+    m_DynamicDeleter.push_back([=, this] {
+        vkDestroyImageView(device, m_AlbedoTarget.view, nullptr);
+        vmaDestroyImage(allocator, m_AlbedoTarget.image.image, m_AlbedoTarget.image.allocation);
+    });
+
     // ================================================== Normal Target ==================================================
 
     imageCreateInfo.format = NORMAL_FORMAT;
@@ -1169,6 +1430,11 @@ void VulkanBackend::InitDynamics()
     viewCreateInfo.format = NORMAL_FORMAT;
     VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_NormalTarget.view));
 
+    m_DynamicDeleter.push_back([=, this] {
+        vkDestroyImageView(device, m_NormalTarget.view, nullptr);
+        vmaDestroyImage(allocator, m_NormalTarget.image.image, m_NormalTarget.image.allocation);
+    });
+
     // ================================================== Material Target ==================================================
 
     imageCreateInfo.format = MATERIAL_FORMAT;
@@ -1177,6 +1443,11 @@ void VulkanBackend::InitDynamics()
     viewCreateInfo.image = m_MaterialTarget.image.image;
     viewCreateInfo.format = MATERIAL_FORMAT;
     VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_MaterialTarget.view));
+
+    m_DynamicDeleter.push_back([=, this] {
+        vkDestroyImageView(device, m_MaterialTarget.view, nullptr);
+        vmaDestroyImage(allocator, m_MaterialTarget.image.image, m_MaterialTarget.image.allocation);
+    });
 
     // ================================================== Lighting Target ==================================================
 
@@ -1188,6 +1459,56 @@ void VulkanBackend::InitDynamics()
     viewCreateInfo.format = LIGHTING_FORMAT;
     VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_LightingTarget.view));
 
+    m_DynamicDeleter.push_back([=, this] {
+        vkDestroyImageView(device, m_LightingTarget.view, nullptr);
+        vmaDestroyImage(allocator, m_LightingTarget.image.image, m_LightingTarget.image.allocation);
+    });
+
+    // ================================================== Bloom Light Extraction Target ==================================================
+
+    imageCreateInfo.format = BLOOM_FORMAT;
+    vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_BloomLightExtractionTarget.image.image, &m_BloomLightExtractionTarget.image.allocation, nullptr);
+
+    viewCreateInfo.image = m_BloomLightExtractionTarget.image.image;
+    viewCreateInfo.format = BLOOM_FORMAT;
+    VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_BloomLightExtractionTarget.view));
+
+    m_DynamicDeleter.push_back([=, this] {
+        vkDestroyImageView(device, m_BloomLightExtractionTarget.view, nullptr);
+        vmaDestroyImage(allocator, m_BloomLightExtractionTarget.image.image, m_BloomLightExtractionTarget.image.allocation);
+    });
+
+    // ================================================== Bloom Downsample Target ==================================================
+
+    m_BloomPyramidTarget.count = std::min(static_cast<uint32_t>(std::floor(std::log2(std::max(m_Extent.width, m_Extent.height)))), MAX_BLOOM_MIPS);
+
+    for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
+        imageCreateInfo.extent.width = std::max(m_Extent.width >> (i + 1), 1u);
+        imageCreateInfo.extent.height = std::max(m_Extent.height >> (i + 1), 1u);
+        vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_BloomPyramidTarget.images[i].image, &m_BloomPyramidTarget.images[i].allocation, nullptr);
+
+        viewCreateInfo.image = m_BloomPyramidTarget.images[i].image;
+        VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_BloomPyramidTarget.views[i]));
+
+        m_DynamicDeleter.push_back([=, this] {
+            vkDestroyImageView(device, m_BloomPyramidTarget.views[i], nullptr);
+            vmaDestroyImage(allocator, m_BloomPyramidTarget.images[i].image, m_BloomPyramidTarget.images[i].allocation);
+        });
+    }
+
+    // ================================================== Bloom Ping Pong Target ==================================================
+
+    imageCreateInfo.extent = { m_Extent.width, m_Extent.height, 1 };
+    vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_BloomPingPongTarget.image.image, &m_BloomPingPongTarget.image.allocation, nullptr);
+
+    viewCreateInfo.image = m_BloomPingPongTarget.image.image;
+    VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_BloomPingPongTarget.view));
+
+    m_DynamicDeleter.push_back([=, this] {
+        vkDestroyImageView(device, m_BloomPingPongTarget.view, nullptr);
+        vmaDestroyImage(allocator, m_BloomPingPongTarget.image.image, m_BloomPingPongTarget.image.allocation);
+    });
+
     // ================================================== Tone-Map Target ==================================================
 
     imageCreateInfo.format = TONE_MAP_FORMAT;
@@ -1198,20 +1519,8 @@ void VulkanBackend::InitDynamics()
     viewCreateInfo.format = TONE_MAP_FORMAT;
     VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_ToneMapTarget.view));
 
-    // ================================================== Cleanup ==================================================
-
     m_DynamicDeleter.push_back([=, this] {
-        vkDestroyImageView(device, m_DepthTarget.view, nullptr);
-        vkDestroyImageView(device, m_AlbedoTarget.view, nullptr);
-        vkDestroyImageView(device, m_NormalTarget.view, nullptr);
-        vkDestroyImageView(device, m_MaterialTarget.view, nullptr);
-        vkDestroyImageView(device, m_LightingTarget.view, nullptr);
         vkDestroyImageView(device, m_ToneMapTarget.view, nullptr);
-        vmaDestroyImage(allocator, m_DepthTarget.image.image, m_DepthTarget.image.allocation);
-        vmaDestroyImage(allocator, m_AlbedoTarget.image.image, m_AlbedoTarget.image.allocation);
-        vmaDestroyImage(allocator, m_NormalTarget.image.image, m_NormalTarget.image.allocation);
-        vmaDestroyImage(allocator, m_MaterialTarget.image.image, m_MaterialTarget.image.allocation);
-        vmaDestroyImage(allocator, m_LightingTarget.image.image, m_LightingTarget.image.allocation);
         vmaDestroyImage(allocator, m_ToneMapTarget.image.image, m_ToneMapTarget.image.allocation);
     });
 
@@ -1247,33 +1556,70 @@ void VulkanBackend::InitDynamics()
 
 void VulkanBackend::InitBuffers()
 {
-    // ================================================== Frame Buffers ==================================================
+    // ================================================== Per Frame Buffers ==================================================
 
     VkBufferCreateInfo uniformBufferInfo = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = sizeof(PerFrameUniforms),
         .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
     };
+
     VkBufferCreateInfo lightBufferInfo = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = MAX_LIGHTS * sizeof(Light),
         .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 
     };
-    VmaAllocationCreateInfo bufferAllocInfo = {
+
+    uint32_t tilesX = (m_Extent.width + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+    uint32_t tilesY = (m_Extent.height + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+    VkBufferCreateInfo lightIndexBufferInfo = { // Up to MAX_LIGHTS_PER_TILE indices per tile
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = MAX_LIGHTS_PER_TILE * tilesX * tilesY * sizeof(uint32_t),
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 
+    };
+    VkBufferCreateInfo lightTileCountBufferInfo = { // One count for each tile
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = tilesX * tilesY * sizeof(uint32_t),
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 
+    };
+
+    VmaAllocationCreateInfo gpuBufferAllocInfo = {
+        .usage = VMA_MEMORY_USAGE_GPU_ONLY
+    };
+
+    VmaAllocationCreateInfo cpuGpuBufferAllocInfo = {
         .usage = VMA_MEMORY_USAGE_CPU_TO_GPU
     };
+
     for (FrameData& frame : frames) {
-        vmaCreateBuffer(allocator, &uniformBufferInfo, &bufferAllocInfo, &frame.uniformBuffer.buffer, &frame.uniformBuffer.allocation, nullptr);
+        vmaCreateBuffer(allocator, &uniformBufferInfo, &cpuGpuBufferAllocInfo, 
+                        &frame.uniformBuffer.buffer, &frame.uniformBuffer.allocation, nullptr);
         vmaMapMemory(allocator, frame.uniformBuffer.allocation, &frame.uniformBuffer.data);
 
-        vmaCreateBuffer(allocator, &lightBufferInfo, &bufferAllocInfo, &frame.lightBuffer.buffer, &frame.lightBuffer.allocation, nullptr);
+        vmaCreateBuffer(allocator, &lightBufferInfo, &cpuGpuBufferAllocInfo, 
+                        &frame.lightBuffer.buffer, &frame.lightBuffer.allocation, nullptr);
         vmaMapMemory(allocator, frame.lightBuffer.allocation, &frame.lightBuffer.data);
+
+        vmaCreateBuffer(allocator, &lightIndexBufferInfo, &gpuBufferAllocInfo, 
+                        &frame.lightIndexBuffer.buffer, &frame.lightIndexBuffer.allocation, nullptr);
+        vmaMapMemory(allocator, frame.lightIndexBuffer.allocation, &frame.lightIndexBuffer.data);
+
+        vmaCreateBuffer(allocator, &lightTileCountBufferInfo, &gpuBufferAllocInfo, 
+                        &frame.lightTileCountBuffer.buffer, &frame.lightTileCountBuffer.allocation, nullptr);
+        vmaMapMemory(allocator, frame.lightTileCountBuffer.allocation, &frame.lightTileCountBuffer.data);
 
         m_MainDeleter.push_back([=, this] {
             vmaUnmapMemory(allocator, frame.uniformBuffer.allocation);
             vmaDestroyBuffer(allocator, frame.uniformBuffer.buffer, frame.uniformBuffer.allocation);
+
             vmaUnmapMemory(allocator, frame.lightBuffer.allocation);
             vmaDestroyBuffer(allocator, frame.lightBuffer.buffer, frame.lightBuffer.allocation);
+
+            vmaUnmapMemory(allocator, frame.lightIndexBuffer.allocation);
+            vmaDestroyBuffer(allocator, frame.lightIndexBuffer.buffer, frame.lightIndexBuffer.allocation);
+
+            vmaUnmapMemory(allocator, frame.lightTileCountBuffer.allocation);
+            vmaDestroyBuffer(allocator, frame.lightTileCountBuffer.buffer, frame.lightTileCountBuffer.allocation);
         });
     }
 }
@@ -1297,8 +1643,7 @@ void VulkanBackend::InitSamplers()
     };
     VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_LinearSampler));
 
-    // samplerInfo.maxLod = 4.0;
-    // samplerInfo.mipLodBias = -0.5;
+    // Distinct sampler for normal maps in case I need to adjust anisotropy or mipmapping
     VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_NormalSampler));
 
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
@@ -1322,23 +1667,27 @@ void VulkanBackend::InitSamplers()
 void VulkanBackend::InitDescriptors()
 {
     const uint32_t FIF = FRAMES_IN_FLIGHT;
-    VkDescriptorPoolSize poolSizes[8] = {
+    VkDescriptorPoolSize poolSizes[9] = {
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, FIF },                                  // Uniform buffer
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * 4 },                      // 4x GBuffer
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * TEXTURE_ARRAY_MAX_ENUM }, // MAXx Texture arrays
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF },                          // HDR sampler
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF },                          // LDR sampler
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * 3},                       // HDR, LDR, Bloom samplers
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF },                          // Shadow array
         { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FIF },                                   // HDR storage image
-        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, FIF },                                  // Light buffer
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, FIF * 3 },                              // Light buffer, Light indices, Tile counts
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FIF * 2 },                               // Bloom Image, PingPong Buffer
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FIF * MAX_BLOOM_MIPS },                  // Bloom Downsample pyramid
     };
     VkDescriptorPoolCreateInfo poolInfo = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .maxSets = FRAMES_IN_FLIGHT * 5,
-        .poolSizeCount = 8,
+        .maxSets = FRAMES_IN_FLIGHT * 5, // Dummy, 0..3
+        .poolSizeCount = 9,
         .pPoolSizes = poolSizes,
     };
     VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_DescriptorPool));
+    m_MainDeleter.push_back([=, this] {
+        vkDestroyDescriptorPool(device, m_DescriptorPool, nullptr);
+    });
 
     // ================================================== Create Dummy Set ==================================================
 
@@ -1346,111 +1695,161 @@ void VulkanBackend::InitDescriptors()
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
     };
     VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfoDummy, nullptr, &m_DummyDescriptorLayout));
-
-    // ================================================== Create Set 0 (Globals) ==================================================
-
-    VkDescriptorSetLayoutBinding bindings0[3] = {
-        { // Uniform buffer
-            .binding = 0,
-            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT
-        },
-        { // HDR sampler
-            .binding = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT
-        },
-        { // LDR sampler
-            .binding = 2,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
-        },
-    };
-    VkDescriptorSetLayoutCreateInfo layoutInfo0 = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 3,
-        .pBindings = bindings0
-    };
-    VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo0, nullptr, &m_DescriptorLayout0));
-
-    // ================================================== Create Set 1 (Deferred Shading) ==================================================
-
-    VkDescriptorSetLayoutBinding bindings1[2] = {
-        { // GBuffer array
-            .binding = 0,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = 4,
-            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT
-        },
-        { // HDR image
-            .binding = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-            .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT
-        }
-    };
-    VkDescriptorSetLayoutCreateInfo layoutInfo1 = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 2,
-        .pBindings = bindings1
-    };
-    VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo1, nullptr, &m_DescriptorLayout1));
-
-    // ================================================== Create Set 2 (All Lighting) ==================================================
-
-    VkDescriptorSetLayoutBinding bindings2[2] = {
-        { // Light buffer
-            .binding = 0,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
-        },
-        { // Shadow array
-            .binding = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = 1,
-            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
-        }
-    };
-    VkDescriptorSetLayoutCreateInfo layoutInfo2 = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 2,
-        .pBindings = bindings2
-    };
-    VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo2, nullptr, &m_DescriptorLayout2));
-
-    // ================================================== Create Set 3 (Textures) ==================================================
-
-    VkDescriptorSetLayoutBinding bindings3 = {
-        // Texture arrays
-        .binding = 0,
-        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-        .descriptorCount = TEXTURE_ARRAY_MAX_ENUM,
-        .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
-    };
-    VkDescriptorSetLayoutCreateInfo layoutInfo3 = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 1,
-        .pBindings = &bindings3
-    };
-    VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo3, nullptr, &m_DescriptorLayout3));
-
     m_MainDeleter.push_back([=, this] {
-        vkDestroyDescriptorPool(device, m_DescriptorPool, nullptr);
         vkDestroyDescriptorSetLayout(device, m_DummyDescriptorLayout, nullptr);
-        vkDestroyDescriptorSetLayout(device, m_DescriptorLayout0, nullptr);
-        vkDestroyDescriptorSetLayout(device, m_DescriptorLayout1, nullptr);
-        vkDestroyDescriptorSetLayout(device, m_DescriptorLayout2, nullptr);
-        vkDestroyDescriptorSetLayout(device, m_DescriptorLayout3, nullptr);
     });
 
+    // ================================================== Create Set 0 ==================================================
+
+    {
+        VkDescriptorSetLayoutBinding bindings[2] = {
+            { // Uniform buffer
+                .binding = 0,
+                .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT
+            },
+            { // Light buffer
+                .binding = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
+            },
+        };
+        VkDescriptorSetLayoutCreateInfo layoutInfo = {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = 2,
+            .pBindings = bindings
+        };
+        VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_DescriptorLayout0));
+        m_MainDeleter.push_back([=, this] {
+            vkDestroyDescriptorSetLayout(device, m_DescriptorLayout0, nullptr);
+        });
+    }
+
+    // ================================================== Create Set 1 ==================================================
+
+    {
+        VkDescriptorSetLayoutBinding bindings[5] = {
+            { // Texture arrays
+                .binding = 0,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = TEXTURE_ARRAY_MAX_ENUM,
+                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+            },
+            { // Shadow array
+                .binding = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
+            },
+            { // HDR sampler
+                .binding = 2,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT
+            },
+            { // LDR sampler
+                .binding = 3,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+            },
+            { // Bloom sampler
+                .binding = 4,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
+            }
+        };
+        VkDescriptorSetLayoutCreateInfo layoutInfo = {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = 5,
+            .pBindings = bindings
+        };
+        VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_DescriptorLayout1));
+        m_MainDeleter.push_back([=, this] {
+            vkDestroyDescriptorSetLayout(device, m_DescriptorLayout1, nullptr);
+        });
+    }
+
+    // ================================================== Create Set 2 ==================================================
+
+    {
+        VkDescriptorSetLayoutBinding bindings[4] = {
+            { // Light indices buffer
+                .binding = 0,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT
+            },
+            { // Light tile counts buffer
+                .binding = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT
+            },
+            { // GBuffer array
+                .binding = 2,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 4,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT
+            },
+            { // HDR image
+                .binding = 3,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT
+            }
+        };
+        VkDescriptorSetLayoutCreateInfo layoutInfo = {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = 4,
+            .pBindings = bindings
+        };
+        VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_DescriptorLayout2));
+        m_MainDeleter.push_back([=, this] {
+            vkDestroyDescriptorSetLayout(device, m_DescriptorLayout2, nullptr);
+        });
+    }
+
+    // ================================================== Create Set 3 ==================================================
+
+    {
+        VkDescriptorSetLayoutBinding bindings[3] = {
+            { // HDR Bright spots
+                .binding = 0,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT
+            },
+            { // Ping Pong Buffer for blur
+                .binding = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT
+            },
+            { // Downsample Pyramid
+                .binding = 2,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                .descriptorCount = MAX_BLOOM_MIPS,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT
+            }
+        };
+        VkDescriptorSetLayoutCreateInfo layoutInfo = {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = 3,
+            .pBindings = bindings
+        };
+        VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_DescriptorLayout3));
+        m_MainDeleter.push_back([=, this] {
+            vkDestroyDescriptorSetLayout(device, m_DescriptorLayout3, nullptr);
+        });
+    }
+
+    // ================================================== Allocate Sets ==================================================
+
     for (FrameData& frame : frames) {
-
-        // ================================================== Allocate ==================================================
-
         VkDescriptorSetAllocateInfo allocInfo = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .descriptorPool = m_DescriptorPool,
@@ -1470,122 +1869,9 @@ void VulkanBackend::InitDescriptors()
 
         allocInfo.pSetLayouts = &m_DescriptorLayout3;
         VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &frame.descriptorSet3));
-
-        // ================================================== Write Set 0 ==================================================
-
-        {
-            VkDescriptorBufferInfo uniformBufferInfo = {
-                .buffer = frame.uniformBuffer.buffer,
-                .range = sizeof(PerFrameUniforms)
-            };
-
-            VkDescriptorImageInfo hdrSamplerInfo = {
-                .sampler = m_LinearSampler,
-                .imageView = m_LightingTarget.view,
-                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            };
-
-            VkDescriptorImageInfo ldrSamplerInfo = {
-                .sampler = m_LinearSampler,
-                .imageView = m_ToneMapTarget.view,
-                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            };
-
-            VkWriteDescriptorSet writes[3] = {
-                { // Uniform buffer
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = frame.descriptorSet0,
-                    .dstBinding = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    .pBufferInfo = &uniformBufferInfo
-                },
-                { // HDR sampler
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = frame.descriptorSet0,
-                    .dstBinding = 1,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &hdrSamplerInfo
-                },
-                { // LDR sampler
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = frame.descriptorSet0,
-                    .dstBinding = 2,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &ldrSamplerInfo
-                }
-            };
-
-            vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
-        }
-
-        // ================================================== Write Set 1 ==================================================
-
-        {
-            VkDescriptorImageInfo gBufferArrayInfo[4] = {
-                { m_LinearSampler, m_AlbedoTarget.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-                { m_NormalSampler, m_NormalTarget.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-                { m_LinearSampler, m_MaterialTarget.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-                { m_LinearSampler, m_DepthTarget.view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL },
-            };
-
-            VkDescriptorImageInfo hdrStorageInfo = {
-                .sampler = VK_NULL_HANDLE,
-                .imageView = m_LightingTarget.view,
-                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-            };
-
-            VkWriteDescriptorSet writes[2] = {
-                { // GBuffer
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = frame.descriptorSet1,
-                    .dstBinding = 0,
-                    .descriptorCount = 4,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = gBufferArrayInfo
-                },
-                { // HDR storage image
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = frame.descriptorSet1,
-                    .dstBinding = 1,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                    .pImageInfo = &hdrStorageInfo
-                },
-            };
-
-            vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
-        }
-
-        // ================================================== Write Set 2 ==================================================
-
-        {
-            VkDescriptorBufferInfo lightBufferInfo = {
-                .buffer = frame.lightBuffer.buffer,
-                .range = VK_WHOLE_SIZE
-            };
-
-            VkWriteDescriptorSet writes[1] = {
-                { // Light buffer
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = frame.descriptorSet2,
-                    .dstBinding = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                    .pBufferInfo = &lightBufferInfo
-                }
-                // Binding 1 = shadow array = not written here.
-            };
-
-            vkUpdateDescriptorSets(device, 1, writes, 0, nullptr);
-        }
-
-        // ================================================== Write Set 3 ==================================================
-
-        // Just the texture array - not written here
     }
+
+    UpdateDescriptors();
 }
 
 void VulkanBackend::UpdateDescriptors()
@@ -1600,6 +1886,36 @@ void VulkanBackend::UpdateDescriptors()
                 .range = sizeof(PerFrameUniforms)
             };
 
+            VkDescriptorBufferInfo lightBufferInfo = {
+                .buffer = frame.lightBuffer.buffer,
+                .range = VK_WHOLE_SIZE
+            };
+
+            VkWriteDescriptorSet writes[2] = {
+                { // Uniform buffer
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = frame.descriptorSet0,
+                    .dstBinding = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .pBufferInfo = &uniformBufferInfo
+                },
+                { // Light buffer
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = frame.descriptorSet0,
+                    .dstBinding = 1,
+                    .descriptorCount = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                    .pBufferInfo = &lightBufferInfo
+                },
+            };
+
+            vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+        }
+
+        // ================================================== Write Set 1 ==================================================
+
+        {
             VkDescriptorImageInfo hdrSamplerInfo = {
                 .sampler = m_LinearSampler,
                 .imageView = m_LightingTarget.view,
@@ -1612,39 +1928,57 @@ void VulkanBackend::UpdateDescriptors()
                 .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             };
 
+            VkDescriptorImageInfo bloomSamplerInfo = {
+                .sampler = m_LinearSampler,
+                .imageView = m_BloomPyramidTarget.views[0], // Top level only (accumulation result)
+                .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+
             VkWriteDescriptorSet writes[3] = {
-                { // Uniform buffer
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = frame.descriptorSet0,
-                    .dstBinding = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    .pBufferInfo = &uniformBufferInfo
-                },
+                // Binding 0 = Texture array - not written here
+                // Binding 1 = Shadow array - not written here
                 { // HDR sampler
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = frame.descriptorSet0,
-                    .dstBinding = 1,
+                    .dstSet = frame.descriptorSet1,
+                    .dstBinding = 2,
                     .descriptorCount = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                     .pImageInfo = &hdrSamplerInfo
                 },
                 { // LDR sampler
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = frame.descriptorSet0,
-                    .dstBinding = 2,
+                    .dstSet = frame.descriptorSet1,
+                    .dstBinding = 3,
                     .descriptorCount = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                     .pImageInfo = &ldrSamplerInfo
+                },
+                { // Bloom sampler
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = frame.descriptorSet1,
+                    .dstBinding = 4,
+                    .descriptorCount = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .pImageInfo = &bloomSamplerInfo
                 }
             };
 
             vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
         }
 
-        // ================================================== Write Set 1 ==================================================
+        // ================================================== Write Set 2 ==================================================
 
         {
+            VkDescriptorBufferInfo lightIndexBufferInfo = {
+                .buffer = frame.lightIndexBuffer.buffer,
+                .range = VK_WHOLE_SIZE
+            };
+
+            VkDescriptorBufferInfo lightTileCountBufferInfo = {
+                .buffer = frame.lightTileCountBuffer.buffer,
+                .range = VK_WHOLE_SIZE
+            };
+
             VkDescriptorImageInfo gBufferArrayInfo[4] = {
                 { m_LinearSampler, m_AlbedoTarget.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
                 { m_NormalSampler, m_NormalTarget.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
@@ -1658,62 +1992,102 @@ void VulkanBackend::UpdateDescriptors()
                 .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
             };
 
-            VkWriteDescriptorSet writes[2] = {
+            VkWriteDescriptorSet writes[4] = {
+                { // Light Indices buffer
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = frame.descriptorSet2,
+                    .dstBinding = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                    .pBufferInfo = &lightIndexBufferInfo
+                },
+                { // Light Tile Counts buffer
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = frame.descriptorSet2,
+                    .dstBinding = 1,
+                    .descriptorCount = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                    .pBufferInfo = &lightTileCountBufferInfo
+                },
                 { // GBuffer
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = frame.descriptorSet1,
-                    .dstBinding = 0,
+                    .dstSet = frame.descriptorSet2,
+                    .dstBinding = 2,
                     .descriptorCount = 4,
                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                     .pImageInfo = gBufferArrayInfo
                 },
                 { // HDR storage image
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = frame.descriptorSet1,
-                    .dstBinding = 1,
+                    .dstSet = frame.descriptorSet2,
+                    .dstBinding = 3,
                     .descriptorCount = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                     .pImageInfo = &hdrStorageInfo
-                }
-            };
-
-            vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
-        }
-
-        // ================================================== Write Set 2 ==================================================
-
-        {
-            VkDescriptorBufferInfo lightBufferInfo = {
-                .buffer = frame.lightBuffer.buffer,
-                .range = VK_WHOLE_SIZE
-            };
-
-            VkWriteDescriptorSet writes[1] = {
-                { // Light buffer
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = frame.descriptorSet2,
-                    .dstBinding = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                    .pBufferInfo = &lightBufferInfo
                 },
-                // Binding 1 = shadow arrays - not written here
             };
 
-            vkUpdateDescriptorSets(device, 1, writes, 0, nullptr);
+            vkUpdateDescriptorSets(device, 4, writes, 0, nullptr);
         }
 
         // ================================================== Write Set 3 ==================================================
 
-        // Just the texture array - not written here
+        {
+            VkDescriptorImageInfo bloomBrightSpotImageInfo = {
+                .sampler = VK_NULL_HANDLE,
+                .imageView = m_BloomLightExtractionTarget.view,
+                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            };
+            VkDescriptorImageInfo bloomPingPongImageInfo = {
+                .sampler = VK_NULL_HANDLE,
+                .imageView = m_BloomPingPongTarget.view,
+                .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            };
+            VkDescriptorImageInfo downsampleImageInfos[MAX_BLOOM_MIPS] = {};
+            for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
+                downsampleImageInfos[i] = {
+                    .sampler = VK_NULL_HANDLE,
+                    .imageView = m_BloomPyramidTarget.views[i],
+                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL
+                };
+            }
+
+            VkWriteDescriptorSet writes[3] = {
+                { // HDR Bright Spot Image
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = frame.descriptorSet3,
+                    .dstBinding = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                    .pImageInfo = &bloomBrightSpotImageInfo
+                },
+                { // Blur Ping Pong Image
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = frame.descriptorSet3,
+                    .dstBinding = 1,
+                    .descriptorCount = 1,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                    .pImageInfo = &bloomPingPongImageInfo
+                },
+                { // Downsample Pyramid
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = frame.descriptorSet3,
+                    .dstBinding = 2,
+                    .descriptorCount = m_BloomPyramidTarget.count,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                    .pImageInfo = downsampleImageInfos
+                },
+            };
+            vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
+        }
     }
 }
 
 void VulkanBackend::InitPipelines()
 {
-    // ================================================== Push Constants ==================================================
+    // ================================================== Main Push Constants ==================================================
 
-    VkPushConstantRange mainConstantRanges[2] = {
+    VkPushConstantRange mainPushConstantRanges[2] = {
         {
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .size = sizeof(VertexPushConstants),
@@ -1725,132 +2099,111 @@ void VulkanBackend::InitPipelines()
         }
     };
 
-    // ================================================== Depth Layout ==================================================
+    // ================================================== Minimal Layout ==================================================
 
     {
-        VkDescriptorSetLayout depthLayouts[4] = { 
+        VkDescriptorSetLayout minimalLayouts[2] = { 
             m_DescriptorLayout0, 
-            m_DummyDescriptorLayout, 
-            m_DummyDescriptorLayout, 
-            m_DescriptorLayout3 
+            m_DescriptorLayout1 
         };
         VkPipelineLayoutCreateInfo pipelineInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 4,
-            .pSetLayouts = depthLayouts,
+            .setLayoutCount = 2,
+            .pSetLayouts = minimalLayouts,
             .pushConstantRangeCount = 2,
-            .pPushConstantRanges = mainConstantRanges
+            .pPushConstantRanges = mainPushConstantRanges
         };
-        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_DepthPipelineLayout));
-    }
-
-    // ================================================== Tone-Mapping Layout ==================================================
-
-    {
-        VkPipelineLayoutCreateInfo pipelineInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 1,
-            .pSetLayouts = &m_DescriptorLayout0
-        };
-        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_ToneMapPipelineLayout));
-    }
-
-    // ================================================== Anti-Aliasing Layout ==================================================
-
-    {
-        VkPushConstantRange antiAliasingConstantRange = {
-            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .size = sizeof(AntiAliasingPushConstants),
-        };
-        VkPipelineLayoutCreateInfo pipelineInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 1,
-            .pSetLayouts = &m_DescriptorLayout0,
-            .pushConstantRangeCount = 1,
-            .pPushConstantRanges = &antiAliasingConstantRange
-        };
-        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_AntiAliasingPipelineLayout));
-    }
-
-    // ================================================== GBuffer Layout ==================================================
-
-    {
-        // Need descriptor layout 3, so need to pad with dummy descriptors to get the index right
-        VkDescriptorSetLayout gBufferLayouts[4] = { 
-            m_DescriptorLayout0, 
-            m_DummyDescriptorLayout, 
-            m_DummyDescriptorLayout, 
-            m_DescriptorLayout3 
-        };
-        VkPipelineLayoutCreateInfo pipelineInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 4,
-            .pSetLayouts = gBufferLayouts,
-            .pushConstantRangeCount = 2,
-            .pPushConstantRanges = mainConstantRanges
-        };
-        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_GBufferPipelineLayout));
-    }
-
-    // ================================================== Lighting Layouts ==================================================
-
-    {
-        VkDescriptorSetLayout lightingLayouts[3] = { m_DescriptorLayout0, m_DescriptorLayout1, m_DescriptorLayout2 };
-        VkPipelineLayoutCreateInfo pipelineInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 3,
-            .pSetLayouts = lightingLayouts,
-            .pushConstantRangeCount = 2,
-            .pPushConstantRanges = mainConstantRanges
-        };
-        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_LightingPipelineLayout));
-    }
-
-    // ================================================== Transparency Layout ==================================================
-
-    {
-        VkDescriptorSetLayout transparencyLayouts[4] = { 
-            m_DescriptorLayout0, 
-            m_DummyDescriptorLayout, 
-            m_DescriptorLayout2, 
-            m_DescriptorLayout3 
-        };
-        VkPipelineLayoutCreateInfo pipelineInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 4,
-            .pSetLayouts = transparencyLayouts,
-            .pushConstantRangeCount = 2,
-            .pPushConstantRanges = mainConstantRanges
-        };
-        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_TransparencyPipelineLayout));
+        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_MinimalPipelineLayout));
+        m_MainDeleter.push_back([=, this] {
+            vkDestroyPipelineLayout(device, m_MinimalPipelineLayout, nullptr);
+        });
     }
 
     // ================================================== Shadow Layout ==================================================
 
     {
-        VkPushConstantRange shadowConstantRange = {
+        VkPushConstantRange shadowPushConstantRange = {
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .size = sizeof(ShadowPushConstants),
         };
+
         VkPipelineLayoutCreateInfo pipelineInfo = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 1,
-            .pSetLayouts = &m_DescriptorLayout0,
             .pushConstantRangeCount = 1,
-            .pPushConstantRanges = &shadowConstantRange,
+            .pPushConstantRanges = &shadowPushConstantRange
         };
         VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_ShadowPipelineLayout));
+        m_MainDeleter.push_back([=, this] {
+            vkDestroyPipelineLayout(device, m_ShadowPipelineLayout, nullptr);
+        });
     }
 
-    m_MainDeleter.push_back([=, this] {
-        vkDestroyPipelineLayout(device, m_DepthPipelineLayout, nullptr);
-        vkDestroyPipelineLayout(device, m_ShadowPipelineLayout, nullptr);
-        vkDestroyPipelineLayout(device, m_GBufferPipelineLayout, nullptr);
-        vkDestroyPipelineLayout(device, m_LightingPipelineLayout, nullptr);
-        vkDestroyPipelineLayout(device, m_TransparencyPipelineLayout, nullptr);
-        vkDestroyPipelineLayout(device, m_ToneMapPipelineLayout, nullptr);
-        vkDestroyPipelineLayout(device, m_AntiAliasingPipelineLayout, nullptr);
-    });
+    // ================================================== Light Culling Layout ==================================================
+
+    {
+        VkDescriptorSetLayout lightCullingLayouts[3] = { 
+            m_DescriptorLayout0, 
+            m_DummyDescriptorLayout, 
+            m_DescriptorLayout2 
+        };
+        VkPipelineLayoutCreateInfo pipelineInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 3,
+            .pSetLayouts = lightCullingLayouts,
+        };
+        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_LightCullingPipelineLayout));
+        m_MainDeleter.push_back([=, this] {
+            vkDestroyPipelineLayout(device, m_LightCullingPipelineLayout, nullptr);
+        });
+    }
+
+    // ================================================== Lighting Layout ==================================================
+
+    {
+        VkDescriptorSetLayout lightingLayouts[3] = { 
+            m_DescriptorLayout0, 
+            m_DescriptorLayout1, 
+            m_DescriptorLayout2 
+        };
+        VkPipelineLayoutCreateInfo pipelineInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 3,
+            .pSetLayouts = lightingLayouts,
+            .pushConstantRangeCount = 2,
+            .pPushConstantRanges = mainPushConstantRanges
+        };
+        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_LightingPipelineLayout));
+        m_MainDeleter.push_back([=, this] {
+            vkDestroyPipelineLayout(device, m_LightingPipelineLayout, nullptr);
+        });
+    }
+
+    // ================================================== Bloom Layout ==================================================
+
+    {
+        VkPushConstantRange bloomPushConstantRange = {
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+            .size = sizeof(BloomPushConstants),
+        };
+
+        VkDescriptorSetLayout bloomLayouts[4] = { 
+            m_DescriptorLayout0, 
+            m_DummyDescriptorLayout, 
+            m_DescriptorLayout2,
+            m_DescriptorLayout3 
+        };
+        VkPipelineLayoutCreateInfo pipelineInfo = {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount = 4,
+            .pSetLayouts = bloomLayouts,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &bloomPushConstantRange
+        };
+        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_BloomPipelineLayout));
+        m_MainDeleter.push_back([=, this] {
+            vkDestroyPipelineLayout(device, m_BloomPipelineLayout, nullptr);
+        });
+    }
 
     // ================================================== Graphics Pipelines ==================================================
 
@@ -1861,10 +2214,11 @@ void VulkanBackend::InitPipelines()
         .fragmentShader = "depth.frag",
         .viewport = &m_Viewport,
         .scissor = &m_ScissorRect,
-        .pipelineLayout = m_DepthPipelineLayout,
+        .pipelineLayout = m_MinimalPipelineLayout,
         .vertexInput = &depthVertexDesc,
         .cullMode = VK_CULL_MODE_BACK_BIT,
-        .depthFlags = PIPELINE_DEPTH_TEST | PIPELINE_DEPTH_WRITE,
+        .depthFlags = GraphicsPipelineCreateInfo::PIPELINE_DEPTH_TEST 
+                | GraphicsPipelineCreateInfo::PIPELINE_DEPTH_WRITE,
         .depthCompare = VK_COMPARE_OP_LESS_OR_EQUAL,
         .depthFormat = DEPTH_FORMAT
     });
@@ -1877,7 +2231,9 @@ void VulkanBackend::InitPipelines()
         .pipelineLayout = m_ShadowPipelineLayout,
         .vertexInput = &depthVertexDesc,
         .cullMode = VK_CULL_MODE_BACK_BIT,
-        .depthFlags = PIPELINE_DEPTH_TEST | PIPELINE_DEPTH_WRITE | PIPELINE_DEPTH_BIAS,
+        .depthFlags = GraphicsPipelineCreateInfo::PIPELINE_DEPTH_TEST 
+                | GraphicsPipelineCreateInfo::PIPELINE_DEPTH_WRITE 
+                | GraphicsPipelineCreateInfo::PIPELINE_DEPTH_BIAS,
         .depthCompare = VK_COMPARE_OP_LESS_OR_EQUAL,
         .depthFormat = DEPTH_FORMAT
     });
@@ -1889,9 +2245,9 @@ void VulkanBackend::InitPipelines()
         .fragmentShader = "gBuffer.frag",
         .viewport = &m_Viewport,
         .scissor = &m_ScissorRect,
-        .pipelineLayout = m_GBufferPipelineLayout,
+        .pipelineLayout = m_MinimalPipelineLayout,
         .vertexInput = &vertexDesc,
-        .depthFlags = PIPELINE_DEPTH_TEST,
+        .depthFlags = GraphicsPipelineCreateInfo::PIPELINE_DEPTH_TEST,
         .depthCompare = VK_COMPARE_OP_LESS_OR_EQUAL,
         .depthFormat = DEPTH_FORMAT,
         .attachmentFormats = { ALBEDO_FORMAT, NORMAL_FORMAT, MATERIAL_FORMAT }
@@ -1903,11 +2259,11 @@ void VulkanBackend::InitPipelines()
         .fragmentShader = "transparency.frag",
         .viewport = &m_Viewport,
         .scissor = &m_ScissorRect,
-        .pipelineLayout = m_TransparencyPipelineLayout,
+        .pipelineLayout = m_LightingPipelineLayout,
         .vertexInput = &vertexDesc,
         .cullMode = VK_CULL_MODE_NONE,
         .blendEnable = true,
-        .depthFlags = PIPELINE_DEPTH_TEST,
+        .depthFlags = GraphicsPipelineCreateInfo::PIPELINE_DEPTH_TEST,
         .depthCompare = VK_COMPARE_OP_LESS_OR_EQUAL,
         .depthFormat = DEPTH_FORMAT,
         .attachmentFormats = { LIGHTING_FORMAT }
@@ -1919,7 +2275,7 @@ void VulkanBackend::InitPipelines()
         .fragmentShader = "tonemap.frag", 
         .viewport = &m_Viewport, 
         .scissor = &m_ScissorRect, 
-        .pipelineLayout = m_ToneMapPipelineLayout, 
+        .pipelineLayout = m_MinimalPipelineLayout, 
         .cullMode = VK_CULL_MODE_BACK_BIT,
         .depthCompare = VK_COMPARE_OP_ALWAYS, 
         .attachmentFormats = { TONE_MAP_FORMAT }
@@ -1931,39 +2287,93 @@ void VulkanBackend::InitPipelines()
         .fragmentShader = "antialias.frag", 
         .viewport = &m_Viewport, 
         .scissor = &m_ScissorRect, 
-        .pipelineLayout = m_AntiAliasingPipelineLayout, 
+        .pipelineLayout = m_MinimalPipelineLayout, 
         .cullMode = VK_CULL_MODE_BACK_BIT,
         .depthCompare = VK_COMPARE_OP_ALWAYS, 
-        .attachmentFormats = { m_SwapchainFormat}
+        .attachmentFormats = { m_SwapchainFormat }
     });
 
     // ================================================== Compute Pipelines ==================================================
 
-    VkShaderModule lightingComputeModule = LoadShaderModule("src/Engine/Resource/Shader/lighting.comp.spirv");
-    VkComputePipelineCreateInfo lightingComputePipelineInfo = {
+    m_LightCullingPipeline = CreateComputePipeline({
+        .pipelineName = "Light-Culling",
+        .computeShader = "lightCulling.comp",
+        .pipelineLayout = m_LightCullingPipelineLayout
+    });
+
+    m_LightingPipeline = CreateComputePipeline({
+        .pipelineName = "Lighting",
+        .computeShader = "lighting.comp",
+        .pipelineLayout = m_LightingPipelineLayout
+    });
+
+    m_BloomLightExtractionPipeline = CreateComputePipeline({
+        .pipelineName = "Bloom-Light-Extraction",
+        .computeShader = "lightExtraction.comp",
+        .pipelineLayout = m_BloomPipelineLayout
+    });
+
+    m_BloomDownsamplePipeline = CreateComputePipeline({
+        .pipelineName = "Bloom-Downsample",
+        .computeShader = "downsample.comp",
+        .pipelineLayout = m_BloomPipelineLayout
+    });
+
+    m_BloomHorizontalBlurPipeline = CreateComputePipeline({
+        .pipelineName = "Bloom-Horizontal-Blur",
+        .computeShader = "horizontalBlur.comp",
+        .pipelineLayout = m_BloomPipelineLayout
+    });
+
+    m_BloomVerticalBlurPipeline = CreateComputePipeline({
+        .pipelineName = "Bloom-Vertical-Blur",
+        .computeShader = "verticalBlur.comp",
+        .pipelineLayout = m_BloomPipelineLayout
+    });
+
+    m_BloomAccumulatePipeline = CreateComputePipeline({
+        .pipelineName = "Bloom-Accumulate",
+        .computeShader = "accumulate.comp",
+        .pipelineLayout = m_BloomPipelineLayout
+    });
+}
+
+VkPipeline VulkanBackend::CreateComputePipeline(const ComputePipelineCreateInfo&& info)
+{
+    INFO("Creating compute pipeline: " << info.pipelineName);
+
+    fs::path computeShaderFullPath("src/Engine/Resource/Shader" / info.computeShader);
+    computeShaderFullPath.replace_extension(".comp.spirv");
+    VkShaderModule computeModule = LoadShaderModule(computeShaderFullPath);
+    VkComputePipelineCreateInfo lightCullingComputePipelineInfo = {
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
         .stage = {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-            .module = lightingComputeModule,
+            .module = computeModule,
             .pName = "main"
         },
-        .layout = m_LightingPipelineLayout
+        .layout = info.pipelineLayout
     };
-    VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &lightingComputePipelineInfo, nullptr, &m_LightingPipeline));
-    vkDestroyShaderModule(device, lightingComputeModule, nullptr);
+
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &lightCullingComputePipelineInfo, nullptr, &pipeline));
+
+    vkDestroyShaderModule(device, computeModule, nullptr);
     m_MainDeleter.push_back([=, this] {
-        vkDestroyPipeline(device, m_LightingPipeline, nullptr);
+        vkDestroyPipeline(device, pipeline, nullptr);
     });
+
+    return pipeline;
 }
 
 VkPipeline VulkanBackend::CreateGraphicsPipeline(const GraphicsPipelineCreateInfo&& info)
 {
     INFO("Creating graphics pipeline: " << info.pipelineName);
 
-    bool depthTest = FLAGS_CONTAIN(info.depthFlags, PIPELINE_DEPTH_TEST);
-    bool depthWrite = FLAGS_CONTAIN(info.depthFlags, PIPELINE_DEPTH_WRITE);
-    bool depthBias = FLAGS_CONTAIN(info.depthFlags, PIPELINE_DEPTH_BIAS);
+    bool depthTest = FLAGS_CONTAIN(info.depthFlags, GraphicsPipelineCreateInfo::PIPELINE_DEPTH_TEST);
+    bool depthWrite = FLAGS_CONTAIN(info.depthFlags, GraphicsPipelineCreateInfo::PIPELINE_DEPTH_WRITE);
+    bool depthBias = FLAGS_CONTAIN(info.depthFlags, GraphicsPipelineCreateInfo::PIPELINE_DEPTH_BIAS);
 
     uint32_t attachmentCount = info.attachmentFormats.size();
     uint32_t stageCount = (info.fragmentShader.empty()) ? 1 : 2;

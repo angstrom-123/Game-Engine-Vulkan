@@ -3,6 +3,8 @@
 #define PI 3.14159265359
 #define EPSILON 0.00001
 
+#define BLOOM_THRESHOLD 1.0
+
 #define ALBEDO 0
 #define NORMAL 1
 #define MATERIAL 2 
@@ -32,6 +34,8 @@ layout (set = 0, binding = 0) uniform PerFrameUniforms {
     mat4 invView;
     mat4 invProj;
     vec4 position;
+    float near;
+    float far;
     // Settings
     float exposure;
     float gamma;
@@ -39,15 +43,26 @@ layout (set = 0, binding = 0) uniform PerFrameUniforms {
     uint lightCount;
     ivec2 screenSize;
     ivec2 shadowSize;
+    // Light culling
+    uint tileSize;
+    uint tilesX;
+    uint tilesY;
+    uint maxLightsPerTile;
 } uniforms;
 
-layout (set = 1, binding = 0) uniform sampler2D gBufferTextures[4];
-layout (set = 1, binding = 1, rgba16f) uniform image2D hdrOutput;
-
-layout (set = 2, binding = 0) readonly buffer LightBuffer { 
+layout (set = 0, binding = 1) readonly buffer LightBuffer { 
     Light lights[]; 
 } lightBuffer;
-layout (set = 2, binding = 1) uniform sampler2DArrayShadow shadowTextures;
+layout (set = 1, binding = 1) uniform sampler2DArrayShadow shadowTextures;
+
+layout (set = 2, binding = 0) readonly buffer LightIndexBuffer {
+    uint indices[];
+} indexBuffer;
+layout (set = 2, binding = 1) readonly buffer TileCountBuffer {
+    uint tileCounts[];
+} tileCountBuffer;
+layout (set = 2, binding = 2) uniform sampler2D gBufferTextures[4];
+layout (set = 2, binding = 3, rgba16f) uniform image2D hdrOutput;
 
 vec3 ReconstructWorldPosition(ivec2 pixel, float depth)
 {
@@ -206,9 +221,6 @@ void main()
     float ao = materialData.z;
     float emissive = materialData.w;
 
-    // imageStore(hdrOutput, pixel, vec4(normal * 0.5 + 0.5, 1.0));
-    // return;
-
     // Out of range = no geometry
     if (depth >= 1.0) {
         imageStore(hdrOutput, pixel, vec4(0.0));
@@ -219,12 +231,20 @@ void main()
     vec3 worldPos = ReconstructWorldPosition(pixel, depth);
     vec3 viewDir = normalize(uniforms.position.xyz - worldPos);
 
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(uniforms.screenSize);
+    uint tileX = uint(uv.x) / uniforms.tileSize;
+    uint tileY = uint(uv.y) / uniforms.tileSize;
+    uint tileIndex = tileY * gl_NumWorkGroups.x + tileX;
+    uint indexOffset = uniforms.maxLightsPerTile * tileIndex;
+    uint indexCount = tileCountBuffer.tileCounts[tileIndex];
+
     // Light accumulation
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
     float nv = max(dot(normal, viewDir), 0.0);
     vec3 accumulatedColor = vec3(0.0);
-    for (uint i = 0; i < uniforms.lightCount; i++) {
-        Light light = lightBuffer.lights[i];
+    for (uint i = 0; i < indexCount; i++) {
+        uint lightIndex = indexBuffer.indices[indexOffset + i];
+        Light light = lightBuffer.lights[lightIndex];
         accumulatedColor += ComputePBR(light, worldPos, viewDir, normal, albedo, metallic, roughness, F0, nv);
     }
 

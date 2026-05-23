@@ -1,5 +1,46 @@
 #pragma once
 
+/* Descriptor Sets 
+ *  
+ *  Set 0:
+ *      0 - Per Frame Uniform Buffer        - uniform buffer
+ *      1 - Light Buffer                    - storage buffer
+ *
+ *  Set 1:
+ *      0 - Texture Array Sampler           - combined image sampler array
+ *      1 - Shadow Array Sampler            - combined image sampler array
+ *      2 - HDR Sampler                     - combined image sampler
+ *      3 - LDR Sampler                     - combined image sampler
+ *      4 - Bloom Sampler                   - combined image sampler
+ *
+ *  Set 2:
+ *      0 - Light Indices                   - storage buffer
+ *      1 - Light Tile Counts               - storage buffer
+ *      2 - GBuffer Array                   - combined image sampler array
+ *      3 - HDR Image                       - storage image
+ *
+ *  Set 3:
+ *      0 - Bloom HDR filtered image        - storage image
+ *      1 - Bloom Ping-Pong Buffer          - storage image
+ *      2 - Bloom Downsample Pyramid        - storage image array
+ *
+ *
+ *                    Descriptor Set   Pipeline Layout 
+ *                     0   1   2   3  
+ *  Depth Pre        | x | x |   |   |     Minimal     |
+ *  GBuffer          | x | x |   |   |     Minimal     |
+ *  Shadowmap        | x | x |   |   |     Shadow      |
+ *  Light Culling    | x |   | x |   |     Culling     |
+ *  Lighting         | x | x | x |   |     Lighting    |
+ *  Transparency     | x | x | x |   |     Lighting    |
+ *  Light Extraction | x |   | x | x |      Bloom      |
+ *  Downsampling     | x |   | x | x |      Bloom      |
+ *  Blurring         | x |   | x | x |      Bloom      |
+ *  Upsampling       | x |   | x | x |      Bloom      |
+ *  Tone Mapping     | x | x |   |   |     Minimal     |
+ *  Anti Aliasing    | x | x |   |   |     Minimal     |
+ */
+
 #include "ECS/ecs.h"
 #include "ECS/ecsTypes.h"
 #include "Geometry/vertex.h"
@@ -56,13 +97,14 @@ public:
     FrameData frames[FRAMES_IN_FLIGHT];
 
 private:
-    enum PipelineDepthFlag {
-        PIPELINE_DEPTH_NONE = 0x0,
-        PIPELINE_DEPTH_WRITE = 0x1,
-        PIPELINE_DEPTH_TEST = 0x2,
-        PIPELINE_DEPTH_BIAS = 0x4,
-    };
     struct GraphicsPipelineCreateInfo {
+        enum PipelineDepthFlag {
+            PIPELINE_DEPTH_NONE = 0x0,
+            PIPELINE_DEPTH_WRITE = 0x1,
+            PIPELINE_DEPTH_TEST = 0x2,
+            PIPELINE_DEPTH_BIAS = 0x4,
+        };
+
         std::string pipelineName{"unnamed pipeline"};
         fs::path vertexShader{""};
         fs::path fragmentShader{""};
@@ -77,6 +119,11 @@ private:
         VkFormat depthFormat{VK_FORMAT_UNDEFINED};
         std::initializer_list<VkFormat> attachmentFormats{};
     };
+    struct ComputePipelineCreateInfo {
+        std::string pipelineName{"unnamed pipeline"};
+        fs::path computeShader{""};
+        VkPipelineLayout pipelineLayout{VK_NULL_HANDLE};
+    };
 
     void Resize(ECS *ecs);
     void InitVulkan(struct GLFWwindow *window);
@@ -86,6 +133,7 @@ private:
     void UpdateDescriptors();
     void InitBuffers();
     void InitPipelines();
+    VkPipeline CreateComputePipeline(const ComputePipelineCreateInfo&& info);
     VkPipeline CreateGraphicsPipeline(const GraphicsPipelineCreateInfo&& info);
     VkShaderModule LoadShaderModule(const fs::path& path);
     template<typename T> T GetFunctionPointer(const char *name) 
@@ -132,6 +180,9 @@ private:
     OffscreenTarget m_NormalTarget;
     OffscreenTarget m_MaterialTarget;
     OffscreenTarget m_LightingTarget;
+    OffscreenTarget m_BloomLightExtractionTarget;
+    OffscreenTarget m_BloomPingPongTarget;
+    OffscreenTargetArray m_BloomPyramidTarget;
     OffscreenTarget m_ToneMapTarget;
 
     VkSampler m_LinearSampler{VK_NULL_HANDLE};
@@ -147,18 +198,22 @@ private:
     VkDescriptorSetLayout m_DescriptorLayout2{VK_NULL_HANDLE};
     VkDescriptorSetLayout m_DescriptorLayout3{VK_NULL_HANDLE};
 
-    VkPipelineLayout m_DepthPipelineLayout{VK_NULL_HANDLE};
+    VkPipelineLayout m_MinimalPipelineLayout{VK_NULL_HANDLE};
     VkPipelineLayout m_ShadowPipelineLayout{VK_NULL_HANDLE};
-    VkPipelineLayout m_GBufferPipelineLayout{VK_NULL_HANDLE};
-    VkPipelineLayout m_TransparencyPipelineLayout{VK_NULL_HANDLE};
+    VkPipelineLayout m_LightCullingPipelineLayout{VK_NULL_HANDLE};
     VkPipelineLayout m_LightingPipelineLayout{VK_NULL_HANDLE};
-    VkPipelineLayout m_ToneMapPipelineLayout{VK_NULL_HANDLE};
-    VkPipelineLayout m_AntiAliasingPipelineLayout{VK_NULL_HANDLE};
+    VkPipelineLayout m_BloomPipelineLayout{VK_NULL_HANDLE};
 
     VkPipeline m_DepthPipeline{VK_NULL_HANDLE};
     VkPipeline m_ShadowPipeline{VK_NULL_HANDLE};
     VkPipeline m_GBufferPipeline{VK_NULL_HANDLE};
+    VkPipeline m_LightCullingPipeline{VK_NULL_HANDLE};
     VkPipeline m_LightingPipeline{VK_NULL_HANDLE};
+    VkPipeline m_BloomLightExtractionPipeline{VK_NULL_HANDLE};
+    VkPipeline m_BloomDownsamplePipeline{VK_NULL_HANDLE};
+    VkPipeline m_BloomHorizontalBlurPipeline{VK_NULL_HANDLE};
+    VkPipeline m_BloomVerticalBlurPipeline{VK_NULL_HANDLE};
+    VkPipeline m_BloomAccumulatePipeline{VK_NULL_HANDLE};
     VkPipeline m_TransparencyPipeline = VK_NULL_HANDLE;
     VkPipeline m_ToneMapPipeline{VK_NULL_HANDLE};
     VkPipeline m_AntiAliasingPipeline{VK_NULL_HANDLE};

@@ -10,7 +10,7 @@
 
 #include <GLFW/glfw3.h>
 
-static constexpr float MAX_PITCH = 89.9;
+static const float MAX_PITCH = 89.9;
 
 void DefaultCameraControlSystem::Init(ECS *ecs, Entity cameraEntity, float sensitivity, float speed)
 {

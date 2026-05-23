@@ -42,7 +42,7 @@ bool ModelResource::Load(const fs::path& path)
 
     file.seekg(std::ios::beg);
 
-    constexpr size_t BUFFER_SIZE = 1024 * 1024;
+    const size_t BUFFER_SIZE = 1024 * 1024;
     char buffer[BUFFER_SIZE];
     file.rdbuf()->pubsetbuf(buffer, BUFFER_SIZE);
 
