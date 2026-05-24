@@ -15,6 +15,7 @@ less-than-satisfactory. This may be addressed in a future version of the engine.
 Currently there is no auto-install of dependencies. To run this code, you will require:
 - Vulkan SDK (verion >= 1.4)
 - GLFW
+
 These must be installed prior to building or running anything.
 All other libraries are header-only and included directly in this repo.
 
@@ -48,11 +49,11 @@ Once built, you can run this on Linux using wine:
 ```
 wine ./winbin/release/output.exe
 ```
-Alternatively, to run on Windows natively, clone this entire repository onto your Windows machine. 
-Not everything from it is required, but there is currently no support for distribution builds so you will have to include the source. 
-Next, copy across the compiled binary (output.exe) and the two dll's (libgcc_s_seh-1.dll, libstdc++-6.dll) from the `winbin/release` 
-directory in your Linux environment to the same directory on your Windows machine (creating it if it doesn't exist).
-Finally, you can run the code natively by connecting to the project root and running:
+Alternatively, to run on Windows natively:
+- Clone this entire repository onto your Windows machine. Not everything from it is required, but there is currently no support for distribution builds so you will have to include the source. 
+- Copy across the compiled binary (output.exe) and the two dll's (libgcc_s_seh-1.dll, libstdc++-6.dll) from the `winbin/release` directory in your Linux environment to the same directory on your Windows machine (creating it if it doesn't exist).
+
+You can run the code natively by connecting to the project root and running:
 ```
 cmd.exe /k .\winbin\release\output.exe
 ```
@@ -71,4 +72,4 @@ to the project's root as this is the working directory.
 
 ## Screenshots
 
-<img width="1920" height="1080" alt="20260420_21h30m51s_grim" src="https://github.com/user-attachments/assets/68bc7ca8-1250-4e90-b6fc-7bdc6c0181b4" />
+<img width="1920" height="1080" alt="20260524_02h10m03s_grim" src="https://github.com/user-attachments/assets/b0933468-029b-41b6-80f6-85115031f6f8" />
