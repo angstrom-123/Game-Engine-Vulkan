@@ -72,6 +72,15 @@ public:
         return array->Get(entity);
     }
 
+    template<typename T> int32_t GetIndex(Entity entity)
+    {
+        std::type_index index = std::type_index(typeid(T));
+        ASSERT(m_ComponentArrays.find(index) != m_ComponentArrays.end() && "Getting unregistered component");
+
+        ComponentArray<T> *array = static_cast<ComponentArray<T> *>(m_ComponentArrays[index]);
+        return array->GetIndex(entity);
+    }
+
     // Notifying all component arrays that an entity is destroyed to clean up attached components
     void EntityDestroyed(Entity entity)
     {

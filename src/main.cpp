@@ -1,3 +1,4 @@
+#include "Application/ShadowTestScene/shadowTestScene.h"
 #include "Engine/engine.h"
 
 #include "Engine/Util/profiler.h"
@@ -18,9 +19,11 @@ int main(int argc, const char *argv[]) {
 
     engine.RegisterScene<SponzaScene>("src/Application/SponzaScene");
     engine.RegisterScene<ApesScene>("src/Application/ApesScene");
+    engine.RegisterScene<ShadowTestScene>("src/Application/ShadowTestScene");
 
     // Scene name specified in its MANIFEST.yaml under the `manifest` tag
     engine.Run("SponzaScene");
+    // engine.Run("ShadowTestScene");
 
     PROFILER_END_SESSION();
 }

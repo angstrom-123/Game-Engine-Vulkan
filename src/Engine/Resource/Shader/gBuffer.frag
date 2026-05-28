@@ -15,8 +15,10 @@ layout (push_constant) uniform Constants {
     float metallic;
     float ao;
     float emissive;
-    uint diffuseTexture;
-    uint normalTexture;
+    uint diffuseIndex;
+    uint diffuseLayer;
+    uint normalIndex;
+    uint normalLayer;
     uint flags;
 } constants;
 
@@ -54,19 +56,23 @@ layout (location = 2) out vec4 outMaterial;
 
 vec4 ComputeAlbedo()
 {
-    vec4 albedo = texture(textures[constants.diffuseTexture >> 16], vec3(vUV, constants.diffuseTexture & 0xFFFF));
+    vec4 albedo = texture(textures[constants.diffuseIndex], vec3(vUV, constants.diffuseLayer));
     albedo.xyz *= constants.albedo.xyz;
     return albedo;
 }
 
 vec3 ComputeNormal()
 {
+    // TODO: Can go back to this if I fixup normal mipmapping
+    // vec3 normal = texture(textures[constants.normalIndex], vec3(vUV, constants.normalLayer)).xyz;
+
     // Goofy manual lod selection to fix some visible triangle seams
     float dist = length(vPosition - uniforms.position.xyz);
     float lod = log2(dist * 0.8); // higher scaling factor = higher lod
-    lod = clamp(lod, 0.0, textureQueryLevels(textures[constants.normalTexture >> 16]) - 1);
+    lod = clamp(lod, 0.0, textureQueryLevels(textures[constants.normalIndex]) - 1);
 
-    vec3 normal = textureLod(textures[constants.normalTexture >> 16], vec3(vUV, constants.normalTexture & 0xFFFF), lod).xyz;
+    vec3 normal = textureLod(textures[constants.normalIndex], vec3(vUV, constants.normalLayer), lod).xyz;
+
     normal = normal * 2.0 - 1.0;
     normal = normalize(vTBN * normal);
     return normal * 0.5 + 0.5;

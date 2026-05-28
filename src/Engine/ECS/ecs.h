@@ -78,6 +78,11 @@ public:
         return m_ComponentManager.GetComponent<T>(entity);
     }
 
+    template<typename T> int32_t GetIndex(Entity entity)
+    {
+        return m_ComponentManager.GetIndex<T>(entity);
+    }
+
     template<typename T> uint64_t GetBit() const
     {
         return m_ComponentManager.GetBit<T>();

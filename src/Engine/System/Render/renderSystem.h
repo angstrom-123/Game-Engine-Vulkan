@@ -40,7 +40,7 @@ public:
     Signature GetSignature(ECS *ecs) override { return ecs->GetBit<Transform>() | ecs->GetBit<Mesh>() | ecs->GetBit<Material>(); };
 
 private:
-    void AllocateShadowcaster(Light& light, Shadowcaster& shadowcaster, VulkanBackend *backend);
+    void AllocateShadowcaster(ECS *ecs, Entity e, VulkanBackend *backend);
     void UploadTexture(Resource resource, ResourceManager *manager, VulkanBackend *backend);
     void UploadMaterial(Resource resource, ResourceManager *manager, VulkanBackend *backend);
     void UploadModel(Resource resource, ResourceManager *manager, VulkanBackend *backend);

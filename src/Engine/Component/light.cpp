@@ -1,5 +1,7 @@
 #include "light.h"
 
+#include <glm/glm.hpp>
+
 Light::Light(Point, glm::vec3 color, float intensity, float radius)
 {
     position = glm::vec4(glm::vec3(0.0), POINT);

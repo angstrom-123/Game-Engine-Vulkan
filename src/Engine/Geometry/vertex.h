@@ -10,7 +10,7 @@ struct VertexInputDesc {
     VkPipelineVertexInputStateCreateFlags flags = 0;
 };
 
-// TODO: Packing vertex struct (snorm, etc)
+// TODO: Packing vertex struct?
 struct Vertex {
     glm::vec3 position;
     glm::vec3 normal;

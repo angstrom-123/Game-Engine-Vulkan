@@ -5,6 +5,7 @@
 
 #include "Util/myAssert.h"
 #include "ecsTypes.h"
+#include "handle.h"
 
 class ComponentArrayBase {
 public:
@@ -46,6 +47,13 @@ public:
         ASSERT(m_EntityToIndex.find(entity) != m_EntityToIndex.end() && "Getting component from entity without one");
 
         return m_Components[m_EntityToIndex[entity]];
+    }
+
+    int32_t GetIndex(Entity entity)
+    {
+        ASSERT(entity != INVALID_HANDLE);
+        ASSERT(m_EntityToIndex.find(entity) != m_EntityToIndex.end() && "Getting component from entity without one");
+        return m_EntityToIndex[entity];
     }
 
     T *Data()

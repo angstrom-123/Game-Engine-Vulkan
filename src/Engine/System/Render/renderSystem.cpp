@@ -1,10 +1,11 @@
 #include "renderSystem.h"
-#include "Component/camera.h"
 #include "Component/material.h"
+#include "Component/shadowcaster.h"
 #include "ResourceManager/fontResource.h"
 #include "ResourceManager/imageResource.h"
 #include "ResourceManager/materialResource.h"
 #include "ResourceManager/modelResource.h"
+#include "System/Render/backendTypes.h"
 #include "Util/allocator.h"
 #include "Util/myAssert.h"
 #include "Util/profiler.h"
@@ -33,7 +34,7 @@ void RenderSystem::Update(ECS *ecs, VulkanBackend *backend)
 {
     PROFILER_PROFILE_SCOPE("RenderSystem::Update");
     m_LightSystem->Update(ecs);
-    m_ShadowSystem->Update(ecs);
+    m_ShadowSystem->Update(ecs, m_Frontend.camera);
     backend->Draw(ecs, m_Frontend, entities);
 }
 
@@ -138,19 +139,20 @@ Entity RenderSystem::CreateSpotLight(ECS *ecs, const LightCreateInfo& info, Vulk
 {
     Entity e = ecs->CreateEntity();
 
+    Light light = Light(SPOT, info.color, info.intensity, info.radius, info.innerConeRadians, info.outerConeRadians);
+    ecs->AddComponent<Light>(e, light);
+
     glm::vec3 base = glm::vec3(0.0, 0.0, 1.0);
     glm::vec3 axis = glm::cross(base, -glm::normalize(info.direction));
     float angle = glm::acos(glm::dot(base, -glm::normalize(info.direction)));
-
-    Light light = Light(SPOT, info.color, info.intensity, info.radius, info.innerConeRadians, info.outerConeRadians);
-    if (info.shadowcaster) {
-        Shadowcaster shadowcaster = Shadowcaster(CAMERA_PERSPECTIVE, info.outerConeRadians * 2.0, 0.1, info.radius);
-        AllocateShadowcaster(light, shadowcaster, backend);
-        ecs->AddComponent<Shadowcaster>(e, shadowcaster);
-    }
-
-    ecs->AddComponent<Light>(e, light);
     ecs->GetComponent<Transform>(e).Translate(info.position).Rotate(angle, axis);
+
+    if (info.shadowcaster) {
+        ecs->AddComponent<Shadowcaster>(e, Shadowcaster());
+        AllocateShadowcaster(ecs, e, backend);
+    } else {
+        light.shadowIndex = UINT32_MAX;
+    }
 
     return e;
 }
@@ -159,19 +161,20 @@ Entity RenderSystem::CreateDirectionalLight(ECS *ecs, const LightCreateInfo& inf
 {
     Entity e = ecs->CreateEntity();
 
+    Light light = Light(DIRECTIONAL, info.color, info.intensity);
+    ecs->AddComponent<Light>(e, light);
+
     glm::vec3 base = glm::vec3(0.0, 0.0, 1.0);
     glm::vec3 axis = glm::cross(base, -glm::normalize(info.direction));
     float angle = glm::acos(glm::dot(base, -glm::normalize(info.direction)));
+    ecs->GetComponent<Transform>(e).Rotate(angle, axis);
 
-    Light light = Light(DIRECTIONAL, info.color, info.intensity);
     if (info.shadowcaster) {
-        Shadowcaster shadowcaster = Shadowcaster(CAMERA_ORTHOGRAPHIC, info.projectionLeft, info.projectionRight, info.projectionBottom, info.projectionTop, 0.1, info.radius);
-        AllocateShadowcaster(light, shadowcaster, backend);
-        ecs->AddComponent<Shadowcaster>(e, shadowcaster);
+        ecs->AddComponent<Shadowcaster>(e, Shadowcaster());
+        AllocateShadowcaster(ecs, e, backend);
+    } else {
+        light.shadowIndex = UINT32_MAX;
     }
-
-    ecs->AddComponent<Light>(e, light);
-    ecs->GetComponent<Transform>(e).Rotate(angle, axis).Translate(info.position - glm::normalize(info.direction) * info.distance);
 
     return e;
 }
@@ -319,11 +322,21 @@ Entity RenderSystem::CreateText(ECS *ecs, const TextCreateInfo& info, VulkanBack
     return e;
 }
 
-void RenderSystem::AllocateShadowcaster(Light& light, Shadowcaster& shadowcaster, VulkanBackend *backend)
+void RenderSystem::AllocateShadowcaster(ECS *ecs, Entity e, VulkanBackend *backend)
 {
-    uint32_t allocation = backend->AllocateShadowcaster(m_Frontend);
-    light.shadowIndex = allocation;
-    shadowcaster.shadowIndex = allocation;
+    Light& light = ecs->GetComponent<Light>(e);
+    Shadowcaster& shadowcaster = ecs->GetComponent<Shadowcaster>(e);
+
+    // For directional lights (cascaded) need to allocate an array slot for each cascade's texture
+    if (static_cast<uint32_t>(light.position.w) == DIRECTIONAL) {
+        for (uint32_t i = 0; i < SHADOW_CASCADE_COUNT; i++) {
+            shadowcaster.cascades[i].shadowMapIndex = backend->AllocateShadowMap(m_Frontend);
+        }
+    } else { // SPOT
+        shadowcaster.cascades[0].shadowMapIndex = backend->AllocateShadowMap(m_Frontend);
+    }
+
+    light.shadowIndex = ecs->GetIndex<Shadowcaster>(e);
 }
 
 void RenderSystem::UploadTexture(Resource resource, ResourceManager *manager, VulkanBackend *backend)

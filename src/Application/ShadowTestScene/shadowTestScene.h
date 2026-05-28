@@ -4,7 +4,7 @@
 #include <Engine/engine.h>
 #include <Engine/System/defaultCameraControlSystem.h>
 
-class SponzaScene : public SceneBase {
+class ShadowTestScene : public SceneBase {
 public: 
     void OnInit(const SceneConfig& config) override;
     void OnUpdate(double deltaTime) override;
@@ -13,6 +13,8 @@ public:
     void OnCleanup() override;
 
 private:
+    Entity m_SceneParent{INVALID_HANDLE};
+
     double m_LastTime{0.0};
     uint64_t m_LastFrame{0};
 

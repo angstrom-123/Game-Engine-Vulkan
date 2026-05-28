@@ -37,7 +37,6 @@ void ApesScene::OnInit(const SceneConfig& config)
         .direction          = glm::vec3(0.6, -1.0, 0.2),
         .intensity          = 2.0,
         .radius             = 60.0,
-        .distance           = 40.0,
     };
     core.renderSystem->CreateDirectionalLight(core.ecs, sunLightInfo, core.graphicsBackend);
 
@@ -50,7 +49,7 @@ void ApesScene::OnInit(const SceneConfig& config)
         .align = TEXT_ALIGN_CENTRE
     };
     Entity text = core.renderSystem->CreateText(core.ecs, textInfo, core.graphicsBackend);
-    core.ecs->GetComponent<Transform>(text).Scale(0.1);
+    core.ecs->GetComponent<Transform>(text).Scale(0.25);
 }
 
 void ApesScene::OnUpdate(double deltaTime)

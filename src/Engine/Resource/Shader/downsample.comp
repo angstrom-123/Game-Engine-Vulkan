@@ -1,56 +1,49 @@
 #version 450
 
-#define MAX_MIP_LEVELS 16
+#define MAX_MIP_LEVELS 5
 #define KERNEL_RADIUS 3
 
-layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+#define BLOOM_THRESHOLD 0.5
 
-layout (set = 3, binding = 0, r11f_g11f_b10f) uniform image2D brightSource;
-layout (set = 3, binding = 2, r11f_g11f_b10f) uniform image2D pyramid[MAX_MIP_LEVELS];
+layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout (set = 2, binding = 3, rgba16f) uniform readonly image2D hdrInput;
+layout (set = 3, binding = 1, r11f_g11f_b10f) uniform image2D pyramid[MAX_MIP_LEVELS];
 
 layout (push_constant) uniform Constants {
     uint currentIndex;
 } constants;
 
+// Uses bilinear filtering
 void main()
 {
     ivec2 outCoord = ivec2(gl_GlobalInvocationID.xy);
     ivec2 outSize = imageSize(pyramid[constants.currentIndex]);
 
-    if (outCoord.x >= outSize.x || outCoord.y >= outSize.y) {
-        return;
-    }
-
-    ivec2 inCoord = outCoord * 2;
-    vec4 sum = vec4(0.0);
-    int samples = 0;
-
+    vec2 uv = (vec2(outCoord) + 0.5) / vec2(outSize);
     if (constants.currentIndex == 0) {
-        ivec2 inSize = imageSize(brightSource);
+        ivec2 size = imageSize(hdrInput);
+        vec2 texelPos = uv * vec2(size) - 0.5;
+        ivec2 texelCoord = ivec2(floor(texelPos));
+        vec2 fractional = fract(texelPos);
 
-        for (int x = -KERNEL_RADIUS; x <= KERNEL_RADIUS; x++) {
-            for (int y = -KERNEL_RADIUS; y <= KERNEL_RADIUS; y++) {
-                ivec2 coord = inCoord + ivec2(x, y);
-                if (coord.x < inSize.x && coord.y < inSize.y) {
-                    sum += imageLoad(brightSource, coord);
-                    samples++;
-                }
-            }
-        }
+        vec4 tl = imageLoad(hdrInput, texelCoord);
+        vec4 tr = imageLoad(hdrInput, texelCoord + ivec2(1, 0));
+        vec4 bl = imageLoad(hdrInput, texelCoord + ivec2(0, 1));
+        vec4 br = imageLoad(hdrInput, texelCoord + ivec2(1, 1));
+
+        imageStore(pyramid[constants.currentIndex], outCoord, mix(mix(tl, tr, fractional.x), mix(bl, br, fractional.x), fractional.y));
     } else {
-        ivec2 inSize = imageSize(pyramid[constants.currentIndex - 1]);
+        ivec2 size = imageSize(pyramid[constants.currentIndex - 1]);
+        vec2 texelPos = uv * vec2(size) - 0.5;
+        ivec2 texelCoord = ivec2(floor(texelPos));
+        vec2 fractional = fract(texelPos);
 
-        for (int x = -KERNEL_RADIUS; x <= KERNEL_RADIUS; x++) {
-            for (int y = -KERNEL_RADIUS; y <= KERNEL_RADIUS; y++) {
-                ivec2 coord = inCoord + ivec2(x, y);
-                if (coord.x < inSize.x && coord.y < inSize.y) {
-                    sum += imageLoad(pyramid[constants.currentIndex - 1], coord);
-                    samples++;
-                }
-            }
-        }
+        vec4 tl = imageLoad(pyramid[constants.currentIndex - 1], texelCoord);
+        vec4 tr = imageLoad(pyramid[constants.currentIndex - 1], texelCoord + ivec2(1, 0));
+        vec4 bl = imageLoad(pyramid[constants.currentIndex - 1], texelCoord + ivec2(0, 1));
+        vec4 br = imageLoad(pyramid[constants.currentIndex - 1], texelCoord + ivec2(1, 1));
+
+        imageStore(pyramid[constants.currentIndex], outCoord, mix(mix(tl, tr, fractional.x), mix(bl, br, fractional.x), fractional.y));
     }
-
-    vec4 average = sum / float(samples);
-    imageStore(pyramid[constants.currentIndex], outCoord, average);
 }

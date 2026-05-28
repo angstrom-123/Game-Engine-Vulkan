@@ -1,20 +1,20 @@
 #version 450
 
 #define BLOOM_THRESHOLD 0.5
+#define MAX_MIP_LEVELS 5
 
 layout (local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout (set = 2, binding = 3, rgba16f) uniform readonly image2D hdrInput;
-layout (set = 3, binding = 0, r11f_g11f_b10f) uniform image2D hdrOutput;
+layout (set = 3, binding = 1, r11f_g11f_b10f) uniform image2D pyramid[MAX_MIP_LEVELS];
+
+const vec3 LUMINANCE_COEFFICIENTS = vec3(0.2126, 0.7152, 0.0722);
 
 void main()
 {
     ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
-    vec4 color = imageLoad(hdrInput, coord);
-    float luminance = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
-    if (luminance > BLOOM_THRESHOLD) {
-        imageStore(hdrOutput, coord, color);
-    } else {
-        imageStore(hdrOutput, coord, vec4(0.0));
+    vec4 color = imageLoad(pyramid[0], coord);
+    float luminance = dot(color.rgb, LUMINANCE_COEFFICIENTS);
+    if (luminance < BLOOM_THRESHOLD) {
+        imageStore(pyramid[0], coord, vec4(0.0));
     }
 }

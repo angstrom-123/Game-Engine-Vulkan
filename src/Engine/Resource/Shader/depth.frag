@@ -15,8 +15,10 @@ layout (push_constant) uniform Constants {
     float metallic;
     float ao;
     float emissive;
-    uint diffuseTexture;
-    uint normalTexture;
+    uint diffuseIndex;
+    uint diffuseLayer;
+    uint normalIndex;
+    uint normalLayer;
     uint flags;
 } constants;
 
@@ -27,7 +29,7 @@ layout (location = 0) in vec2 vUV;
 void main()
 {
     if ((constants.flags & MATERIAL_FLAG_CUTOUT) == MATERIAL_FLAG_CUTOUT) {
-        float alpha = texture(textures[constants.diffuseTexture >> 16], vec3(vUV, constants.diffuseTexture & 0xFFFF)).a;
+        float alpha = texture(textures[constants.diffuseIndex], vec3(vUV, constants.diffuseLayer)).a;
         if (alpha < ALPHA_CUTOUT_THRESHOLD) {
             discard;
         }

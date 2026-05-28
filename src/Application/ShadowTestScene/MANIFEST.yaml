@@ -1,0 +1,8 @@
+manifest: "ShadowTestScene"
+camera:
+  projection: "perspective"
+  maxShadows: 8
+models:
+  - path: "Resource/shadowTest.obj"
+materials:
+  - path: "Resource/shadowTest.mtl"

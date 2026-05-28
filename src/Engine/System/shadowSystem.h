@@ -8,6 +8,9 @@
 
 class ShadowSystem : public System {
 public:
-    void Update(ECS *ecs);
+    void Update(ECS *ecs, Entity camera);
     Signature GetSignature(ECS *ecs) override { return ecs->GetBit<Transform>() | ecs->GetBit<Light>() | ecs->GetBit<Shadowcaster>(); };
+
+private:
+    float m_ShadowDistance{0.0};
 };

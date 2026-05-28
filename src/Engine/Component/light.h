@@ -1,6 +1,31 @@
 #pragma once 
 
-#include "glm/ext/matrix_float4x4.hpp"
+/*
+ * CSM Plan:
+ *  
+ * Each light will no longer store a vp and shadow map index. Instead, it will store 
+ * shadowcaster index.
+ * Shadowcasters will be uploaded in another buffer to the gpu.
+ * Shadowcasters will store view, projection, shadowmap index, depth for each of their cascades.
+ * Shader will use index from light to lookup a shadowcaster, correct cascade selected by depth, calculation as normal.
+ *  - Note: Go back to software bias, since this will need to be different for each cascade.
+ *
+ * Step 1:
+ *  - Cascade frustum calculation.
+ * Step 2:
+ *  - Light & shadowcaster structure change.
+ *  - Need to add and upload a new buffer.
+ *  - Need to fixup shaders to work for this. 
+ *  - Need to fixup light creation.
+ *  - Need to fixup shadow allocation (max shadowmaps = max shadowcasters * cascades)
+ * Step 3:
+ *  - Need to render all shadowmaps correctly in shaders 
+ * Step 4:
+ *  - Need to select correct cascade based on depth 
+ *  - Also need to bias differently based on depth
+ */
+
+// #include "glm/ext/matrix_float4x4.hpp"
 #include "glm/ext/vector_float4.hpp"
 #include "glm/ext/vector_float3.hpp"
 
@@ -16,12 +41,7 @@ struct LightCreateInfo {
     float radius;                   // Spot / Point
     float innerConeRadians;         // Spot
     float outerConeRadians;         // Spot
-    float distance;                 // Directional
     bool shadowcaster;              // Shadow - Spot / Directional
-    float projectionLeft;           // Shadow - Directional
-    float projectionRight;          // Shadow - Directional
-    float projectionBottom;         // Shadow - Directional
-    float projectionTop;            // Shadow - Directional
 };
 
 // NOTE: Light struct contains a lot of redundant data (position, direction, shadowindex) because 
@@ -40,7 +60,7 @@ struct Light {
     float innerCone;        //                  (spot)
     float outerCone;        //                  (spot)
     uint32_t shadowIndex;   //                  (spot / directional);
-    glm::mat4x4 lightVP;    //                  (spot / directional)
+    // glm::mat4x4 lightVP;    //                  (spot / directional)
 
     Light() = default;
     Light(Point, glm::vec3 color, float intensity, float radius);

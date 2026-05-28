@@ -15,17 +15,19 @@ const VkFormat MATERIAL_FORMAT = VK_FORMAT_R8G8B8A8_UNORM;
 const VkFormat LIGHTING_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT; 
 const VkFormat BLOOM_FORMAT = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
 const VkFormat TONE_MAP_FORMAT = VK_FORMAT_R8G8B8A8_SRGB;
-const uint32_t SHADOW_RESOLUTION = 4096;
+const uint32_t SHADOW_RESOLUTION = 2048;
 const uint32_t COLOR_SMALL_RESOLUTION = 1024;
 const uint32_t COLOR_LARGE_RESOLUTION = 2048;
 const uint32_t DATA_SMALL_RESOLUTION = 1024;
 const uint32_t DATA_LARGE_RESOLUTION = 2048;
 const uint32_t FONT_RESOLUTION = 2048;
 const uint32_t MAX_LIGHTS = 1024;
+const uint32_t MAX_SHADOWCASTERS = 24;
+const uint32_t SHADOW_CASCADE_COUNT = 3;
 const uint32_t MAX_LIGHTS_PER_TILE = 256;
 const uint32_t COMPUTE_TILE_SIZE = 16;
-const uint32_t MAX_BLOOM_MIPS = 16;
-const uint32_t BLOOM_BLUR_RADIUS = 7;
+const uint32_t MAX_BLOOM_MIPS = 5;
+const uint32_t BLOOM_BLUR_RADIUS = 4;
 
 struct PerFrameUniforms {
     struct {
@@ -79,8 +81,10 @@ struct FragmentPushConstants {
         float metallic{0.0};
         float ao{0.0};
         float emissive{0.0};
-        uint32_t diffuseTexture{0};
-        uint32_t normalTexture{0};
+        uint32_t diffuseIndex{0};
+        uint32_t diffuseLayer{0};
+        uint32_t normalIndex{0};
+        uint32_t normalLayer{0};
         uint32_t flags{0};
     } material;
 };
@@ -101,6 +105,7 @@ struct FrameData {
     AllocatedBuffer lightBuffer;            // Stores the lights in a flat array
     AllocatedBuffer lightIndexBuffer;       // Stores the indices into the light buffer / tile
     AllocatedBuffer lightTileCountBuffer;   // Stores the number of lights / tile
+    AllocatedBuffer shadowBuffer;           // Stores the shadowcasters in a flat array
 
 #ifdef PROFILING
     VkQueryPool queryPool;
@@ -159,7 +164,7 @@ struct GraphicsFrontend {
         { FONT_RESOLUTION, VK_FORMAT_R8_UNORM }                 // Font
     };
 
-    bool shadowsEnabled{false};
+    uint32_t maxShadows{0};
     AttachmentArray shadowArray{ SHADOW_RESOLUTION, VK_FORMAT_D32_SFLOAT };
 };
 

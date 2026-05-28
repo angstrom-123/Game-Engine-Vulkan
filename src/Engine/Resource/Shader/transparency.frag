@@ -19,6 +19,8 @@
 #define SPOT_LIGHT 1 
 #define DIRECTIONAL_LIGHT 2
 
+#define SHADOW_CASCADE_COUNT 3
+
 struct Light {
     vec4 position;      // w = light type (0: Point, 1: Spot, 2: Directional)
     vec4 color;         // rgb + intensity
@@ -27,7 +29,17 @@ struct Light {
     float innerCone;    // spot
     float outerCone;    // spot
     uint shadowIndex;   // spot / directional
-    mat4 lightVP;       // spot / directional
+};
+
+struct Cascade {
+    mat4 vp;
+    uint shadowMapIndex;
+    float far;
+    float near;
+};
+
+struct Shadowcaster {
+    Cascade cascades[SHADOW_CASCADE_COUNT];
 };
 
 layout (push_constant) uniform Constants {
@@ -36,8 +48,10 @@ layout (push_constant) uniform Constants {
     float metallic;
     float ao;
     float emissive;
-    uint diffuseTexture;
-    uint normalTexture;
+    uint diffuseIndex;
+    uint diffuseLayer;
+    uint normalIndex;
+    uint normalLayer;
     uint flags;
 } constants;
 
@@ -67,6 +81,9 @@ layout (set = 0, binding = 0) uniform PerFrameUniforms {
 layout (set = 0, binding = 1) readonly buffer LightBuffer { 
     Light lights[]; 
 } lightBuffer;
+layout (set = 0, binding = 2) readonly buffer ShadowBuffer { 
+    Shadowcaster shadowcasters[]; 
+} shadowBuffer;
 
 layout (set = 1, binding = 0) uniform sampler2DArray textures[TEXTURE_ARRAY_COUNT];
 layout (set = 1, binding = 1) uniform sampler2DArrayShadow shadowTextures;
@@ -121,13 +138,80 @@ float ComputeShadow(Light light, vec3 worldPos, vec3 normal, vec3 lightDir)
     // In case of non-shadowcasting lights
     if (light.shadowIndex == 0xFFFFFFFF) return 0.0;
 
-    // Depth reconstruction and sampling
-    vec4 positionLightspace = light.lightVP * vec4(worldPos, 1.0);
-    vec3 projectionCoords = positionLightspace.xyz / positionLightspace.w;
-    projectionCoords.xy = projectionCoords.xy * 0.5 + 0.5;
+    Shadowcaster shadowcaster = shadowBuffer.shadowcasters[light.shadowIndex];
 
-    vec4 shadowCoord = vec4(projectionCoords.xy, light.shadowIndex, projectionCoords.z);
-    float shadow = texture(shadowTextures, shadowCoord);
+    // Select cascade
+    Cascade cascade0 = shadowcaster.cascades[0];
+    Cascade cascade1 = cascade0;
+    float bias0 = max(0.05 * (1.0 - dot(normal, lightDir)), 0.005);
+    float bias1 = bias0;
+    float cascadeBlend = 0.0;
+    if (uint(light.position.w) == DIRECTIONAL_LIGHT) {
+        vec4 positionViewspace = uniforms.view * vec4(worldPos, 1.0);
+        float depth = -positionViewspace.z;
+        int layerIndex = -1;
+        while (++layerIndex < SHADOW_CASCADE_COUNT) {
+            Cascade currCascade = shadowcaster.cascades[layerIndex];
+            if (depth < currCascade.far) {
+                cascade0 = currCascade;
+                bias0 *= 1.0 / (currCascade.far * 0.5);
+
+                if (layerIndex + 1 < SHADOW_CASCADE_COUNT) {
+                    Cascade nextCascade = shadowcaster.cascades[layerIndex + 1];
+                    if (depth > nextCascade.near) {
+                        cascade1 = nextCascade;
+                        bias1 *= 1.0 / (nextCascade.far * 0.5);
+                        cascadeBlend = clamp((depth - nextCascade.near) / (currCascade.far - nextCascade.near), 0.0, 1.0);
+                    }
+                }
+                break;
+            }
+        }
+
+        // Early exit if out of range
+        if (layerIndex == SHADOW_CASCADE_COUNT) {
+            return 0.0;
+        }
+    }
+
+    // Depth reconstruction and sampling
+    vec2 texelSize = 1.0 / vec2(uniforms.shadowSize);
+    float shadow = 0.0;
+
+    if (cascadeBlend > 0.0) {
+        vec4 positionLightspace0 = cascade0.vp * vec4(worldPos, 1.0);
+        vec3 projectionCoords0 = positionLightspace0.xyz / positionLightspace0.w;
+        projectionCoords0.xy = projectionCoords0.xy * 0.5 + 0.5;
+
+        vec4 positionLightspace1 = cascade1.vp * vec4(worldPos, 1.0);
+        vec3 projectionCoords1 = positionLightspace1.xyz / positionLightspace1.w;
+        projectionCoords1.xy = projectionCoords1.xy * 0.5 + 0.5;
+
+        for (int x = -2; x <= 2; x++) {
+            for (int y = -2; y <= 2; y++) {
+                vec4 shadowCoord0 = vec4(projectionCoords0.xy + texelSize * vec2(x, y), cascade0.shadowMapIndex, projectionCoords0.z - bias0);
+                float shadow0 = texture(shadowTextures, shadowCoord0);
+
+                vec4 shadowCoord1 = vec4(projectionCoords1.xy + texelSize * vec2(x, y), cascade1.shadowMapIndex, projectionCoords1.z - bias1);
+                float shadow1 = texture(shadowTextures, shadowCoord1);
+
+                shadow += mix(shadow0, shadow1, cascadeBlend);
+            }
+        }
+        shadow /= 25.0;
+    } else {
+        vec4 positionLightspace0 = cascade0.vp * vec4(worldPos, 1.0);
+        vec3 projectionCoords0 = positionLightspace0.xyz / positionLightspace0.w;
+        projectionCoords0.xy = projectionCoords0.xy * 0.5 + 0.5;
+
+        for (int x = -2; x <= 2; x++) {
+            for (int y = -2; y <= 2; y++) {
+                vec4 shadowCoord = vec4(projectionCoords0.xy + texelSize * vec2(x, y), cascade0.shadowMapIndex, projectionCoords0.z - bias0);
+                shadow += texture(shadowTextures, shadowCoord);
+            }
+        }
+        shadow /= 25.0;
+    }
 
     return shadow;
 }
@@ -182,24 +266,33 @@ vec3 ComputePBR(Light light, vec3 worldPos, vec3 viewDir, vec3 normal, vec3 albe
 
 vec4 ComputeAlbedo()
 {
-    vec4 albedo = texture(textures[constants.diffuseTexture >> 16], vec3(vUV, constants.diffuseTexture & 0xFFFF));
-    albedo *= constants.albedo;
+    vec4 albedo = texture(textures[constants.diffuseIndex], vec3(vUV, constants.diffuseLayer));
+    albedo.xyz *= constants.albedo.xyz;
     return albedo;
 }
 
 vec3 ComputeNormal()
 {
-    vec3 normal = texture(textures[constants.normalTexture >> 16], vec3(vUV, constants.normalTexture & 0xFFFF)).xyz;
+    // TODO: Can go back to this if I fixup normal mipmapping
+    // vec3 normal = texture(textures[constants.normalIndex], vec3(vUV, constants.normalLayer)).xyz;
+
+    // Goofy manual lod selection to fix some visible triangle seams
+    float dist = length(vPosition - uniforms.position.xyz);
+    float lod = log2(dist * 0.8); // higher scaling factor = higher lod
+    lod = clamp(lod, 0.0, textureQueryLevels(textures[constants.normalIndex]) - 1);
+
+    vec3 normal = textureLod(textures[constants.normalIndex], vec3(vUV, constants.normalLayer), lod).xyz;
+
     normal = normal * 2.0 - 1.0;
     normal = normalize(vTBN * normal);
-    return normal;
+    return normal * 0.5 + 0.5;
 }
 
 void main()
 {
     // Special case for rendering world-space text
-    if (constants.diffuseTexture >> 16 == TEXTURE_ARRAY_COUNT - 1) {
-        float alpha = texture(textures[constants.diffuseTexture >> 16], vec3(vUV, constants.diffuseTexture & 0xFFFF)).r;
+    if (constants.diffuseIndex == TEXTURE_ARRAY_COUNT - 1) {
+        float alpha = texture(textures[constants.diffuseIndex], vec3(vUV, constants.diffuseLayer)).r;
         outColor = vec4(constants.albedo.rgb, alpha * constants.albedo.a);
         return;
     }

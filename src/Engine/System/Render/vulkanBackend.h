@@ -5,6 +5,7 @@
  *  Set 0:
  *      0 - Per Frame Uniform Buffer        - uniform buffer
  *      1 - Light Buffer                    - storage buffer
+ *      2 - Shadow Buffer                   - storage buffer
  *
  *  Set 1:
  *      0 - Texture Array Sampler           - combined image sampler array
@@ -20,9 +21,8 @@
  *      3 - HDR Image                       - storage image
  *
  *  Set 3:
- *      0 - Bloom HDR filtered image        - storage image
- *      1 - Bloom Ping-Pong Buffer          - storage image
- *      2 - Bloom Downsample Pyramid        - storage image array
+ *      0 - Bloom Ping-Pong Buffer          - storage image
+ *      1 - Bloom Downsample Pyramid        - storage image array
  *
  *
  *                    Descriptor Set   Pipeline Layout 
@@ -78,7 +78,7 @@ public:
     AllocatedBuffer AllocateVertexBuffer(const Vertex *const vertices, uint32_t count);
     AllocatedTexture AllocateTexture(ImageResource& image, GraphicsFrontend& frontend);
     AllocatedTexture AllocateTexture(uint8_t *pixels, glm::ivec2 size, uint32_t flags, int32_t channels, GraphicsFrontend& frontend);
-    uint32_t AllocateShadowcaster(GraphicsFrontend& frontend);
+    uint32_t AllocateShadowMap(GraphicsFrontend& frontend);
     void RequestResize(const GraphicsFrontend& frontend) { m_ResizeCameras.push_back(frontend.camera); }
     void WaitForIdle() { VK_CHECK(vkDeviceWaitIdle(device)); }
     
@@ -180,12 +180,12 @@ private:
     OffscreenTarget m_NormalTarget;
     OffscreenTarget m_MaterialTarget;
     OffscreenTarget m_LightingTarget;
-    OffscreenTarget m_BloomLightExtractionTarget;
     OffscreenTarget m_BloomPingPongTarget;
     OffscreenTargetArray m_BloomPyramidTarget;
     OffscreenTarget m_ToneMapTarget;
 
-    VkSampler m_LinearSampler{VK_NULL_HANDLE};
+    VkSampler m_OffscreenSampler{VK_NULL_HANDLE};
+    VkSampler m_TextureSampler{VK_NULL_HANDLE};
     VkSampler m_NormalSampler{VK_NULL_HANDLE};
     VkSampler m_ComparisonSampler{VK_NULL_HANDLE};
 

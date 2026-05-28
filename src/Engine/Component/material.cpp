@@ -8,8 +8,10 @@ FragmentPushConstants::Material Material::Pack()
         .metallic = metallic,
         .ao = ao,
         .emissive = emissive,
-        .diffuseTexture = (diffuseTexture.arrayID << 16) | diffuseTexture.layerID,
-        .normalTexture = (normalTexture.arrayID << 16) | normalTexture.layerID,
+        .diffuseIndex = diffuseTexture.arrayID,
+        .diffuseLayer = diffuseTexture.layerID,
+        .normalIndex = normalTexture.arrayID,
+        .normalLayer = normalTexture.layerID,
         .flags = flags
     };
 }

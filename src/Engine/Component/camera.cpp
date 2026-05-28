@@ -1,6 +1,6 @@
 #include "camera.h"
 
-Camera::Camera(Perspective, glm::vec3 position, glm::vec2 dimensions, float fovRadians, float near, float far)
+Camera::Camera(Perspective, glm::vec3 position, glm::vec2 dimensions, float fovRadians, float near, float far, float shadowDistance)
 {
     view = glm::lookAt(position, position + glm::vec3(0.0, 0.0, -1.0), glm::vec3(0.0, 1.0, 0.0));
     projection = VulkanPerspective(fovRadians, dimensions.x / dimensions.y, near, far);
@@ -10,9 +10,10 @@ Camera::Camera(Perspective, glm::vec3 position, glm::vec2 dimensions, float fovR
     this->fov = fovRadians;
     pitch = 0.0;
     yaw = 0.0;
+    this->shadowDistance = shadowDistance;
 }
 
-Camera::Camera(Orthographic, glm::vec3 position, glm::vec2 dimensions, float scale, float near, float far)
+Camera::Camera(Orthographic, glm::vec3 position, glm::vec2 dimensions, float scale, float near, float far, float shadowDistance)
 {
     view = glm::lookAt(position, position + glm::vec3(0.0, 0.0, -1.0), glm::vec3(0.0, 1.0, 0.0));
     dimensions = (dimensions * scale) / 2.0f;
@@ -23,6 +24,7 @@ Camera::Camera(Orthographic, glm::vec3 position, glm::vec2 dimensions, float sca
     this->scale = scale;
     pitch = 0.0;
     yaw = 0.0;
+    this->shadowDistance = shadowDistance;
 }
 
 glm::mat4x4 Camera::VulkanPerspective(float fovRadians, float aspect, float near, float far)

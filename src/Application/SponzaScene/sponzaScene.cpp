@@ -1,5 +1,4 @@
 #include "sponzaScene.h"
-#include "glm/ext/scalar_constants.hpp"
 #include <GLFW/glfw3.h>
 #include <cstdlib>
 
@@ -32,20 +31,6 @@ void SponzaScene::OnInit(const SceneConfig& config)
     const auto [origin, _] = core.renderSystem->GetModel(core.ecs, "Resource/sponza.obj");
     core.ecs->GetComponent<Transform>(origin).Scale(0.015).Translate(0.0, -2.0, 0.0);
 
-    // Add a lot of random lights
-    m_LightsParent = core.ecs->CreateEntity();
-    srand(time(nullptr));
-    for (uint32_t i = 0; i < 128; i++) {
-        LightCreateInfo pointLightInfo = {
-            .position = glm::vec3(Random(-15.0, 15.0), Random(-5.0, 25.0), Random(-15.0, 15.0)),
-            .color = glm::vec3(Random(0.0, 1.0), Random(0.0, 1.0), Random(0.0, 1.0)),
-            .intensity = Random(0.5, 1.5),
-            .radius = Random(1.0, 7.0)
-        };
-        Entity point = core.renderSystem->CreatePointLight(core.ecs, pointLightInfo);
-        core.ecs->GetComponent<Transform>(point).InheritFrom(m_LightsParent);
-    }
-
     // Directional shadowcasting light
     LightCreateInfo sunLightInfo = {
         .position           = glm::vec3(0.0),
@@ -53,27 +38,22 @@ void SponzaScene::OnInit(const SceneConfig& config)
         .direction          = glm::vec3(0.2, -1.0, 0.1),
         .intensity          = 15.0,
         .radius             = 50.0,
-        .distance           = 40.0,
         .shadowcaster       = true,
-        .projectionLeft     = -40.0,
-        .projectionRight    = 40.0,
-        .projectionBottom   = -40.0,
-        .projectionTop      = 40.0
     };
     core.renderSystem->CreateDirectionalLight(core.ecs, sunLightInfo, core.graphicsBackend);
 
-    // Spot shadowcasting light
-    LightCreateInfo spotLightInfo = {
-        .position           = glm::vec3(0.0, 6.0, 0.0),
-        .color              = glm::vec3(1.0, 0.0, 1.0),
-        .direction          = glm::vec3(-1.0, 0.0, 0.3),
-        .intensity          = 1.0,
-        .radius             = 20.0,
-        .innerConeRadians   = glm::radians(20.0),
-        .outerConeRadians   = glm::radians(45.0),
-        .shadowcaster       = true
-    };
-    core.renderSystem->CreateSpotLight(core.ecs, spotLightInfo, core.graphicsBackend);
+    // // Spot shadowcasting light
+    // LightCreateInfo spotLightInfo = {
+    //     .position           = glm::vec3(0.0, 6.0, 0.0),
+    //     .color              = glm::vec3(1.0, 0.0, 1.0),
+    //     .direction          = glm::vec3(-1.0, 0.0, 0.3),
+    //     .intensity          = 1.0,
+    //     .radius             = 20.0,
+    //     .innerConeRadians   = glm::radians(20.0),
+    //     .outerConeRadians   = glm::radians(45.0),
+    //     .shadowcaster       = true
+    // };
+    // core.renderSystem->CreateSpotLight(core.ecs, spotLightInfo, core.graphicsBackend);
 }
 
 void SponzaScene::OnUpdate(double deltaTime)
@@ -86,18 +66,6 @@ void SponzaScene::OnUpdate(double deltaTime)
         m_LastTime = currTime;
         m_LastFrame = core.engine->GetFrameNumber();
     }
-
-    // Move all the point lights around
-    m_ElapsedTime += deltaTime;
-    const float AMPLITUDE = 5.0;
-    const glm::vec3 FREQUENCY = { 0.2, 0.1, 0.15 };
-    const glm::vec3 PHASE = { 0.0, 0.5, 1.0 };
-    glm::vec3 lightOffset = glm::vec3(
-        AMPLITUDE * std::sin(2.0 * glm::pi<float>() * m_ElapsedTime * FREQUENCY.x + PHASE.x),
-        AMPLITUDE * std::sin(2.0 * glm::pi<float>() * m_ElapsedTime * FREQUENCY.y + PHASE.y),
-        AMPLITUDE * std::sin(2.0 * glm::pi<float>() * m_ElapsedTime * FREQUENCY.z + PHASE.z)
-    );
-    core.ecs->GetComponent<Transform>(m_LightsParent).Translate(lightOffset);
 
     // Update our systems
     m_CameraController->Update(core.ecs, core.engine->GetKeysDown(), core.engine->GetFrameMouseDelta(), deltaTime);

@@ -13,8 +13,6 @@
 - Also add AA to bloom bright spot image
 
 ### Shadow
-- Frustum culling shadowcasting light depth renders 
-- Cascades
 - Soft shadows
 
 ### GLTF instead of OBJ
@@ -33,7 +31,6 @@
 ### IBL 
 - Image based lighting 
 - Cubemap image imports or otherwise 
-
 
 ### Add Fonts To Manifest File 
 - Allow each scene to create its own font resources
