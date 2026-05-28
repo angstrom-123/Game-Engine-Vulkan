@@ -72,4 +72,4 @@ to the project's root as this is the working directory.
 
 ## Screenshots
 
-<img width="1920" height="1080" alt="20260524_02h10m03s_grim" src="https://github.com/user-attachments/assets/b0933468-029b-41b6-80f6-85115031f6f8" />
+<img width="1920" height="1080" alt="20260528_03h27m51s_grim" src="https://github.com/user-attachments/assets/90fcd43f-a70c-45c7-acd3-3b124c39e4f6" />
