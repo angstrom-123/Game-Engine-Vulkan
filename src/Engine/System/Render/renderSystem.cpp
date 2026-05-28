@@ -13,9 +13,7 @@
 
 RenderSystem::~RenderSystem()
 {
-    for (auto it = m_Deleter.rbegin(); it != m_Deleter.rend(); it++) {
-        (*it)();
-    }
+    for (auto it = m_Deleter.rbegin(); it != m_Deleter.rend(); it++) (*it)();
     m_Deleter.clear();
 }
 

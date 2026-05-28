@@ -1,12 +1,15 @@
 #include "textureArray.h"
+#include "Util/allocator.h"
 #include "vulkanBackend.h"
 #include "Util/myAssert.h"
+#include "vulkan_core.h"
 #include <cstring>
 
-TextureArray::TextureArray(uint32_t resolution, VkFormat format)
+TextureArray::TextureArray(uint32_t resolution, VkFormat format, TextureKind kind)
 {
     this->resolution = resolution;
-    this->format = format;
+    m_Format = format;
+    m_TextureKind = kind;
     levelCount = static_cast<uint32_t>(std::floor(std::log2(std::max(resolution, resolution)))) + 1;
 }
 
@@ -14,7 +17,7 @@ void TextureArray::Init(uint32_t layerCount, class VulkanBackend& backend)
 {
     this->layerCount = layerCount;
     for (uint32_t i = 0; i < layerCount; i++) {
-        freeLayers.push(i);
+        m_FreeLayers.push(i);
     }
 
     VkExtent3D extent = {
@@ -26,7 +29,7 @@ void TextureArray::Init(uint32_t layerCount, class VulkanBackend& backend)
     VkImageCreateInfo imageInfo = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .imageType = VK_IMAGE_TYPE_2D,
-        .format = format,
+        .format = m_Format,
         .extent = extent,
         .mipLevels = levelCount,
         .arrayLayers = layerCount,
@@ -45,12 +48,10 @@ void TextureArray::Init(uint32_t layerCount, class VulkanBackend& backend)
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .image = image.image,
         .viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY,
-        .format = format,
+        .format = m_Format,
         .subresourceRange = {
             .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
             .levelCount = levelCount,
-            .baseArrayLayer = 0,
             .layerCount = layerCount,
         }
     };
@@ -58,13 +59,6 @@ void TextureArray::Init(uint32_t layerCount, class VulkanBackend& backend)
 
     // Transition whole array to shader read
     backend.submitter.ImmediateSubmit(backend.device, backend.graphicsQueue, [&](VkCommandBuffer commandBuffer) {
-        VkImageSubresourceRange range = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = levelCount,
-            .baseArrayLayer = 0,
-            .layerCount = layerCount
-        };
         VkImageMemoryBarrier barrier = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = nullptr,
@@ -73,65 +67,68 @@ void TextureArray::Init(uint32_t layerCount, class VulkanBackend& backend)
             .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
             .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             .image = image.image,
-            .subresourceRange = range,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .levelCount = levelCount,
+                .layerCount = layerCount
+            }
         };
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
     });
 
-    initialized = true;
+    m_Initialized = true;
 }
 
 void TextureArray::Cleanup(VkDevice device, VmaAllocator allocator)
 {
-    ASSERT(initialized && "Not initialized");
+    ASSERT(m_Initialized && "Not initialized");
     vkDestroyImageView(device, view, nullptr);
     vmaDestroyImage(allocator, image.image, image.allocation);
 }
 
 uint32_t TextureArray::Allocate(ImageResource& imageData, class VulkanBackend& backend)
 {
-    ASSERT(initialized && "Not initialized");
-    ASSERT(freeLayers.size() > 0 && "Allocating too many texture array layers");
-    uint32_t layerIndex = freeLayers.front();
-    freeLayers.pop();
+    ASSERT(m_Initialized && "Not initialized");
+    ASSERT(m_FreeLayers.size() > 0 && "Allocating too many texture array layers");
+
+    uint32_t layerIndex = m_FreeLayers.front();
+    m_FreeLayers.pop();
 
     ASSERT(imageData.pixels != nullptr && "Image is not loaded");
-    if (static_cast<uint32_t>(imageData.size.x) < resolution || static_cast<uint32_t>(imageData.size.y) < resolution) {
-        bool res = imageData.Resize(glm::ivec2(resolution));
-        ASSERT(res && "Failed to resize image");
-    }
 
     VkDeviceSize imageSizeBytes = imageData.size.x * imageData.size.y * imageData.channels;
 
-    // Staging buffer
-    VkBufferCreateInfo stagingBufferInfo = {
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .pNext = nullptr,
-        .size = imageSizeBytes,
-        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+    // Staging image
+    VkExtent3D extent = {
+        .width = static_cast<uint32_t>(imageData.size.x),
+        .height = static_cast<uint32_t>(imageData.size.y),
+        .depth = 1
+    };
+    VkImageCreateInfo imageInfo = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = m_Format,
+        .extent = extent,
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_LINEAR, // IMPORTANT FOR THE DIRECT CPU COPY
+        .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     VmaAllocationCreateInfo allocInfo = {
         .usage = VMA_MEMORY_USAGE_CPU_ONLY
     };
+    AllocatedImage stagingImage;
+    vmaCreateImage(backend.allocator, &imageInfo, &allocInfo, &stagingImage.image, &stagingImage.allocation, nullptr);
+    VMA_NAME_ALLOCATION(backend.allocator, stagingImage.allocation, "Texture_Array_Staging_Image");
 
-    AllocatedBuffer stagingBuffer;
-    vmaCreateBuffer(backend.allocator, &stagingBufferInfo, &allocInfo, &stagingBuffer.buffer, &stagingBuffer.allocation, nullptr);
-    VMA_NAME_ALLOCATION(backend.allocator, stagingBuffer.allocation, "Texture_Array_Staging_Buffer");
-
-    vmaMapMemory(backend.allocator, stagingBuffer.allocation, &stagingBuffer.data);
-    std::memcpy(stagingBuffer.data, imageData.pixels, imageSizeBytes);
-    vmaUnmapMemory(backend.allocator, stagingBuffer.allocation);
+    vmaMapMemory(backend.allocator, stagingImage.allocation, &stagingImage.data);
+    std::memcpy(stagingImage.data, imageData.pixels, imageSizeBytes);
+    vmaUnmapMemory(backend.allocator, stagingImage.allocation);
 
     // Copy buffer to texture array gpu memory
     backend.submitter.ImmediateSubmit(backend.device, backend.graphicsQueue, [&](VkCommandBuffer commandBuffer) {
-        VkImageSubresourceRange range = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = layerIndex,
-            .layerCount = 1
-        };
-
         // Transition image to optimal layout for a data transfer
         VkImageMemoryBarrier barrierToTransfer = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -141,40 +138,58 @@ uint32_t TextureArray::Allocate(ImageResource& imageData, class VulkanBackend& b
             .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
             .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             .image = image.image,
-            .subresourceRange = range,
-        };
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrierToTransfer);
-
-        // Copy staging buffer to image
-        VkBufferImageCopy copy = {
-            .bufferOffset = 0,
-            .bufferRowLength = 0,
-            .bufferImageHeight = 0,
-            .imageSubresource = {
+            .subresourceRange = {
                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel = 0,
+                .levelCount = 1,
                 .baseArrayLayer = layerIndex,
-                .layerCount = 1,
-            },
-            .imageExtent = { resolution, resolution, 1 }
+                .layerCount = 1
+            }
         };
-        vkCmdCopyBufferToImage(commandBuffer, stagingBuffer.buffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        vkCmdPipelineBarrier(commandBuffer, 
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                0, 0, nullptr, 0, nullptr, 1, &barrierToTransfer);
 
-        // Check for linear blit support (for mipmap creation)
-        VkFormatProperties properties;
-        vkGetPhysicalDeviceFormatProperties(backend.physicalDevice, format, &properties);
-        if (!(properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) {
-            ERROR("Texture image format does not support linear blitting");
-            WARN("TODO: Implement alternative image resizing for mipmap generation");
-            abort();
-        }
+        barrierToTransfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrierToTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrierToTransfer.image = stagingImage.image;
+        barrierToTransfer.subresourceRange.baseArrayLayer = 0;
+        vkCmdPipelineBarrier(commandBuffer, 
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                0, 0, nullptr, 0, nullptr, 1, &barrierToTransfer);
 
-        // Generate mipmaps
+        // Blit staging buffer to image (resizing if required)
+        VkImageBlit blit = {
+            .srcSubresource = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            },
+            .srcOffsets = {
+                { 0, 0, 0 },
+                { imageData.size.x, imageData.size.y, 1 }
+            },
+            .dstSubresource = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseArrayLayer = layerIndex,
+                .layerCount = 1
+            },
+            .dstOffsets = {
+                { 0, 0, 0 },
+                { static_cast<int32_t>(resolution), static_cast<int32_t>(resolution), 1 }
+            },
+        };
+        vkCmdBlitImage(commandBuffer, 
+                stagingImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 
+                image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+                1, &blit, VK_FILTER_LINEAR);
+
+        // Transfer mip level 0 to transfer src
         VkImageMemoryBarrier mipmapBarrier = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext = nullptr,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             .image = image.image,
             .subresourceRange = {
                 .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
@@ -183,13 +198,6 @@ uint32_t TextureArray::Allocate(ImageResource& imageData, class VulkanBackend& b
                 .layerCount = 1,
             },
         };
-
-        // Transfer mip level 0 to transfer src
-        mipmapBarrier.subresourceRange.baseMipLevel = 0;
-        mipmapBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        mipmapBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        mipmapBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        mipmapBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &mipmapBarrier);
 
         // Transfer all mip levels except level 0 to transfer destination
@@ -202,6 +210,7 @@ uint32_t TextureArray::Allocate(ImageResource& imageData, class VulkanBackend& b
             vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &mipmapBarrier);
         }
 
+        // Generate mips
         int32_t mipWidth = resolution;
         int32_t mipHeight = resolution;
         for (uint32_t i = 1; i < levelCount; i++) {
@@ -262,7 +271,19 @@ uint32_t TextureArray::Allocate(ImageResource& imageData, class VulkanBackend& b
         vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &mipmapBarrier);
     });
 
-    vmaDestroyBuffer(backend.allocator, stagingBuffer.buffer, stagingBuffer.allocation);
+    // vmaDestroyBuffer(backend.allocator, stagingBuffer.buffer, stagingBuffer.allocation);
+    vmaDestroyImage(backend.allocator, stagingImage.image, stagingImage.allocation);
 
     return layerIndex;
+}
+
+// TODO
+void TextureArray::GenerateMipsColor()
+{
+
+}
+
+void TextureArray::GenerateMipsNormal()
+{
+
 }

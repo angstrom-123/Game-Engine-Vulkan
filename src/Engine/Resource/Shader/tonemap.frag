@@ -25,8 +25,8 @@ layout (set = 0, binding = 0) uniform PerFrameUniforms {
     uint maxLightsPerTile;
 } uniforms;
 
-layout (set = 1, binding = 2) uniform sampler2D hdrTexture;
-layout (set = 1, binding = 4) uniform sampler2D bloomTexture;
+layout (set = 1, binding = 3) uniform sampler2D hdrTexture;
+layout (set = 1, binding = 5) uniform sampler2D bloomTexture;
 
 layout (location = 0) in vec2 vUV;
 

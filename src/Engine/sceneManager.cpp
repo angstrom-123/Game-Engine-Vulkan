@@ -3,7 +3,10 @@
 #include "engine.h"
 #include "event.h"
 #include "scene.h"
+#include <chrono>
 #include <future>
+
+namespace chrono = std::chrono;
 
 SceneManager::~SceneManager()
 {
@@ -78,6 +81,9 @@ void SceneManager::SwitchScene(Engine *engine, VulkanBackend *backend, ResourceM
 void SceneManager::LoadScene(Engine *engine, VulkanBackend *backend, ResourceManager *manager, Scene scene)
 {
     ASSERT(!m_LoadedScenes.contains(scene) && "Loading scene that is already loaded");
+
+    uint64_t startTimestamp = chrono::time_point_cast<chrono::milliseconds>(chrono::high_resolution_clock::now()).time_since_epoch().count();
+
     SceneBase *sceneBase = m_Scenes[scene];
     std::vector<Resource> resources = manager->LoadAll(sceneBase->core.path);
     const ResourceManifest& manifest = manager->GetManifest(sceneBase->core.path);
@@ -100,6 +106,9 @@ void SceneManager::LoadScene(Engine *engine, VulkanBackend *backend, ResourceMan
         .windowSize = engine->GetWindowSize()
     });
     m_LoadedScenes.insert(scene);
+
+    uint64_t endTimestamp = chrono::time_point_cast<chrono::milliseconds>(chrono::high_resolution_clock::now()).time_since_epoch().count();
+    INFO("Scene load took " << endTimestamp - startTimestamp << "ms");
 }
 
 SceneFuture SceneManager::LoadSceneAsync(Engine *engine, VulkanBackend *backend, ResourceManager *manager, Scene scene)
@@ -109,8 +118,9 @@ SceneFuture SceneManager::LoadSceneAsync(Engine *engine, VulkanBackend *backend,
     SceneBase *sceneBase = m_Scenes[scene];
     return (SceneFuture) {
         .scene = scene,
-        .resourceFuture = manager->LoadAllAsync(sceneBase->core.path),
         .status = SCENE_LOAD_STATUS_LOADING_RESOURCES,
+        .startTimestamp = static_cast<uint64_t>(chrono::time_point_cast<chrono::milliseconds>(chrono::high_resolution_clock::now()).time_since_epoch().count()),
+        .resourceFuture = manager->LoadAllAsync(sceneBase->core.path),
     };
 }
 
@@ -119,7 +129,7 @@ void SceneManager::Update(Engine *engine, VulkanBackend *backend, ResourceManage
     // Make progress on loading a scene if required
     switch (m_SceneFuture.status) {
         case SCENE_LOAD_STATUS_LOADING_RESOURCES: {
-            if (m_SceneFuture.resourceFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            if (m_SceneFuture.resourceFuture.wait_for(chrono::seconds(0)) == std::future_status::ready) {
                 INFO("Async resource load complete");
                 SceneBase *sceneBase = m_Scenes[m_SceneFuture.scene];
                 m_SceneFuture.preInitFuture = std::async(std::launch::async, &SceneBase::PreInit, sceneBase, engine, backend, manager, (SceneBaseConfig) {
@@ -131,7 +141,7 @@ void SceneManager::Update(Engine *engine, VulkanBackend *backend, ResourceManage
             break;
         }
         case SCENE_LOAD_STATUS_PRE_INITING_SCENE: {
-            if (m_SceneFuture.preInitFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            if (m_SceneFuture.preInitFuture.wait_for(chrono::seconds(0)) == std::future_status::ready) {
                 INFO("Async pre init complete");
                 SceneBase *sceneBase = m_Scenes[m_SceneFuture.scene];
 
@@ -161,6 +171,9 @@ void SceneManager::Update(Engine *engine, VulkanBackend *backend, ResourceManage
                 sceneBase->core.renderSystem->Update(sceneBase->core.ecs, sceneBase->core.graphicsBackend);
                 sceneBase->OnSelect();
                 m_SceneFuture.status = SCENE_LOAD_STATUS_DONE;
+
+                uint64_t endTimestamp = chrono::time_point_cast<chrono::milliseconds>(chrono::high_resolution_clock::now()).time_since_epoch().count();
+                INFO("Scene load took " << endTimestamp - m_SceneFuture.startTimestamp << "ms");
             }
             break;
         }

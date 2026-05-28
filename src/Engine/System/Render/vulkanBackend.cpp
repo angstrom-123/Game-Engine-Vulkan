@@ -35,7 +35,7 @@
 #ifdef PROFILING 
     #include "Util/profiler.h"
 
-    const uint32_t HEADING_COUNT = 14;
+    const uint32_t HEADING_COUNT = 10;
     
     static uint32_t s_GpuTimestampIndex = 0;
     #define GPU_PROFILING_BEGIN_FRAME() s_GpuTimestampIndex = 0
@@ -62,14 +62,10 @@ VulkanBackend::~VulkanBackend()
 {
     VK_CHECK(vkDeviceWaitIdle(device));
 
-    for (auto it = m_MainDeleter.rbegin(); it != m_MainDeleter.rend(); it++) {
-        (*it)();
-    }
+    for (auto it = m_MainDeleter.rbegin(); it != m_MainDeleter.rend(); it++) (*it)();
     m_MainDeleter.clear();
 
-    for (auto it = m_DynamicDeleter.rbegin(); it != m_DynamicDeleter.rend(); it++) {
-        (*it)();
-    }
+    for (auto it = m_DynamicDeleter.rbegin(); it != m_DynamicDeleter.rend(); it++) (*it)();
     m_DynamicDeleter.clear();
 
     vmaDestroyAllocator(allocator);
@@ -134,7 +130,7 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
         };
     };
 
-    VkWriteDescriptorSet writes[FRAMES_IN_FLIGHT] = {};
+    VkWriteDescriptorSet writes[FRAMES_IN_FLIGHT * 2] = {};
     for (uint32_t i = 0; i < FRAMES_IN_FLIGHT; i++) {
         writes[i] = {
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -147,12 +143,18 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
     }
     vkUpdateDescriptorSets(device, FRAMES_IN_FLIGHT, writes, 0, nullptr);
 
-    // ================================================== Shadow Array ==================================================
+    // ================================================== Shadow Arrays ==================================================
 
     frontend.maxShadows = info.maxShadows;
     frontend.shadowArray.Init(std::max(info.maxShadows * SHADOW_CASCADE_COUNT, 1u), *this);
+    VkDescriptorImageInfo shadowComparisonImageInfo = {
+        .sampler = m_ComparisonShadowSampler,
+        .imageView = frontend.shadowArray.view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+    };
+
     VkDescriptorImageInfo shadowImageInfo = {
-        .sampler = m_ComparisonSampler,
+        .sampler = m_LinearShadowSampler,
         .imageView = frontend.shadowArray.view,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
     };
@@ -163,6 +165,14 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = frames[i].descriptorSet1,
             .dstBinding = 1,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &shadowComparisonImageInfo
+        };
+        writes[FRAMES_IN_FLIGHT + i] = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = frames[i].descriptorSet1,
+            .dstBinding = 2,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             .pImageInfo = &shadowImageInfo
@@ -176,9 +186,7 @@ void VulkanBackend::CleanupFrontend(GraphicsFrontend& frontend)
     frontend.camera = INVALID_HANDLE;
 
     for (TextureArray& array : frontend.textureArrays) {
-        if (array.initialized) {
-            array.Cleanup(device, allocator);
-        }
+        array.Cleanup(device, allocator);
     }
 
     if (frontend.shadowArray.initialized) {
@@ -858,11 +866,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
                 0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
 
-        GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
-
         // In place light extraction on pyramid[0]
-
-        GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
         // Dispatch Compute
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomLightExtractionPipeline);
@@ -874,11 +878,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
                 0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
 
-        GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
-
         // Downsample Pyramid
-
-        GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
         // Dispatch Compute for each layer
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomDownsamplePipeline);
@@ -904,11 +904,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                     0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
         }
 
-        GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
-
         // Blur 
-
-        GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
         // Dispatch Compute for each layer
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomHorizontalBlurPipeline);
@@ -948,11 +944,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                     0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
         }
 
-        GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
-
         // Upsample / Accumulate
-
-        GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
         // Dispatch Compute for each layer (starting from the second lowest level)
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomAccumulatePipeline);
@@ -1302,9 +1294,7 @@ void VulkanBackend::Resize(ECS *ecs)
     }
 
     // Cleanup old resources
-    for (auto it = m_DynamicDeleter.rbegin(); it != m_DynamicDeleter.rend(); it++) {
-        (*it)();
-    }
+    for (auto it = m_DynamicDeleter.rbegin(); it != m_DynamicDeleter.rend(); it++) (*it)();
     m_DynamicDeleter.clear();
 
     // Recreate resources
@@ -1738,13 +1728,15 @@ void VulkanBackend::InitSamplers()
     samplerInfo.mipLodBias = 0.0;
     samplerInfo.anisotropyEnable = VK_FALSE;
     samplerInfo.maxAnisotropy = 0.0;
-    VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_ComparisonSampler));
+    VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_ComparisonShadowSampler));
+    VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_LinearShadowSampler));
 
     m_MainDeleter.push_back([=, this] {
         vkDestroySampler(device, m_OffscreenSampler, nullptr);
         vkDestroySampler(device, m_TextureSampler, nullptr);
         vkDestroySampler(device, m_NormalSampler, nullptr);
-        vkDestroySampler(device, m_ComparisonSampler, nullptr);
+        vkDestroySampler(device, m_ComparisonShadowSampler, nullptr);
+        vkDestroySampler(device, m_LinearShadowSampler, nullptr);
     });
 }
 
@@ -1756,10 +1748,9 @@ void VulkanBackend::InitDescriptors()
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * 4 },                      // 4x GBuffer
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * TEXTURE_ARRAY_MAX_ENUM }, // MAXx Texture arrays
         { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * 3},                       // HDR, LDR, Bloom samplers
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF },                          // Shadow array
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * 2 },                      // Shadow array comparison, shadow array regular
         { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FIF },                                   // HDR storage image
         { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, FIF * 4 },                              // Lights, Light indices, Tile counts, Shadowcasters
-        // { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FIF * 2 },                               // Bloom Image, PingPong Buffer
         { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FIF },                                   // PingPong Buffer
         { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FIF * MAX_BLOOM_MIPS },                  // Bloom Downsample pyramid
     };
@@ -1821,33 +1812,39 @@ void VulkanBackend::InitDescriptors()
     // ================================================== Create Set 1 ==================================================
 
     {
-        VkDescriptorSetLayoutBinding bindings[5] = {
+        VkDescriptorSetLayoutBinding bindings[6] = {
             { // Texture arrays
                 .binding = 0,
                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 .descriptorCount = TEXTURE_ARRAY_MAX_ENUM,
                 .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
             },
-            { // Shadow array
+            { // Shadow array (comparison)
                 .binding = 1,
                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 .descriptorCount = 1,
                 .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
             },
-            { // HDR sampler
+            { // Shadow array
                 .binding = 2,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_FRAGMENT_BIT
+            },
+            { // HDR sampler
+                .binding = 3,
                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 .descriptorCount = 1,
                 .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT
             },
             { // LDR sampler
-                .binding = 3,
+                .binding = 4,
                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 .descriptorCount = 1,
                 .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
             },
             { // Bloom sampler
-                .binding = 4,
+                .binding = 5,
                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 .descriptorCount = 1,
                 .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
@@ -1855,7 +1852,7 @@ void VulkanBackend::InitDescriptors()
         };
         VkDescriptorSetLayoutCreateInfo layoutInfo = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .bindingCount = 5,
+            .bindingCount = 6,
             .pBindings = bindings
         };
         VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_DescriptorLayout1));
@@ -2034,11 +2031,12 @@ void VulkanBackend::UpdateDescriptors()
 
             VkWriteDescriptorSet writes[3] = {
                 // Binding 0 = Texture array - not written here
-                // Binding 1 = Shadow array - not written here
+                // Binding 1 = Shadow array (comparison) - not written here
+                // Binding 2 = Shadow array - not written here
                 { // HDR sampler
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                     .dstSet = frame.descriptorSet1,
-                    .dstBinding = 2,
+                    .dstBinding = 3,
                     .descriptorCount = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                     .pImageInfo = &hdrSamplerInfo
@@ -2046,7 +2044,7 @@ void VulkanBackend::UpdateDescriptors()
                 { // LDR sampler
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                     .dstSet = frame.descriptorSet1,
-                    .dstBinding = 3,
+                    .dstBinding = 4,
                     .descriptorCount = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                     .pImageInfo = &ldrSamplerInfo
@@ -2054,7 +2052,7 @@ void VulkanBackend::UpdateDescriptors()
                 { // Bloom sampler
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                     .dstSet = frame.descriptorSet1,
-                    .dstBinding = 4,
+                    .dstBinding = 5,
                     .descriptorCount = 1,
                     .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                     .pImageInfo = &bloomSamplerInfo
@@ -2628,7 +2626,7 @@ VkShaderModule VulkanBackend::LoadShaderModule(const std::filesystem::path& path
 #ifdef PROFILING
 void VulkanBackend::InitProfiling()
 {
-    std::string headings[HEADING_COUNT] = { "Depth", "GBuffer", "Shadow", "Culling", "Lighting", "Transparency", "BloomDown1", "BloomExtract", "BloomDown", "BloomBlur", "BloomUp", "Tonemap", "AA", "Total" };
+    std::string headings[HEADING_COUNT] = { "Depth", "GBuffer", "Shadow", "Culling", "Lighting", "Transparency", "Bloom", "Tonemap", "AA", "Total" };
     PROFILER_BEGIN_GPU_SESSION(headings, HEADING_COUNT);
 
     if (m_PhysicalDeviceProperties.limits.timestampPeriod == 0 || !m_PhysicalDeviceProperties.limits.timestampComputeAndGraphics) {

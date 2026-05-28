@@ -27,7 +27,7 @@ layout (set = 0, binding = 0) uniform PerFrameUniforms {
     uint maxLightsPerTile;
 } uniforms;
 
-layout (set = 1, binding = 3) uniform sampler2D ldrSampler;
+layout (set = 1, binding = 4) uniform sampler2D ldrSampler;
 
 layout (location = 0) in vec2 vUV;
 

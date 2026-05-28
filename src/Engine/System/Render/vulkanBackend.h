@@ -9,10 +9,11 @@
  *
  *  Set 1:
  *      0 - Texture Array Sampler           - combined image sampler array
- *      1 - Shadow Array Sampler            - combined image sampler array
- *      2 - HDR Sampler                     - combined image sampler
- *      3 - LDR Sampler                     - combined image sampler
- *      4 - Bloom Sampler                   - combined image sampler
+ *      1 - Shadow Array Comparison Sampler - combined image sampler array
+ *      2 - Shadow Array Sampler            - combined image sampler array
+ *      3 - HDR Sampler                     - combined image sampler
+ *      4 - LDR Sampler                     - combined image sampler
+ *      5 - Bloom Sampler                   - combined image sampler
  *
  *  Set 2:
  *      0 - Light Indices                   - storage buffer
@@ -23,7 +24,6 @@
  *  Set 3:
  *      0 - Bloom Ping-Pong Buffer          - storage image
  *      1 - Bloom Downsample Pyramid        - storage image array
- *
  *
  *                    Descriptor Set   Pipeline Layout 
  *                     0   1   2   3  
@@ -187,7 +187,8 @@ private:
     VkSampler m_OffscreenSampler{VK_NULL_HANDLE};
     VkSampler m_TextureSampler{VK_NULL_HANDLE};
     VkSampler m_NormalSampler{VK_NULL_HANDLE};
-    VkSampler m_ComparisonSampler{VK_NULL_HANDLE};
+    VkSampler m_ComparisonShadowSampler{VK_NULL_HANDLE};
+    VkSampler m_LinearShadowSampler{VK_NULL_HANDLE};
 
     VkCommandPool m_CommandPool{VK_NULL_HANDLE};
 

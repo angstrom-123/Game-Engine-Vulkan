@@ -16,10 +16,12 @@ enum SceneLoadStatus {
 };
 
 struct SceneFuture {
-    Scene scene = INVALID_HANDLE;
+    Scene scene{INVALID_HANDLE};
+    SceneLoadStatus status{SCENE_LOAD_STATUS_NONE};
+    uint64_t startTimestamp{0};
+
     std::future<std::vector<Resource>> resourceFuture;
     std::future<void> preInitFuture;
-    SceneLoadStatus status = SCENE_LOAD_STATUS_NONE;
 };
 
 class SceneManager {

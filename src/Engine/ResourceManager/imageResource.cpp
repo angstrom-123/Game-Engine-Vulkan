@@ -4,9 +4,6 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
 
-#define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include <stb/stb_image_resize2.h>
-
 #include "Util/myAssert.h"
 
 bool ImageResource::Load(const std::filesystem::path& path, uint32_t imageLoadFlags)
@@ -32,18 +29,5 @@ bool ImageResource::Load(const std::filesystem::path& path, uint32_t imageLoadFl
         }
     }
 
-    return true;
-}
-
-bool ImageResource::Resize(glm::ivec2 newSize)
-{
-    uint8_t *newPixels = stbir_resize_uint8_linear(pixels, size.x, size.y, 0, 0, newSize.x, newSize.y, 0, STBIR_RGBA);
-    if (!newPixels) {
-        ERROR("Failed to resize image");
-        return false;
-    }
-    stbi_image_free(pixels);
-    pixels = newPixels;
-    size = newSize;
     return true;
 }

@@ -157,11 +157,11 @@ struct GraphicsFrontend {
     Entity camera{INVALID_HANDLE};
 
     TextureArray textureArrays[TEXTURE_ARRAY_MAX_ENUM] {
-        { COLOR_SMALL_RESOLUTION, VK_FORMAT_R8G8B8A8_SRGB },    // Color small
-        { COLOR_LARGE_RESOLUTION, VK_FORMAT_R8G8B8A8_SRGB },    // Color large
-        { DATA_SMALL_RESOLUTION, VK_FORMAT_R8G8B8A8_UNORM },    // Data small
-        { DATA_LARGE_RESOLUTION, VK_FORMAT_R8G8B8A8_UNORM },    // Data large
-        { FONT_RESOLUTION, VK_FORMAT_R8_UNORM }                 // Font
+        { COLOR_SMALL_RESOLUTION, VK_FORMAT_R8G8B8A8_SRGB, TextureKind::COLOR },    // Color small
+        { COLOR_LARGE_RESOLUTION, VK_FORMAT_R8G8B8A8_SRGB, TextureKind::COLOR },    // Color large
+        { DATA_SMALL_RESOLUTION, VK_FORMAT_R8G8B8A8_UNORM, TextureKind::NORMAL },   // Data small
+        { DATA_LARGE_RESOLUTION, VK_FORMAT_R8G8B8A8_UNORM, TextureKind::NORMAL },   // Data large
+        { FONT_RESOLUTION, VK_FORMAT_R8_UNORM, TextureKind::COLOR }                 // Font
     };
 
     uint32_t maxShadows{0};

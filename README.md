@@ -65,7 +65,7 @@ to the project's root as this is the working directory.
 - fkYAML
 - GLFW
 - GLM
-- STB (image, image_resize2, truetype)
+- STB (image, truetype)
 - VMA
 - VkBootstrap
 - Vulkan SDK

@@ -64,14 +64,19 @@ RELEASE_FLAGS   += -O3
 PROFILING_FLAGS := $(RELEASE_FLAGS) 
 PROFILING_FLAGS += -DPROFILING
 
+POISSON_FILE	:= src/Engine/Resource/Shader/poisson.glsl
+
 export MAKE_DIR RELEASE_DIR DEBUG_DIR PROFILING_DIR CC EXE_EXT SHADERC LINKS C_FLAGS DEBUG_FLAGS RELEASE_FLAGS PROFILING_FLAGS TARGET_OS
 
 all:
 	@echo "COMPILING DEFAULT (release)"
 	@$(MAKE) -C src BUILD_TYPE=release release
 
+$(POISSON_FILE):
+	@./poisson.py
+
 .PHONY: shaders
-shaders:
+shaders: $(POISSON_FILE)
 	@echo COMPILING SHADERS 
 	@$(MAKE) -C src/Engine/Resource/Shader 
 

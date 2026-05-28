@@ -42,7 +42,6 @@ public:
     };
 
     bool Load(const std::filesystem::path& path, uint32_t imageLoadFlags);
-    bool Resize(glm::ivec2 newSize);
 
 public:
     uint32_t flags = 0;
