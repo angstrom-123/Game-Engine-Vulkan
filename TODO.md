@@ -8,6 +8,10 @@
 
 ## Improvements
 
+### Embedding
+- Embed some default resources as headers 
+- Could use for engine font, etc.
+
 ### Anti-Aliasing
 - SMAA
 - Also add AA to bloom bright spot image

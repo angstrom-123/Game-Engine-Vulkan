@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <alloca.h>
+#include <cstdint>
 #include <functional>
 #include <ranges>
 
@@ -101,6 +102,9 @@ void VulkanBackend::Init(struct GLFWwindow *window, Config &config)
     InitBuffers();
     InitDescriptors();
     InitPipelines();
+    InitMiscBuffers();
+    InitMiscDescriptors();
+    InitMiscPipelines();
 
 #ifdef PROFILING 
     InitProfiling();
@@ -264,7 +268,10 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
     };
     VkBufferMemoryBarrier fillBarriers[2] = { fillBarrier, fillBarrier };
     fillBarriers[1].buffer = frame.lightTileCountBuffer.buffer;
-    vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 2, fillBarriers, 0, nullptr);
+    vkCmdPipelineBarrier(frame.commandBuffer, 
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+            0, 0, nullptr, 2, fillBarriers, 0, nullptr);
 
     // Update uniform buffer
     PerFrameUniforms *uniforms = static_cast<PerFrameUniforms *>(frame.uniformBuffer.data);
@@ -1253,11 +1260,12 @@ AllocatedTexture VulkanBackend::AllocateTexture(ImageResource& image, GraphicsFr
 
     // Allocate
     uint32_t layerIndex = frontend.textureArrays[arrayID].Allocate(image, *this);
+    AllocatedTexture allocation = { arrayID, layerIndex };
 
-    return (AllocatedTexture) {
-        .arrayID = arrayID,
-        .layerID = layerIndex,
-    };
+    // Generate mips
+    GenerateMips(allocation, image, frontend);
+
+    return allocation;
 }
 
 AllocatedTexture VulkanBackend::AllocateTexture(uint8_t *pixels, glm::ivec2 size, uint32_t flags, int32_t channels, GraphicsFrontend& frontend)
@@ -1653,24 +1661,29 @@ void VulkanBackend::InitBuffers()
     };
 
     for (FrameData& frame : frames) {
-        vmaCreateBuffer(allocator, &uniformBufferInfo, &cpuGpuBufferAllocInfo, 
-                        &frame.uniformBuffer.buffer, &frame.uniformBuffer.allocation, nullptr);
+        vmaCreateBuffer(allocator, 
+                &uniformBufferInfo, &cpuGpuBufferAllocInfo, 
+                &frame.uniformBuffer.buffer, &frame.uniformBuffer.allocation, nullptr);
         vmaMapMemory(allocator, frame.uniformBuffer.allocation, &frame.uniformBuffer.data);
 
-        vmaCreateBuffer(allocator, &lightBufferInfo, &cpuGpuBufferAllocInfo, 
-                        &frame.lightBuffer.buffer, &frame.lightBuffer.allocation, nullptr);
+        vmaCreateBuffer(allocator, 
+                &lightBufferInfo, &cpuGpuBufferAllocInfo, 
+                &frame.lightBuffer.buffer, &frame.lightBuffer.allocation, nullptr);
         vmaMapMemory(allocator, frame.lightBuffer.allocation, &frame.lightBuffer.data);
 
-        vmaCreateBuffer(allocator, &shadowBufferInfo, &cpuGpuBufferAllocInfo, 
-                        &frame.shadowBuffer.buffer, &frame.shadowBuffer.allocation, nullptr);
+        vmaCreateBuffer(allocator, 
+                &shadowBufferInfo, &cpuGpuBufferAllocInfo, 
+                &frame.shadowBuffer.buffer, &frame.shadowBuffer.allocation, nullptr);
         vmaMapMemory(allocator, frame.shadowBuffer.allocation, &frame.shadowBuffer.data);
 
-        vmaCreateBuffer(allocator, &lightIndexBufferInfo, &gpuBufferAllocInfo, 
-                        &frame.lightIndexBuffer.buffer, &frame.lightIndexBuffer.allocation, nullptr);
+        vmaCreateBuffer(allocator, 
+                &lightIndexBufferInfo, &gpuBufferAllocInfo, 
+                &frame.lightIndexBuffer.buffer, &frame.lightIndexBuffer.allocation, nullptr);
         vmaMapMemory(allocator, frame.lightIndexBuffer.allocation, &frame.lightIndexBuffer.data);
 
-        vmaCreateBuffer(allocator, &lightTileCountBufferInfo, &gpuBufferAllocInfo, 
-                        &frame.lightTileCountBuffer.buffer, &frame.lightTileCountBuffer.allocation, nullptr);
+        vmaCreateBuffer(allocator, 
+                &lightTileCountBufferInfo, &gpuBufferAllocInfo, 
+                &frame.lightTileCountBuffer.buffer, &frame.lightTileCountBuffer.allocation, nullptr);
         vmaMapMemory(allocator, frame.lightTileCountBuffer.allocation, &frame.lightTileCountBuffer.data);
 
         m_MainDeleter.push_back([=, this] {
@@ -2420,6 +2433,91 @@ void VulkanBackend::InitPipelines()
     });
 }
 
+void VulkanBackend::InitMiscBuffers()
+{
+    // None for now
+}
+
+void VulkanBackend::InitMiscDescriptors()
+{
+    VkDescriptorPoolSize poolSizes[1] = {
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, MAX_NORMAL_MIPS * 2 },    // Normal mipmap sources and destinations
+    };
+    VkDescriptorPoolCreateInfo poolInfo = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .maxSets = 1,
+        .poolSizeCount = 1,
+        .pPoolSizes = poolSizes,
+    };
+    VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_MiscDescriptorPool));
+    m_MainDeleter.push_back([=, this] {
+        vkDestroyDescriptorPool(device, m_MiscDescriptorPool, nullptr);
+    });
+
+    // ================================================== Create Normal Mipmap Set  ==================================================
+
+    {
+        VkDescriptorSetLayoutBinding bindings[2] = {
+            { // Source image 
+                .binding = 0,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                .descriptorCount = MAX_NORMAL_MIPS,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+            },
+            { // Destination image 
+                .binding = 1,
+                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                .descriptorCount = MAX_NORMAL_MIPS,
+                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+            },
+        };
+        VkDescriptorSetLayoutCreateInfo layoutInfo = {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .bindingCount = 2,
+            .pBindings = bindings
+        };
+        VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_NormalMipmapDescriptorLayout));
+        m_MainDeleter.push_back([=, this] {
+            vkDestroyDescriptorSetLayout(device, m_NormalMipmapDescriptorLayout, nullptr);
+        });
+
+        // Allocate
+        VkDescriptorSetAllocateInfo allocInfo = {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = m_MiscDescriptorPool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &m_NormalMipmapDescriptorLayout
+        };
+        VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &m_NormalMipmapDescriptorSet));
+    }
+}
+
+void VulkanBackend::InitMiscPipelines()
+{
+    VkPushConstantRange normalMipmapPushConstantRange = {
+        .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+        .size = sizeof(NormalMipmapPushConstants),
+    };
+
+    VkPipelineLayoutCreateInfo pipelineInfo = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &m_NormalMipmapDescriptorLayout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &normalMipmapPushConstantRange
+    };
+    VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_NormalMipmapPipelineLayout));
+    m_MainDeleter.push_back([=, this] {
+        vkDestroyPipelineLayout(device, m_NormalMipmapPipelineLayout, nullptr);
+    });
+
+    m_NormalMipmapPipeline = CreateComputePipeline({
+        .pipelineName = "Normal-Mipmap",
+        .computeShader = "normalMipmap.comp",
+        .pipelineLayout = m_NormalMipmapPipelineLayout
+    });
+}
+
 VkPipeline VulkanBackend::CreateComputePipeline(const ComputePipelineCreateInfo&& info)
 {
     INFO("Creating compute pipeline: " << info.pipelineName);
@@ -2621,6 +2719,454 @@ VkShaderModule VulkanBackend::LoadShaderModule(const std::filesystem::path& path
     delete[] buf;
 
     return shaderModule;
+}
+
+void VulkanBackend::GenerateMips(AllocatedTexture allocation, const ImageResource& image, GraphicsFrontend& frontend)
+{
+    uint32_t imageWidth = image.size.x;
+    uint32_t imageHeight = image.size.y;
+    VkDeviceSize imageSizeBytes = imageWidth * imageHeight * image.channels;
+
+    const TextureArray& textureArray = frontend.textureArrays[allocation.arrayID];
+
+    // Staging image
+    VkExtent3D extent = {
+        .width = imageWidth,
+        .height = imageHeight,
+        .depth = 1
+    };
+    VkImageCreateInfo imageInfo = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = textureArray.format,
+        .extent = extent,
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    if (textureArray.textureKind == TextureKind::NORMAL) {
+        imageInfo.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
+    }
+    VmaAllocationCreateInfo gpuAllocInfo = {
+        .usage = VMA_MEMORY_USAGE_GPU_ONLY
+    };
+
+    AllocatedImage stagingImage;
+    vmaCreateImage(allocator, &imageInfo, &gpuAllocInfo, &stagingImage.image, &stagingImage.allocation, nullptr);
+    VMA_NAME_ALLOCATION(allocator, stagingImage.allocation, "Texture_Array_Staging_Image");
+
+    VkBufferCreateInfo bufferInfo = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .pNext = nullptr,
+        .size = imageSizeBytes,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+    };
+    VmaAllocationCreateInfo cpuAllocInfo = {
+        .usage = VMA_MEMORY_USAGE_CPU_ONLY
+    };
+
+    AllocatedBuffer stagingBuffer;
+    vmaCreateBuffer(allocator, &bufferInfo, &cpuAllocInfo, &stagingBuffer.buffer, &stagingBuffer.allocation, nullptr);
+    VMA_NAME_ALLOCATION(allocator, stagingBuffer.allocation, "Texture_Array_Staging_Buffer");
+
+    // Copy into staging
+    vmaMapMemory(allocator, stagingBuffer.allocation, &stagingBuffer.data);
+    std::memcpy(stagingBuffer.data, image.pixels, imageSizeBytes);
+    vmaUnmapMemory(allocator, stagingBuffer.allocation);
+
+    VkImageView levelViews[MAX_NORMAL_MIPS] = {}; // In case the texture is a normal map
+    submitter.ImmediateSubmit(device, graphicsQueue, [&](VkCommandBuffer commandBuffer) {
+        if (textureArray.textureKind == TextureKind::COLOR) { // Colour images get mipmapped with bilinear filtering
+            // Transition image to optimal layout for a data transfer
+            VkImageMemoryBarrier barrier = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .image = textureArray.image.image,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .levelCount = 1,
+                    .baseArrayLayer = allocation.layerID,
+                    .layerCount = 1
+                }
+            };
+            vkCmdPipelineBarrier(commandBuffer, 
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                    0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+            // Transition staging image to optimal too
+            barrier.image = stagingImage.image;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            vkCmdPipelineBarrier(commandBuffer, 
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                    0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+            // Copy buffer to staging image 
+            VkBufferImageCopy copy = {
+                .bufferOffset = 0,
+                .bufferRowLength = 0,
+                .bufferImageHeight = 0,
+                .imageSubresource = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .layerCount = 1,
+                },
+                .imageExtent = { imageWidth, imageHeight, 1 }
+            };
+            vkCmdCopyBufferToImage(commandBuffer, 
+                    stagingBuffer.buffer, stagingImage.image, 
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+                    1, &copy);
+
+            // Transition staging image to transfer source
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            vkCmdPipelineBarrier(commandBuffer, 
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                    0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+            // Blit staging image to first mip level resizing if required
+            VkImageBlit blit = {
+                .srcSubresource = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .layerCount = 1
+                },
+                .srcOffsets = {
+                    { 0, 0, 0 },
+                    { image.size.x, image.size.y, 1 }
+                },
+                .dstSubresource = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseArrayLayer = allocation.layerID,
+                    .layerCount = 1
+                },
+                .dstOffsets = {
+                    { 0, 0, 0 },
+                    { static_cast<int32_t>(textureArray.resolution), static_cast<int32_t>(textureArray.resolution), 1 }
+                },
+            };
+            vkCmdBlitImage(commandBuffer, 
+                    stagingImage.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 
+                    textureArray.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+                    1, &blit, VK_FILTER_LINEAR);
+
+            // Transfer mip level 0 to transfer src
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.image = textureArray.image.image;
+            barrier.subresourceRange.baseArrayLayer = allocation.layerID;
+            vkCmdPipelineBarrier(commandBuffer, 
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                    0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+            // Transfer all mip levels except level 0 to transfer destination
+            for (uint32_t i = 1; i < textureArray.levelCount; i++) {
+                barrier.subresourceRange.baseMipLevel = i;
+                barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                vkCmdPipelineBarrier(commandBuffer, 
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+                        VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                        0, 0, nullptr, 0, nullptr, 1, &barrier);
+            }
+
+            // Generate mips
+            int32_t mipWidth = textureArray.resolution;
+            int32_t mipHeight = textureArray.resolution;
+            for (uint32_t i = 1; i < textureArray.levelCount; i++) {
+                // Blit next mip level
+                VkImageBlit blit = {
+                    .srcSubresource = {
+                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .mipLevel = i - 1,
+                        .baseArrayLayer = allocation.layerID,
+                        .layerCount = 1
+                    },
+                    .srcOffsets = {
+                        { 0, 0, 0 },
+                        { mipWidth, mipHeight, 1 }
+                    },
+                    .dstSubresource = {
+                        .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                        .mipLevel = i,
+                        .baseArrayLayer = allocation.layerID,
+                        .layerCount = 1
+                    },
+                    .dstOffsets = {
+                        { 0, 0, 0 },
+                        { mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1 }
+                    },
+                };
+                vkCmdBlitImage(commandBuffer, 
+                        textureArray.image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, 
+                        textureArray.image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+                        1, &blit, VK_FILTER_LINEAR);
+
+                // Wait for blit to finish and transfer to shader-readable
+                barrier.subresourceRange.baseMipLevel = i - 1;
+                barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                vkCmdPipelineBarrier(commandBuffer, 
+                        VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+                        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+                // If not last mip level, transition current level to src, ready to blit to next
+                if (i < textureArray.levelCount - 1) {
+                    barrier.subresourceRange.baseMipLevel = i;
+                    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                    vkCmdPipelineBarrier(commandBuffer, 
+                            VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                            VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                            0, 0, nullptr, 0, nullptr, 1, &barrier);
+                }
+
+                // Update dimensions for next level
+                if (mipWidth > 1) mipWidth /= 2;
+                if (mipHeight > 1) mipHeight /= 2;
+            }
+
+            // Transition final mip level to shader-readable
+            barrier.subresourceRange.baseMipLevel = textureArray.levelCount - 1;
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            vkCmdPipelineBarrier(commandBuffer, 
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+                    0, 0, nullptr, 0, nullptr, 1, &barrier);
+        } else if (textureArray.textureKind  == TextureKind::NORMAL) { // Normal images need renormalization when mipmapping
+            // Create views for each level (view 0 = staging image view)
+            VkImageViewCreateInfo viewInfo = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = stagingImage.image,
+                .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                .format = textureArray.format,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .levelCount = 1,
+                    .layerCount = 1
+                }
+            };
+            VK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &levelViews[0]));
+
+            viewInfo.image = textureArray.image.image;
+            viewInfo.subresourceRange.baseArrayLayer = allocation.layerID;
+            for (uint32_t i = 0; i < textureArray.levelCount; i++) {
+                viewInfo.subresourceRange.baseMipLevel = i;
+                VK_CHECK(vkCreateImageView(device, &viewInfo, nullptr, &levelViews[i + 1]));
+            }
+
+            // Transition image to general
+            VkImageMemoryBarrier barrier = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = nullptr,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .image = textureArray.image.image,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .levelCount = textureArray.levelCount,
+                    .baseArrayLayer = allocation.layerID,
+                    .layerCount = 1
+                }
+            };
+            vkCmdPipelineBarrier(commandBuffer, 
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+            // Transition staging image to transfer destination
+            barrier.image = stagingImage.image;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.subresourceRange.baseArrayLayer = 0;
+            barrier.subresourceRange.levelCount = 1;
+            vkCmdPipelineBarrier(commandBuffer, 
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                    0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+            // Copy buffer to staging image 
+            VkBufferImageCopy copy = {
+                .bufferOffset = 0,
+                .bufferRowLength = 0,
+                .bufferImageHeight = 0,
+                .imageSubresource = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .layerCount = 1,
+                },
+                .imageExtent = { imageWidth, imageHeight, 1 }
+            };
+            vkCmdCopyBufferToImage(commandBuffer, 
+                    stagingBuffer.buffer, stagingImage.image, 
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+                    1, &copy);
+
+            // Transition staging image to general
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            vkCmdPipelineBarrier(commandBuffer, 
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+            // Update descriptors
+            VkDescriptorImageInfo imageInfos[MAX_NORMAL_MIPS] = {};
+            for (uint32_t i = 0; i < textureArray.levelCount + 1; i++) {
+                imageInfos[i] = {
+                    .sampler = VK_NULL_HANDLE,
+                    .imageView = levelViews[i],
+                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+                };
+            }
+            // Point all remaining descriptors to the last mip to avoid validation issues
+            for (uint32_t i = textureArray.levelCount + 1; i < MAX_NORMAL_MIPS; i++) {
+                imageInfos[i] = {
+                    .sampler = VK_NULL_HANDLE,
+                    .imageView = levelViews[textureArray.levelCount],
+                    .imageLayout = VK_IMAGE_LAYOUT_GENERAL
+                };
+            }
+
+            VkWriteDescriptorSet writes[2] = {
+                { // Source
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = m_NormalMipmapDescriptorSet,
+                    .dstBinding = 0,
+                    .descriptorCount = MAX_NORMAL_MIPS,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                    .pImageInfo = imageInfos
+                },
+                { // Destination
+                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .dstSet = m_NormalMipmapDescriptorSet,
+                    .dstBinding = 1,
+                    .descriptorCount = MAX_NORMAL_MIPS,
+                    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                    .pImageInfo = imageInfos
+                }
+            };
+            vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+
+            // Prepare to compute
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_NormalMipmapPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, 
+                    VK_PIPELINE_BIND_POINT_COMPUTE, m_NormalMipmapPipelineLayout, 
+                    0, 1, &m_NormalMipmapDescriptorSet, 0, nullptr);
+
+            // Scale up staging image to top mip level
+            NormalMipmapPushConstants constants = {
+                .srcIndex = 0,
+                .srcWidth = imageWidth,
+                .srcHeight = imageHeight,
+                .dstIndex = 1,
+                .dstWidth = textureArray.resolution,
+                .dstHeight = textureArray.resolution
+            };
+            vkCmdPushConstants(commandBuffer, 
+                    m_NormalMipmapPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
+                    0, sizeof(NormalMipmapPushConstants), 
+                    &constants);
+
+            uint32_t groupsX = (textureArray.resolution + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+            uint32_t groupsY = (textureArray.resolution + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+            vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
+
+            barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            barrier.image = textureArray.image.image;
+            barrier.subresourceRange.baseArrayLayer = allocation.layerID;
+            barrier.subresourceRange.levelCount = 1;
+
+            for (uint32_t i = 0; i < textureArray.levelCount - 1; i++) {
+                uint32_t srcLevel = i;
+                uint32_t dstLevel = i + 1;
+
+                uint32_t srcSize = glm::max(textureArray.resolution >> srcLevel, 1u);
+                uint32_t dstSize = glm::max(textureArray.resolution >> dstLevel, 1u);
+
+                // NOTE: Index 0 of the bound view is the staging image so the mips start at index 1
+                NormalMipmapPushConstants constants = {
+                    .srcIndex = srcLevel + 1,
+                    .srcWidth = srcSize,
+                    .srcHeight = srcSize,
+                    .dstIndex = dstLevel + 1,
+                    .dstWidth = dstSize,
+                    .dstHeight = dstSize
+                };
+
+                vkCmdPushConstants(commandBuffer, 
+                        m_NormalMipmapPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
+                        0, sizeof(NormalMipmapPushConstants), 
+                        &constants);
+
+                uint32_t groupsXY = (dstSize + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+                vkCmdDispatch(commandBuffer, groupsXY, groupsXY, 1);
+
+                // Wait for current mip to finish rendering
+                barrier.subresourceRange.baseMipLevel = srcLevel;
+                vkCmdPipelineBarrier(commandBuffer, 
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                        0, 0, nullptr, 0, nullptr, 1, &barrier);
+            }
+
+            // Transition all levels to shader readable
+            barrier.image = textureArray.image.image;
+            barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            barrier.subresourceRange.levelCount = textureArray.levelCount;
+            barrier.subresourceRange.baseArrayLayer = allocation.layerID;
+            barrier.subresourceRange.baseMipLevel = 0;
+            vkCmdPipelineBarrier(commandBuffer, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+                    0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+        } else {
+            FATAL("Bad texture kind for texture array"); 
+        }
+    });
+
+    // Normal mipmapping done by compute shader so views were made for the levels
+    if (textureArray.textureKind == TextureKind::NORMAL) {
+        for (uint32_t i = 0; i < textureArray.levelCount + 1; i++) {
+            vkDestroyImageView(device, levelViews[i], nullptr);
+        }
+    }
+
+    vmaDestroyBuffer(allocator, stagingBuffer.buffer, stagingBuffer.allocation);
+    vmaDestroyImage(allocator, stagingImage.image, stagingImage.allocation);
 }
 
 #ifdef PROFILING

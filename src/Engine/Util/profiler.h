@@ -7,6 +7,8 @@
 #include <string>
 #include <thread>
 
+namespace chrono = std::chrono;
+
 namespace profiling {
     struct ProfileResult {
         std::string name;
@@ -123,7 +125,7 @@ namespace profiling {
         {
             m_Name = name;
             m_Stopped = false;
-            m_StartTimepoint = std::chrono::high_resolution_clock::now();
+            m_StartTimepoint = chrono::high_resolution_clock::now();
         }
 
         ~ProfilingTimer()
@@ -133,10 +135,10 @@ namespace profiling {
 
         void Stop()
         {
-            std::chrono::time_point<std::chrono::high_resolution_clock> endTimepoint = std::chrono::high_resolution_clock::now();
+            chrono::time_point<chrono::high_resolution_clock> endTimepoint = chrono::high_resolution_clock::now();
 
-            uint64_t start = std::chrono::time_point_cast<std::chrono::microseconds>(m_StartTimepoint).time_since_epoch().count();
-            uint64_t end = std::chrono::time_point_cast<std::chrono::microseconds>(endTimepoint).time_since_epoch().count();
+            uint64_t start = chrono::time_point_cast<chrono::microseconds>(m_StartTimepoint).time_since_epoch().count();
+            uint64_t end = chrono::time_point_cast<chrono::microseconds>(endTimepoint).time_since_epoch().count();
 
             uint32_t thread = std::hash<std::thread::id>{}(std::this_thread::get_id());
             Instrumentor::Get().WriteProfile({ m_Name, start, end, thread });
@@ -146,7 +148,7 @@ namespace profiling {
 
     private:
         const char *m_Name;
-        std::chrono::time_point<std::chrono::high_resolution_clock> m_StartTimepoint;
+        chrono::time_point<chrono::high_resolution_clock> m_StartTimepoint;
         bool m_Stopped;
     };
 }

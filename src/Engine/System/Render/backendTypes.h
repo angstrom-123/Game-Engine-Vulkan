@@ -10,7 +10,7 @@
 const uint32_t FRAMES_IN_FLIGHT = 2;
 const VkFormat DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT; 
 const VkFormat ALBEDO_FORMAT = VK_FORMAT_R8G8B8A8_UNORM; 
-const VkFormat NORMAL_FORMAT = VK_FORMAT_A2R10G10B10_UNORM_PACK32; 
+const VkFormat NORMAL_FORMAT = VK_FORMAT_R8G8B8A8_UNORM; 
 const VkFormat MATERIAL_FORMAT = VK_FORMAT_R8G8B8A8_UNORM; 
 const VkFormat LIGHTING_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT; 
 const VkFormat BLOOM_FORMAT = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
@@ -28,6 +28,16 @@ const uint32_t MAX_LIGHTS_PER_TILE = 256;
 const uint32_t COMPUTE_TILE_SIZE = 16;
 const uint32_t MAX_BLOOM_MIPS = 5;
 const uint32_t BLOOM_BLUR_RADIUS = 4;
+const uint32_t MAX_NORMAL_MIPS = 16;
+
+struct NormalMipmapPushConstants {
+    uint32_t srcIndex;
+    uint32_t srcWidth;
+    uint32_t srcHeight;
+    uint32_t dstIndex;
+    uint32_t dstWidth;
+    uint32_t dstHeight;
+};
 
 struct PerFrameUniforms {
     struct {

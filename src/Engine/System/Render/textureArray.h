@@ -16,7 +16,7 @@ public:
     TextureArray(uint32_t resolution, VkFormat format, TextureKind kind);
     void Init(uint32_t layerCount, class VulkanBackend& backend);
     void Cleanup(VkDevice device, VmaAllocator allocator);
-    uint32_t Allocate(ImageResource& image, class VulkanBackend& backend);
+    uint32_t Allocate(const ImageResource& image, class VulkanBackend& backend);
 
 public:
     uint32_t resolution{0};
@@ -24,14 +24,14 @@ public:
     uint32_t levelCount{0};
     AllocatedImage image;
     VkImageView view{VK_NULL_HANDLE};
+    VkFormat format{VK_FORMAT_UNDEFINED};
+    TextureKind textureKind{TextureKind::NONE};
 
 private:
-    void GenerateMipsColor();
-    void GenerateMipsNormal();
+    void GenerateMipsColor(VkCommandBuffer commandBuffer, AllocatedImage stagingImage, const ImageResource& imageData, uint32_t layerIndex);
+    void GenerateMipsNormal(VkCommandBuffer commandBuffer, AllocatedImage stagingImage, const ImageResource& imageData, uint32_t layerIndex);
 
 private:
-    TextureKind m_TextureKind{TextureKind::NONE};
-    VkFormat m_Format{VK_FORMAT_UNDEFINED};
     std::queue<uint32_t> m_FreeLayers;
     bool m_Initialized{false};
 };

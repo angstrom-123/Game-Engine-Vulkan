@@ -133,9 +133,13 @@ private:
     void UpdateDescriptors();
     void InitBuffers();
     void InitPipelines();
+    void InitMiscBuffers();
+    void InitMiscDescriptors();
+    void InitMiscPipelines();
     VkPipeline CreateComputePipeline(const ComputePipelineCreateInfo&& info);
     VkPipeline CreateGraphicsPipeline(const GraphicsPipelineCreateInfo&& info);
     VkShaderModule LoadShaderModule(const fs::path& path);
+    void GenerateMips(AllocatedTexture allocation, const ImageResource& image, GraphicsFrontend& frontend);
     template<typename T> T GetFunctionPointer(const char *name) 
     { 
         T result = reinterpret_cast<T>(vkGetInstanceProcAddr(m_Instance, name)); 
@@ -192,6 +196,7 @@ private:
 
     VkCommandPool m_CommandPool{VK_NULL_HANDLE};
 
+    // Graphics
     VkDescriptorPool m_DescriptorPool{VK_NULL_HANDLE};
     VkDescriptorSetLayout m_DummyDescriptorLayout{VK_NULL_HANDLE};
     VkDescriptorSetLayout m_DescriptorLayout0{VK_NULL_HANDLE};
@@ -218,4 +223,13 @@ private:
     VkPipeline m_TransparencyPipeline = VK_NULL_HANDLE;
     VkPipeline m_ToneMapPipeline{VK_NULL_HANDLE};
     VkPipeline m_AntiAliasingPipeline{VK_NULL_HANDLE};
+
+    // Miscellaneous (mipmap gen, etc.)
+    VkDescriptorPool m_MiscDescriptorPool{VK_NULL_HANDLE};
+
+    AllocatedBuffer m_NormalMipmapUniformBuffer;
+    VkDescriptorSetLayout m_NormalMipmapDescriptorLayout{VK_NULL_HANDLE};
+    VkDescriptorSet m_NormalMipmapDescriptorSet{VK_NULL_HANDLE};
+    VkPipelineLayout m_NormalMipmapPipelineLayout{VK_NULL_HANDLE};
+    VkPipeline m_NormalMipmapPipeline{VK_NULL_HANDLE};
 };
