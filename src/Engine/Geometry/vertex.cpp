@@ -10,7 +10,7 @@ VertexInputDesc Vertex::GetDepthVertexDesc()
         .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
     };
 
-    res.bindings.push_back(binding);
+    res.bindings.PushBack(binding);
 
     VkVertexInputAttributeDescription positionAttr = {
         .location = 0,
@@ -25,8 +25,8 @@ VertexInputDesc Vertex::GetDepthVertexDesc()
         .offset = offsetof(Vertex, uv)
     };
 
-    res.attributes.push_back(positionAttr);
-    res.attributes.push_back(uvAttr);
+    res.attributes.PushBack(positionAttr);
+    res.attributes.PushBack(uvAttr);
 
     return res;
 }
@@ -41,7 +41,7 @@ VertexInputDesc Vertex::GetVertexDesc()
         .inputRate = VK_VERTEX_INPUT_RATE_VERTEX
     };
 
-    res.bindings.push_back(binding);
+    res.bindings.PushBack(binding);
 
     VkVertexInputAttributeDescription positionAttr = {
         .location = 0,
@@ -68,10 +68,10 @@ VertexInputDesc Vertex::GetVertexDesc()
         .offset = offsetof(Vertex, tangent)
     };
 
-    res.attributes.push_back(positionAttr);
-    res.attributes.push_back(normalAttr);
-    res.attributes.push_back(uvAttr);
-    res.attributes.push_back(tangentAttr);
+    res.attributes.PushBack(positionAttr);
+    res.attributes.PushBack(normalAttr);
+    res.attributes.PushBack(uvAttr);
+    res.attributes.PushBack(tangentAttr);
 
     return res;
 }

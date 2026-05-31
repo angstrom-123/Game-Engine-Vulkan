@@ -44,27 +44,12 @@
 #include "ECS/ecs.h"
 #include "ECS/ecsTypes.h"
 #include "Geometry/vertex.h"
+#include "System/Render/backendDefs.h"
+#include "System/Render/pipeline.h"
 #include "backendTypes.h"
 #include "System/Render/commandSubmitter.h"
 #include "config.h"
 #include "vulkan_core.h"
-
-#ifdef DEBUG 
-    #define USE_VALIDATION_LAYERS VK_TRUE 
-    #define VK_CHECK(x)\
-        do {\
-            VkResult __err = x;\
-            if (__err) {\
-                ERROR("Vulkan error: " << (VkResult) __err);\
-                abort();\
-            }\
-        } while (0);
-#elifdef RELEASE
-    #define USE_VALIDATION_LAYERS VK_FALSE 
-    #define VK_CHECK(x) (void) x
-#else 
-    #error "DEBUG or RELEASE must be specified"
-#endif
 
 namespace fs = std::filesystem;
 
@@ -204,25 +189,39 @@ private:
     VkDescriptorSetLayout m_DescriptorLayout2{VK_NULL_HANDLE};
     VkDescriptorSetLayout m_DescriptorLayout3{VK_NULL_HANDLE};
 
-    VkPipelineLayout m_MinimalPipelineLayout{VK_NULL_HANDLE};
-    VkPipelineLayout m_ShadowPipelineLayout{VK_NULL_HANDLE};
-    VkPipelineLayout m_LightCullingPipelineLayout{VK_NULL_HANDLE};
-    VkPipelineLayout m_LightingPipelineLayout{VK_NULL_HANDLE};
-    VkPipelineLayout m_BloomPipelineLayout{VK_NULL_HANDLE};
+    Pipeline m_DepthPipeline;
+    Pipeline m_ShadowPipeline;
+    Pipeline m_GBufferPipeline;
+    Pipeline m_LightCullingPipeline;
+    Pipeline m_LightingPipeline;
+    Pipeline m_BloomLightExtractionPipeline;
+    Pipeline m_BloomDownsamplePipeline;
+    Pipeline m_BloomHorizontalBlurPipeline;
+    Pipeline m_BloomVerticalBlurPipeline;
+    Pipeline m_BloomAccumulatePipeline;
+    Pipeline m_TransparencyPipeline;
+    Pipeline m_ToneMapPipeline;
+    Pipeline m_AntiAliasingPipeline;
 
-    VkPipeline m_DepthPipeline{VK_NULL_HANDLE};
-    VkPipeline m_ShadowPipeline{VK_NULL_HANDLE};
-    VkPipeline m_GBufferPipeline{VK_NULL_HANDLE};
-    VkPipeline m_LightCullingPipeline{VK_NULL_HANDLE};
-    VkPipeline m_LightingPipeline{VK_NULL_HANDLE};
-    VkPipeline m_BloomLightExtractionPipeline{VK_NULL_HANDLE};
-    VkPipeline m_BloomDownsamplePipeline{VK_NULL_HANDLE};
-    VkPipeline m_BloomHorizontalBlurPipeline{VK_NULL_HANDLE};
-    VkPipeline m_BloomVerticalBlurPipeline{VK_NULL_HANDLE};
-    VkPipeline m_BloomAccumulatePipeline{VK_NULL_HANDLE};
-    VkPipeline m_TransparencyPipeline = VK_NULL_HANDLE;
-    VkPipeline m_ToneMapPipeline{VK_NULL_HANDLE};
-    VkPipeline m_AntiAliasingPipeline{VK_NULL_HANDLE};
+    // VkPipelineLayout m_MinimalPipelineLayout{VK_NULL_HANDLE};
+    // VkPipelineLayout m_ShadowPipelineLayout{VK_NULL_HANDLE};
+    // VkPipelineLayout m_LightCullingPipelineLayout{VK_NULL_HANDLE};
+    // VkPipelineLayout m_LightingPipelineLayout{VK_NULL_HANDLE};
+    // VkPipelineLayout m_BloomPipelineLayout{VK_NULL_HANDLE};
+    //
+    // VkPipeline m_DepthPipeline{VK_NULL_HANDLE};
+    // VkPipeline m_ShadowPipeline{VK_NULL_HANDLE};
+    // VkPipeline m_GBufferPipeline{VK_NULL_HANDLE};
+    // VkPipeline m_LightCullingPipeline{VK_NULL_HANDLE};
+    // VkPipeline m_LightingPipeline{VK_NULL_HANDLE};
+    // VkPipeline m_BloomLightExtractionPipeline{VK_NULL_HANDLE};
+    // VkPipeline m_BloomDownsamplePipeline{VK_NULL_HANDLE};
+    // VkPipeline m_BloomHorizontalBlurPipeline{VK_NULL_HANDLE};
+    // VkPipeline m_BloomVerticalBlurPipeline{VK_NULL_HANDLE};
+    // VkPipeline m_BloomAccumulatePipeline{VK_NULL_HANDLE};
+    // VkPipeline m_TransparencyPipeline = VK_NULL_HANDLE;
+    // VkPipeline m_ToneMapPipeline{VK_NULL_HANDLE};
+    // VkPipeline m_AntiAliasingPipeline{VK_NULL_HANDLE};
 
     // Miscellaneous (mipmap gen, etc.)
     VkDescriptorPool m_MiscDescriptorPool{VK_NULL_HANDLE};
@@ -230,6 +229,7 @@ private:
     AllocatedBuffer m_NormalMipmapUniformBuffer;
     VkDescriptorSetLayout m_NormalMipmapDescriptorLayout{VK_NULL_HANDLE};
     VkDescriptorSet m_NormalMipmapDescriptorSet{VK_NULL_HANDLE};
-    VkPipelineLayout m_NormalMipmapPipelineLayout{VK_NULL_HANDLE};
-    VkPipeline m_NormalMipmapPipeline{VK_NULL_HANDLE};
+    Pipeline m_NormalMipmapPipeline;
+    // VkPipelineLayout m_NormalMipmapPipelineLayout{VK_NULL_HANDLE};
+    // VkPipeline m_NormalMipmapPipeline{VK_NULL_HANDLE};
 };

@@ -1,13 +1,12 @@
 #pragma once
 
+#include "Util/stackVector.h"
 #include <vulkan/vulkan_core.h>
 #include <glm/glm.hpp>
-#include <vector>
 
 struct VertexInputDesc {
-    std::vector<VkVertexInputBindingDescription> bindings;
-    std::vector<VkVertexInputAttributeDescription> attributes;
-    VkPipelineVertexInputStateCreateFlags flags = 0;
+    StackVector<VkVertexInputBindingDescription, 8> bindings;
+    StackVector<VkVertexInputAttributeDescription, 8> attributes;
 };
 
 // TODO: Packing vertex struct?

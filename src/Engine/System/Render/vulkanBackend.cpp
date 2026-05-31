@@ -1,4 +1,6 @@
 #include "vulkanBackend.h"
+#include "System/Render/pipeline.h"
+#include "backendDefs.h"
 #include "Component/shadowcaster.h"
 #include "ECS/ecsTypes.h"
 #include "System/Render/backendTypes.h"
@@ -338,15 +340,10 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
     });
     const auto& visibleTransparentEntities = m_SortingBuffer;
 
-    // ================================================== Prepare to Draw ==================================================
-
-    vkCmdSetViewport(frame.commandBuffer, 0, 1, &m_Viewport);
-    vkCmdSetScissor(frame.commandBuffer, 0, 1, &m_ScissorRect);
-
     { // ================================================== Depth Pre-Pass ==================================================
 
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
-        
+
         // Transition depth image to depth attachment
         VkImageMemoryBarrier depthBarrier = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -367,56 +364,37 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 0, 0, nullptr, 0, nullptr, 1, &depthBarrier);
 
         // Begin rendering
-        VkRenderingAttachmentInfoKHR depthAttachment = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR,
-            .imageView = m_DepthTarget.view,
-            .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue = { 
-                .depthStencil = { 1.0, 0 } 
+        VkDescriptorSet descriptorSets[2] = {
+            frame.descriptorSet0,
+            frame.descriptorSet1
+        };
+        DescriptorSets descriptors = { descriptorSets, 2 };
+        m_DepthPipeline.BeginRendering(frame.commandBuffer, m_PFNCmdBeginRendering, descriptors);
+        {
+            for (const Entity e : visibleOpaqueEntities) {
+                VertexPushConstants vertexConstants = {
+                    .model = ecs->GetComponent<Transform>(e).GlobalModelMatrix(ecs),
+                };
+                vkCmdPushConstants(frame.commandBuffer, 
+                        m_DepthPipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT, 
+                        0, sizeof(VertexPushConstants), 
+                        &vertexConstants);
+
+                FragmentPushConstants fragmentConstants = { 
+                    .material = ecs->GetComponent<Material>(e).Pack(),
+                };
+                vkCmdPushConstants(frame.commandBuffer, 
+                        m_DepthPipeline.GetLayout(), VK_SHADER_STAGE_FRAGMENT_BIT, 
+                        sizeof(VertexPushConstants), sizeof(FragmentPushConstants), 
+                        &fragmentConstants);
+
+                const Mesh& mesh = ecs->GetComponent<Mesh>(e);
+                VkDeviceSize offsets = 0;
+                vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offsets);
+                vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
             }
-        };
-        VkRenderingInfoKHR renderingInfo = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO_KHR,
-            .renderArea = { { 0, 0 }, m_Extent },
-            .layerCount = 1,
-            .pDepthAttachment = &depthAttachment,
-        };
-        m_PFNCmdBeginRendering(frame.commandBuffer, &renderingInfo);
-
-        // Render
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_DepthPipeline);
-        VkDescriptorSet descriptorSets[2] = { 
-            frame.descriptorSet0, 
-            frame.descriptorSet1 
-        };
-        vkCmdBindDescriptorSets(frame.commandBuffer, 
-                VK_PIPELINE_BIND_POINT_GRAPHICS, m_MinimalPipelineLayout, 
-                0, 2, descriptorSets, 0, nullptr);
-        for (const Entity e : visibleOpaqueEntities) {
-            VertexPushConstants vertexConstants = {
-                .model = ecs->GetComponent<Transform>(e).GlobalModelMatrix(ecs),
-            };
-            vkCmdPushConstants(frame.commandBuffer, 
-                    m_MinimalPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
-                    0, sizeof(VertexPushConstants), 
-                    &vertexConstants);
-
-            FragmentPushConstants fragmentConstants = { 
-                .material = ecs->GetComponent<Material>(e).Pack(),
-            };
-            vkCmdPushConstants(frame.commandBuffer, 
-                    m_MinimalPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 
-                    sizeof(VertexPushConstants), sizeof(FragmentPushConstants), 
-                    &fragmentConstants);
-
-            const Mesh& mesh = ecs->GetComponent<Mesh>(e);
-            VkDeviceSize offsets = 0;
-            vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offsets);
-            vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
         }
-        m_PFNCmdEndRendering(frame.commandBuffer);
+        m_DepthPipeline.EndRendering(frame.commandBuffer, m_PFNCmdEndRendering);
 
         // Transition depth attachment to read only
         depthBarrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -429,7 +407,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 0, 0, nullptr, 0, nullptr, 1, &depthBarrier);
 
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
-        
+
     } // ================================================== (END) Depth Pre-Pass ==================================================
 
     { // ================================================== GBuffer Pass ==================================================
@@ -460,68 +438,37 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 0, 0, nullptr, 0, nullptr, 3, colorBarriers);
 
         // Begin Rendering
-        VkRenderingAttachmentInfoKHR colorAttachments[3] = {};
-
-        colorAttachments[0] = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR,
-            .imageView = m_AlbedoTarget.view,
-            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue = { .color = { { 0.0, 0.0, 0.0, 0.0 } } }
+        VkDescriptorSet descriptorSets[2] = {
+            frame.descriptorSet0,
+            frame.descriptorSet1
         };
+        DescriptorSets descriptors = { descriptorSets, 2 };
+        m_GBufferPipeline.BeginRendering(frame.commandBuffer, m_PFNCmdBeginRendering, descriptors);
+        {
+            for (const Entity e : visibleOpaqueEntities) {
+                VertexPushConstants vertexConstants = {
+                    .model = ecs->GetComponent<Transform>(e).GlobalModelMatrix(ecs),
+                };
+                vkCmdPushConstants(frame.commandBuffer, 
+                        m_GBufferPipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT, 
+                        0, sizeof(VertexPushConstants), 
+                        &vertexConstants);
 
-        colorAttachments[1] = colorAttachments[0];
-        colorAttachments[1].imageView = m_NormalTarget.view;
-        colorAttachments[1].clearValue.color = { { 0.5, 0.5, 1.0, 0.0 } };
+                FragmentPushConstants fragmentConstants = { 
+                    .material = ecs->GetComponent<Material>(e).Pack(),
+                };
+                vkCmdPushConstants(frame.commandBuffer, 
+                        m_GBufferPipeline.GetLayout(), VK_SHADER_STAGE_FRAGMENT_BIT, 
+                        sizeof(VertexPushConstants), sizeof(FragmentPushConstants), 
+                        &fragmentConstants);
 
-        colorAttachments[2] = colorAttachments[0];
-        colorAttachments[2].imageView = m_MaterialTarget.view;
-        colorAttachments[2].clearValue.color = { { 0.0, 0.0, 0.0, 0.0 } };
-
-        VkRenderingAttachmentInfoKHR depthReadAttachment = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR,
-            .imageView = m_DepthTarget.view,
-            .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE
-        };
-
-        VkRenderingInfoKHR renderingInfo = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO_KHR,
-            .renderArea = { { 0, 0 }, m_Extent },
-            .layerCount = 1,
-            .colorAttachmentCount = 3,
-            .pColorAttachments = colorAttachments,
-            .pDepthAttachment = &depthReadAttachment,
-        };
-        m_PFNCmdBeginRendering(frame.commandBuffer, &renderingInfo);
-
-        // Render
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_GBufferPipeline);
-        for (const Entity e : visibleOpaqueEntities) {
-            VertexPushConstants vertexConstants = {
-                .model = ecs->GetComponent<Transform>(e).GlobalModelMatrix(ecs),
-            };
-            vkCmdPushConstants(frame.commandBuffer, 
-                    m_MinimalPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
-                    0, sizeof(VertexPushConstants), 
-                    &vertexConstants);
-
-            FragmentPushConstants fragmentConstants = { 
-                .material = ecs->GetComponent<Material>(e).Pack(),
-            };
-            vkCmdPushConstants(frame.commandBuffer, 
-                    m_MinimalPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 
-                    sizeof(VertexPushConstants), sizeof(FragmentPushConstants), 
-                    &fragmentConstants);
-
-            const Mesh& mesh = ecs->GetComponent<Mesh>(e);
-            VkDeviceSize offsets = 0;
-            vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offsets);
-            vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
+                const Mesh& mesh = ecs->GetComponent<Mesh>(e);
+                VkDeviceSize offsets = 0;
+                vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offsets);
+                vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
+            }
         }
-        m_PFNCmdEndRendering(frame.commandBuffer);
+        m_GBufferPipeline.EndRendering(frame.commandBuffer, m_PFNCmdEndRendering);
 
         // Transition color attachments to shader readable 
         for (int32_t i = 0; i < 3; i++) {
@@ -564,11 +511,14 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                     VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 
                     0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-            // Need to switch to the new extent
-            vkCmdSetViewport(frame.commandBuffer, 0, 1, &m_ShadowViewport);
-            vkCmdSetScissor(frame.commandBuffer, 0, 1, &m_ShadowScissorRect);
-
             auto opaqueEntities = entities | std::views::filter(std::not_fn(PredicateIsTransparent));
+
+            VkDescriptorSet descriptorSets[2] = {
+                frame.descriptorSet0,
+                frame.descriptorSet1
+            };
+            DescriptorSets descriptors = { descriptorSets, 2 };
+            m_ShadowPipeline.PrepareForDynamicRendering(frame.commandBuffer, descriptors);
 
             for (uint32_t i = 0; i < shadowCount; i++) {
                 const Shadowcaster& shadowcaster = shadowcasters[i];
@@ -579,58 +529,37 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                         break;
                     }
 
-                    VkRenderingAttachmentInfoKHR depthAttachment = {
-                        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR,
-                        .imageView = frontend.shadowArray.arrayViews[cascade.shadowMapIndex],
-                        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-                        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                        .clearValue = {
-                            .depthStencil = { 1.0, 0 }
+                    m_ShadowPipeline.BeginDynamicDepthRendering(frame.commandBuffer, m_PFNCmdBeginRendering, 
+                            frontend.shadowArray.arrayViews[cascade.shadowMapIndex], 
+                            VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE);
+                    {
+                        Frustum cascadeFrustum = Frustum(cascade.vp);
+                        for (const Entity e : opaqueEntities) {
+                            const Mesh& mesh = ecs->GetComponent<Mesh>(e);
+                            const glm::mat4x4& model = ecs->GetComponent<Transform>(e).GlobalModelMatrix(ecs);
+
+                            // Frustum culling
+                            CentreExtents centreExtents = CentreExtents(mesh.bounds);
+                            if (!cascadeFrustum.Intersects(centreExtents.ToWorldSpace(model))) {
+                                continue;
+                            }
+                            ShadowPushConstants constants = {
+                                .model = model,
+                                .vp = cascade.vp,
+                            };
+                            vkCmdPushConstants(frame.commandBuffer, 
+                                    m_ShadowPipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT, 
+                                    0, sizeof(ShadowPushConstants), 
+                                    &constants);
+
+                            VkDeviceSize offsets = 0;
+                            vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offsets);
+                            vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
                         }
-                    };
-
-                    VkRenderingInfoKHR renderingInfo = {
-                        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO_KHR,
-                        .renderArea = { { 0, 0 }, m_ShadowExtent },
-                        .layerCount = 1,
-                        .pDepthAttachment = &depthAttachment 
-                    };
-
-                    m_PFNCmdBeginRendering(frame.commandBuffer, &renderingInfo);
-
-                    // Render
-                    vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ShadowPipeline);
-                    Frustum cascadeFrustum = Frustum(cascade.vp);
-                    for (const Entity e : opaqueEntities) {
-                        const Mesh& mesh = ecs->GetComponent<Mesh>(e);
-                        const glm::mat4x4& model = ecs->GetComponent<Transform>(e).GlobalModelMatrix(ecs);
-
-                        // Frustum culling
-                        CentreExtents centreExtents = CentreExtents(mesh.bounds);
-                        if (!cascadeFrustum.Intersects(centreExtents.ToWorldSpace(model))) {
-                            continue;
-                        }
-                        ShadowPushConstants constants = {
-                            .model = model,
-                            .vp = cascade.vp,
-                        };
-                        vkCmdPushConstants(frame.commandBuffer, 
-                                m_ShadowPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
-                                0, sizeof(ShadowPushConstants), 
-                                &constants);
-
-                        VkDeviceSize offsets = 0;
-                        vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offsets);
-                        vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
                     }
-                    m_PFNCmdEndRendering(frame.commandBuffer);
+                    m_ShadowPipeline.EndDynamicRendering(frame.commandBuffer, m_PFNCmdEndRendering);
                 }
             }
-
-            // Reset extent
-            vkCmdSetViewport(frame.commandBuffer, 0, 1, &m_Viewport);
-            vkCmdSetScissor(frame.commandBuffer, 0, 1, &m_ScissorRect);
 
             // Transition shadow array to shader readable
             barrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -651,16 +580,17 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
 
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
-        // Dispatch Compute
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_LightCullingPipeline);
         VkDescriptorSet descriptorSets[3] = { 
             frame.descriptorSet0, 
             frame.dummyDescriptorSet,
-            frame.descriptorSet2 };
-        vkCmdBindDescriptorSets(frame.commandBuffer, 
-                VK_PIPELINE_BIND_POINT_COMPUTE, m_LightCullingPipelineLayout, 
-                0, 3, descriptorSets, 0, nullptr);
-        vkCmdDispatch(frame.commandBuffer, tilesX, tilesY, 1);
+            frame.descriptorSet2
+        };
+        DescriptorSets descriptors = { descriptorSets, 3 };
+        m_LightCullingPipeline.BeginCompute(frame.commandBuffer, descriptors);
+        {
+            vkCmdDispatch(frame.commandBuffer, tilesX, tilesY, 1);
+        }
+        m_LightCullingPipeline.EndCompute();
 
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
@@ -689,17 +619,17 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
                 0, 0, nullptr, 0, nullptr, 1, &hdrBarrier);
 
-        // Dispatch Compute
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_LightingPipeline);
         VkDescriptorSet descriptorSets[3] = { 
             frame.descriptorSet0, 
             frame.descriptorSet1, 
             frame.descriptorSet2 
         };
-        vkCmdBindDescriptorSets(frame.commandBuffer, 
-                VK_PIPELINE_BIND_POINT_COMPUTE, m_LightingPipelineLayout, 
-                0, 3, descriptorSets, 0, nullptr);
-        vkCmdDispatch(frame.commandBuffer, tilesX, tilesY, 1);
+        DescriptorSets descriptors = { descriptorSets, 3 };
+        m_LightingPipeline.BeginCompute(frame.commandBuffer, descriptors);
+        {
+            vkCmdDispatch(frame.commandBuffer, tilesX, tilesY, 1);
+        }
+        m_LightingPipeline.EndCompute();
 
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
@@ -729,58 +659,39 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
                     0, 0, nullptr, 0, nullptr, 1, &hdrBarrier);
 
-            // Begin Rendering
-            VkRenderingAttachmentInfoKHR colorAttachment = {
-                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR,
-                .imageView = m_LightingTarget.view,
-                .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-                .storeOp = VK_ATTACHMENT_STORE_OP_STORE
+            // // Begin Rendering
+            VkDescriptorSet descriptorSets[3] = { 
+                frame.descriptorSet0, 
+                frame.descriptorSet1, 
+                frame.descriptorSet2 
             };
+            DescriptorSets descriptors = { descriptorSets, 3 };
+            m_TransparencyPipeline.BeginRendering(frame.commandBuffer, m_PFNCmdBeginRendering, descriptors);
+            {
+                for (const auto& [_, e] : visibleTransparentEntities) {
+                    VertexPushConstants vertexConstants = {
+                        .model = ecs->GetComponent<Transform>(e).GlobalModelMatrix(ecs),
+                    };
+                    vkCmdPushConstants(frame.commandBuffer, 
+                            m_TransparencyPipeline.GetLayout(), VK_SHADER_STAGE_VERTEX_BIT, 
+                            0, sizeof(VertexPushConstants), 
+                            &vertexConstants);
 
-            VkRenderingAttachmentInfoKHR depthReadAttachment = {
-                .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR,
-                .imageView = m_DepthTarget.view,
-                .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-                .loadOp = VK_ATTACHMENT_LOAD_OP_LOAD,
-                .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE
-            };
+                    FragmentPushConstants fragmentConstants = { 
+                        .material = ecs->GetComponent<Material>(e).Pack(),
+                    };
+                    vkCmdPushConstants(frame.commandBuffer, 
+                            m_TransparencyPipeline.GetLayout(), VK_SHADER_STAGE_FRAGMENT_BIT, 
+                            sizeof(VertexPushConstants), sizeof(FragmentPushConstants), 
+                            &fragmentConstants);
 
-            VkRenderingInfoKHR renderingInfo = {
-                .sType = VK_STRUCTURE_TYPE_RENDERING_INFO_KHR,
-                .renderArea = { { 0, 0 }, m_Extent },
-                .layerCount = 1,
-                .colorAttachmentCount = 1,
-                .pColorAttachments = &colorAttachment,
-                .pDepthAttachment = &depthReadAttachment
-            };
-            m_PFNCmdBeginRendering(frame.commandBuffer, &renderingInfo);
-
-            // Render
-            vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_TransparencyPipeline);
-            for (const auto& [_, e] : visibleTransparentEntities) {
-                VertexPushConstants vertexConstants = {
-                    .model = ecs->GetComponent<Transform>(e).GlobalModelMatrix(ecs),
-                };
-                vkCmdPushConstants(frame.commandBuffer, 
-                        m_LightingPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 
-                        0, sizeof(VertexPushConstants), 
-                        &vertexConstants);
-
-                FragmentPushConstants fragmentConstants = { 
-                    .material = ecs->GetComponent<Material>(e).Pack(),
-                };
-                vkCmdPushConstants(frame.commandBuffer, 
-                        m_LightingPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 
-                        sizeof(VertexPushConstants), sizeof(FragmentPushConstants), 
-                        &fragmentConstants);
-
-                const Mesh& mesh = ecs->GetComponent<Mesh>(e);
-                VkDeviceSize offsets = 0;
-                vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offsets);
-                vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
+                    const Mesh& mesh = ecs->GetComponent<Mesh>(e);
+                    VkDeviceSize offsets = 0;
+                    vkCmdBindVertexBuffers(frame.commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offsets);
+                    vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
+                }
             }
-            m_PFNCmdEndRendering(frame.commandBuffer);
+            m_TransparencyPipeline.EndRendering(frame.commandBuffer, m_PFNCmdEndRendering);
 
             // Transition hdr image from attachment to general
             hdrBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -842,30 +753,30 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 0, 0, nullptr, 0, nullptr, m_BloomPyramidTarget.count, pyramidBarriers);
 
         // Downsample hdr image into pyramid[0]
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomDownsamplePipeline);
         VkDescriptorSet descriptorSets[4] = { 
             frame.descriptorSet0, 
             frame.dummyDescriptorSet, 
             frame.descriptorSet2, 
             frame.descriptorSet3, 
         };
-        vkCmdBindDescriptorSets(frame.commandBuffer, 
-                VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomPipelineLayout, 
-                0, 4, descriptorSets, 0, nullptr);
-
-        // Dispatch compute
-        BloomPushConstants constants = {
-            .currentIndex = 0,
-        };
-        vkCmdPushConstants(frame.commandBuffer, 
-                m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
-                0, sizeof(BloomPushConstants), 
-                &constants);
-        uint32_t w = std::max(m_Extent.width >> 1, 1u);
-        uint32_t h = std::max(m_Extent.height >> 1, 1u);
-        uint32_t groupsX = (w + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
-        uint32_t groupsY = (h + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
-        vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+        DescriptorSets descriptors = { descriptorSets, 4 };
+        m_BloomDownsamplePipeline.BeginCompute(frame.commandBuffer, descriptors);
+        {
+            BloomPushConstants constants = {
+                .currentIndex = 0,
+            };
+            vkCmdPushConstants(frame.commandBuffer, 
+                    // m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
+                    m_BloomDownsamplePipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
+                    0, sizeof(BloomPushConstants), 
+                    &constants);
+            uint32_t w = std::max(m_Extent.width >> 1, 1u);
+            uint32_t h = std::max(m_Extent.height >> 1, 1u);
+            uint32_t groupsX = (w + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+            uint32_t groupsY = (h + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+            vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+        }
+        m_BloomDownsamplePipeline.EndCompute();
 
         // Wait first downsample to complete
         vkCmdPipelineBarrier(frame.commandBuffer, 
@@ -875,9 +786,11 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
 
         // In place light extraction on pyramid[0]
 
-        // Dispatch Compute
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomLightExtractionPipeline);
-        vkCmdDispatch(frame.commandBuffer, tilesX, tilesY, 1);
+        m_BloomLightExtractionPipeline.BeginCompute(frame.commandBuffer, descriptors);
+        {
+            vkCmdDispatch(frame.commandBuffer, tilesX, tilesY, 1);
+        }
+        m_BloomLightExtractionPipeline.EndCompute();
 
         // Wait for bright pass to complete
         vkCmdPipelineBarrier(frame.commandBuffer, 
@@ -888,51 +801,59 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         // Downsample Pyramid
 
         // Dispatch Compute for each layer
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomDownsamplePipeline);
-        for (uint32_t i = 1; i < m_BloomPyramidTarget.count; i++) {
-            BloomPushConstants constants = {
-                .currentIndex = i,
-            };
-            vkCmdPushConstants(frame.commandBuffer, 
-                    m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
-                    0, sizeof(BloomPushConstants), 
-                    &constants);
+        m_BloomDownsamplePipeline.BeginCompute(frame.commandBuffer, descriptors);
+        {
+            for (uint32_t i = 1; i < m_BloomPyramidTarget.count; i++) {
+                BloomPushConstants constants = {
+                    .currentIndex = i,
+                };
+                vkCmdPushConstants(frame.commandBuffer, 
+                        // m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
+                        m_BloomDownsamplePipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
+                        0, sizeof(BloomPushConstants), 
+                        &constants);
 
-            uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
-            uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
-            uint32_t groupsX = (w + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
-            uint32_t groupsY = (h + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
-            vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+                uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
+                uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
+                uint32_t groupsX = (w + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+                uint32_t groupsY = (h + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+                vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
 
-            // Wait for current layer to downsample before dispatching next
-            vkCmdPipelineBarrier(frame.commandBuffer, 
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                    0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
+                // Wait for current layer to downsample before dispatching next
+                vkCmdPipelineBarrier(frame.commandBuffer, 
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                        0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
+            }
         }
+        m_BloomDownsamplePipeline.EndCompute();
 
         // Blur 
 
         // Dispatch Compute for each layer
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomHorizontalBlurPipeline);
         for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
-            BloomPushConstants constants = {
-                .currentIndex = i,
-                .blurKernelRadius = BLOOM_BLUR_RADIUS,
-                .blurKernelWeights = { 0.007, 0.032, 0.059, 0.079, 0.088, 0.079, 0.059, 0.032, 0.007 }, // Gaussian
-            };
-            vkCmdPushConstants(frame.commandBuffer, 
-                    m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
-                    0, sizeof(BloomPushConstants), 
-                    &constants);
-
             const uint32_t BLUR_COMPUTE_GROUP_SIZE = 256;
             uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
             uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
 
             uint32_t groupsX = (w + BLUR_COMPUTE_GROUP_SIZE - 1) / BLUR_COMPUTE_GROUP_SIZE;
             uint32_t groupsY = h;
-            vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+
+            BloomPushConstants constants = {
+                .currentIndex = i,
+                .blurKernelRadius = BLOOM_BLUR_RADIUS,
+                .blurKernelWeights = { 0.007, 0.032, 0.059, 0.079, 0.088, 0.079, 0.059, 0.032, 0.007 }, // Gaussian
+            };
+
+            m_BloomHorizontalBlurPipeline.BeginCompute(frame.commandBuffer, descriptors);
+            {
+                vkCmdPushConstants(frame.commandBuffer, 
+                        m_BloomHorizontalBlurPipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
+                        0, sizeof(BloomPushConstants), 
+                        &constants);
+                vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+            }
+            m_BloomHorizontalBlurPipeline.EndCompute();
 
             // Wait for horizontal blurs to finish before the vertical ones are dispatched
             vkCmdPipelineBarrier(frame.commandBuffer, 
@@ -942,7 +863,16 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
 
             groupsX = w;
             groupsY = (h + BLUR_COMPUTE_GROUP_SIZE - 1) / BLUR_COMPUTE_GROUP_SIZE;
-            vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+
+            m_BloomVerticalBlurPipeline.BeginCompute(frame.commandBuffer, descriptors);
+            {
+                vkCmdPushConstants(frame.commandBuffer, 
+                        m_BloomVerticalBlurPipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
+                        0, sizeof(BloomPushConstants), 
+                        &constants);
+                vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+            }
+            m_BloomVerticalBlurPipeline.EndCompute();
 
             // Wait for vertical blurs to finish before next level or upsampling
             vkCmdPipelineBarrier(frame.commandBuffer, 
@@ -953,33 +883,35 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
 
         // Upsample / Accumulate
 
-        // Dispatch Compute for each layer (starting from the second lowest level)
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_BloomAccumulatePipeline);
-        // NOTE: Using int32_t instead of uint32_t for i because the decrement causes underflow when i = 0
-        for (int32_t i = m_BloomPyramidTarget.count - 2; i >= 0; i--) { // Shader upsamples the layer above (smaller)
-            BloomPushConstants constants = {
-                .currentIndex = static_cast<uint32_t>(i),
-                .accumulationFactor = 0.1,
-            };
-            vkCmdPushConstants(frame.commandBuffer, 
-                    m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
-                    0, sizeof(BloomPushConstants), 
-                    &constants);
+        m_BloomAccumulatePipeline.BeginCompute(frame.commandBuffer, descriptors);
+        {
+            // NOTE: Using int32_t instead of uint32_t for i because the decrement causes underflow when i = 0
+            for (int32_t i = m_BloomPyramidTarget.count - 2; i >= 0; i--) { // Shader upsamples the layer above (smaller)
+                BloomPushConstants constants = {
+                    .currentIndex = static_cast<uint32_t>(i),
+                    .accumulationFactor = 0.1,
+                };
+                vkCmdPushConstants(frame.commandBuffer, 
+                        m_BloomAccumulatePipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
+                        0, sizeof(BloomPushConstants), 
+                        &constants);
 
-            const uint32_t UPSAMPLE_COMPUTE_GROUP_SIZE = 8;
-            uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
-            uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
+                const uint32_t UPSAMPLE_COMPUTE_GROUP_SIZE = 8;
+                uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
+                uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
 
-            uint32_t groupsX = (w + UPSAMPLE_COMPUTE_GROUP_SIZE - 1) / UPSAMPLE_COMPUTE_GROUP_SIZE;
-            uint32_t groupsY = h;
-            vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+                uint32_t groupsX = (w + UPSAMPLE_COMPUTE_GROUP_SIZE - 1) / UPSAMPLE_COMPUTE_GROUP_SIZE;
+                uint32_t groupsY = h;
+                vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
 
-            // Wait for current layer to accumulate before starting next
-            vkCmdPipelineBarrier(frame.commandBuffer, 
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                    0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
+                // Wait for current layer to accumulate before starting next
+                vkCmdPipelineBarrier(frame.commandBuffer, 
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                        0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
+            }
         }
+        m_BloomAccumulatePipeline.EndCompute();
 
         // Transition highest pyramid level (where the accumulated bloom is) to shader readable
         VkImageMemoryBarrier bloomBarrier = {
@@ -1039,36 +971,16 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
             0, 0, nullptr, 0, nullptr, 1, &toneMapBarrier);
 
         // Begin rendering
-        VkRenderingAttachmentInfoKHR colorAttachment = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR,
-            .imageView = m_ToneMapTarget.view,
-            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue = { 
-                .color = { 1.0, 0.0, 1.0, 1.0 } // Purple for debug purposes
-            }
-        };
-        VkRenderingInfoKHR renderingInfo = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO_KHR,
-            .renderArea = { { 0, 0 }, m_Extent },
-            .layerCount = 1,
-            .colorAttachmentCount = 1,
-            .pColorAttachments = &colorAttachment,
-        };
-        m_PFNCmdBeginRendering(frame.commandBuffer, &renderingInfo);
-
-        // Render
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_ToneMapPipeline);
         VkDescriptorSet descriptorSets[2] = { 
             frame.descriptorSet0, 
             frame.descriptorSet1, 
         };
-        vkCmdBindDescriptorSets(frame.commandBuffer, 
-                VK_PIPELINE_BIND_POINT_GRAPHICS, m_MinimalPipelineLayout, 
-                0, 2, &frame.descriptorSet0, 0, nullptr);
-        vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
-        m_PFNCmdEndRendering(frame.commandBuffer);
+        DescriptorSets descriptors = { descriptorSets, 2 };
+        m_ToneMapPipeline.BeginRendering(frame.commandBuffer, m_PFNCmdBeginRendering, descriptors);
+        {
+            vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
+        }
+        m_ToneMapPipeline.EndRendering(frame.commandBuffer, m_PFNCmdEndRendering);
 
         // Transition tone mapped attachment to shader readable 
         toneMapBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -1108,30 +1020,20 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
                 0, 0, nullptr, 0, nullptr, 1, &swapchainBarrier);
 
-        // Begin rendering
-        VkRenderingAttachmentInfoKHR colorAttachments = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR,
-            .imageView = swapchainImage.view,
-            .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue = { 
-                .color = { 1.0, 0.0, 1.0, 1.0 } // Purple for debug purposes
-            }
+        // // Begin rendering
+        VkDescriptorSet descriptorSets[2] = { 
+            frame.descriptorSet0, 
+            frame.descriptorSet1, 
         };
-        VkRenderingInfoKHR renderingInfo = {
-            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO_KHR,
-            .renderArea = { { 0, 0 }, m_Extent },
-            .layerCount = 1,
-            .colorAttachmentCount = 1,
-            .pColorAttachments = &colorAttachments,
-        };
-        m_PFNCmdBeginRendering(frame.commandBuffer, &renderingInfo);
-
-        // Render
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_AntiAliasingPipeline);
-        vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
-        m_PFNCmdEndRendering(frame.commandBuffer);
+        DescriptorSets descriptors = { descriptorSets, 2 };
+        m_AntiAliasingPipeline.PrepareForDynamicRendering(frame.commandBuffer, descriptors);
+        m_AntiAliasingPipeline.BeginDynamicColorRendering(frame.commandBuffer, m_PFNCmdBeginRendering, 
+                swapchainImage.view, 
+                VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE);
+        {
+            vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
+        }
+        m_AntiAliasingPipeline.EndDynamicRendering(frame.commandBuffer, m_PFNCmdEndRendering);
 
         // Transition swapchain attachment to present source
         swapchainBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -1309,6 +1211,23 @@ void VulkanBackend::Resize(ECS *ecs)
     InitDynamics();
     UpdateDescriptors();
 
+    // Update static pipeline attachments
+    m_DepthPipeline.UpdateDepthAttachment(m_DepthTarget.view);
+    m_GBufferPipeline.UpdateDepthAttachment(m_DepthTarget.view);
+    m_GBufferPipeline.UpdateColorAttachment(0, m_AlbedoTarget.view);
+    m_GBufferPipeline.UpdateColorAttachment(1, m_NormalTarget.view);
+    m_GBufferPipeline.UpdateColorAttachment(2, m_MaterialTarget.view);
+    m_TransparencyPipeline.UpdateDepthAttachment(m_DepthTarget.view);
+    m_TransparencyPipeline.UpdateColorAttachment(0, m_LightingTarget.view);
+    m_ToneMapPipeline.UpdateColorAttachment(0, m_ToneMapTarget.view);
+
+    // Update graphics pipeline extents
+    m_DepthPipeline.UpdateBounds(m_Viewport, m_ScissorRect, m_Extent);
+    m_GBufferPipeline.UpdateBounds(m_Viewport, m_ScissorRect, m_Extent);
+    m_TransparencyPipeline.UpdateBounds(m_Viewport, m_ScissorRect, m_Extent);
+    m_ToneMapPipeline.UpdateBounds(m_Viewport, m_ScissorRect, m_Extent);
+    m_AntiAliasingPipeline.UpdateBounds(m_Viewport, m_ScissorRect, m_Extent);
+
     // Resize cameras
     for (const Entity e : m_ResizeCameras) {
         Camera& cam = ecs->GetComponent<Camera>(e);
@@ -1332,10 +1251,10 @@ void VulkanBackend::InitVulkan(struct GLFWwindow *window)
 {
     vkb::InstanceBuilder builder;
     auto builtInstance = builder.request_validation_layers(USE_VALIDATION_LAYERS)
-                                .set_app_version(1, 0, 0)
-                                .require_api_version(1, 3, 0)
-                                .use_default_debug_messenger()
-                                .build();
+            .set_app_version(1, 0, 0)
+            .require_api_version(1, 3, 0)
+            .use_default_debug_messenger()
+            .build();
 
     vkb::Instance vkbInstance = builtInstance.value();
     m_Instance = vkbInstance.instance;
@@ -1345,15 +1264,15 @@ void VulkanBackend::InitVulkan(struct GLFWwindow *window)
 
     vkb::PhysicalDeviceSelector selector(vkbInstance);
     auto vkbPhysicalDevice = selector.set_surface(m_Surface)
-                                     .set_minimum_version(1, 3)
-                                     .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)
-                                     .add_required_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)
-                                     .set_required_features({ .samplerAnisotropy = VK_TRUE })
-                                     .set_required_features_13({ .dynamicRendering = VK_TRUE })
-                                     .prefer_gpu_device_type(vkb::PreferredDeviceType::discrete)
-                                     .require_present()
-                                     .select()
-                                     .value();
+            .set_minimum_version(1, 3)
+            .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)
+            .add_required_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)
+            .set_required_features({ .samplerAnisotropy = VK_TRUE })
+            .set_required_features_13({ .dynamicRendering = VK_TRUE })
+            .prefer_gpu_device_type(vkb::PreferredDeviceType::discrete)
+            .require_present()
+            .select()
+            .value();
     INFO("Selected physical device: " << vkbPhysicalDevice.name);
 
     vkb::DeviceBuilder deviceBuilder(vkbPhysicalDevice);
@@ -1407,11 +1326,11 @@ void VulkanBackend::InitDynamics()
 
     vkb::SwapchainBuilder builder { physicalDevice, device, m_Surface };
     auto vkbSwapchain = builder.use_default_format_selection()
-                               .set_desired_present_mode(m_PresentMode)
-                               .set_desired_min_image_count(FRAMES_IN_FLIGHT + 1)
-                               .set_desired_extent(m_Extent.width, m_Extent.height)
-                               .build()
-                               .value();
+            .set_desired_present_mode(m_PresentMode)
+            .set_desired_min_image_count(FRAMES_IN_FLIGHT + 1)
+            .set_desired_extent(m_Extent.width, m_Extent.height)
+            .build()
+            .value();
 
     if (vkbSwapchain.present_mode != m_PresentMode) {
         WARN("Requested present mode unavailable: " << m_PresentMode << ". Fell back to: " << vkbSwapchain.present_mode);
@@ -2181,256 +2100,191 @@ void VulkanBackend::UpdateDescriptors()
 
 void VulkanBackend::InitPipelines()
 {
-    // ================================================== Main Push Constants ==================================================
+    m_DepthPipeline.SetName("Depth")
+            .SetDevice(device)
+            .SetKind(PipelineKind::GRAPHICS)
+            .AddDescriptorLayout(m_DescriptorLayout0)
+            .AddDescriptorLayout(m_DescriptorLayout1)
+            .AddPushConstant<VertexPushConstants>(VK_SHADER_STAGE_VERTEX_BIT)
+            .AddPushConstant<FragmentPushConstants>(VK_SHADER_STAGE_FRAGMENT_BIT)
+            .AddShader(ShaderKind::VERTEX, "depth.vert")
+            .AddShader(ShaderKind::FRAGMENT, "depth.frag")
+            .SetDepthWriteAttachment(m_DepthTarget.view, DEPTH_FORMAT, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
+            .SetCulling(VK_CULL_MODE_BACK_BIT)
+            .SetDepthFlags(PIPELINE_DEPTH_WRITE | PIPELINE_DEPTH_TEST)
+            .SetDepthCompare(VK_COMPARE_OP_LESS_OR_EQUAL)
+            .SetVertexInput(Vertex::GetDepthVertexDesc())
+            .Build();
+    m_DepthPipeline.EnqueueCleanup(m_MainDeleter);
 
-    VkPushConstantRange mainPushConstantRanges[2] = {
-        {
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-            .size = sizeof(VertexPushConstants),
-        },
-        {
-            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .offset = sizeof(VertexPushConstants),
-            .size = sizeof(FragmentPushConstants)
-        }
-    };
+    m_ShadowPipeline.SetName("Shadow")
+            .SetDevice(device)
+            .SetKind(PipelineKind::GRAPHICS)
+            .AddDescriptorLayout(m_DescriptorLayout0)
+            .AddDescriptorLayout(m_DescriptorLayout1)
+            .AddPushConstant<ShadowPushConstants>(VK_SHADER_STAGE_VERTEX_BIT)
+            .AddShader(ShaderKind::VERTEX, "shadow.vert")
+            .SetDynamicDepthAttachment(DEPTH_FORMAT)
+            .SetBounds(m_ShadowViewport, m_ShadowScissorRect, m_ShadowExtent)
+            .SetCulling(VK_CULL_MODE_BACK_BIT)
+            .SetDepthFlags(PIPELINE_DEPTH_WRITE | PIPELINE_DEPTH_TEST)
+            .SetDepthCompare(VK_COMPARE_OP_LESS_OR_EQUAL)
+            .SetVertexInput(Vertex::GetDepthVertexDesc())
+            .Build();
+    m_ShadowPipeline.EnqueueCleanup(m_MainDeleter);
 
-    // ================================================== Minimal Layout ==================================================
+    m_GBufferPipeline.SetName("GBuffer")
+            .SetDevice(device)
+            .SetKind(PipelineKind::GRAPHICS)
+            .AddDescriptorLayout(m_DescriptorLayout0)
+            .AddDescriptorLayout(m_DescriptorLayout1)
+            .AddPushConstant<VertexPushConstants>(VK_SHADER_STAGE_VERTEX_BIT)
+            .AddPushConstant<FragmentPushConstants>(VK_SHADER_STAGE_FRAGMENT_BIT)
+            .AddShader(ShaderKind::VERTEX, "gBuffer.vert")
+            .AddShader(ShaderKind::FRAGMENT, "gBuffer.frag")
+            .AddColorAttachment(m_AlbedoTarget.view, ALBEDO_FORMAT, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .AddColorAttachment(m_NormalTarget.view, NORMAL_FORMAT, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .AddColorAttachment(m_MaterialTarget.view, MATERIAL_FORMAT, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .SetDepthReadAttachment(m_DepthTarget.view, DEPTH_FORMAT, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE)
+            .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
+            .SetCulling(VK_CULL_MODE_BACK_BIT)
+            .SetDepthFlags(PIPELINE_DEPTH_TEST)
+            .SetDepthCompare(VK_COMPARE_OP_LESS_OR_EQUAL)
+            .SetVertexInput(Vertex::GetVertexDesc())
+            .Build();
+    m_GBufferPipeline.EnqueueCleanup(m_MainDeleter);
 
-    {
-        VkDescriptorSetLayout minimalLayouts[2] = { 
-            m_DescriptorLayout0, 
-            m_DescriptorLayout1 
-        };
-        VkPipelineLayoutCreateInfo pipelineInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 2,
-            .pSetLayouts = minimalLayouts,
-            .pushConstantRangeCount = 2,
-            .pPushConstantRanges = mainPushConstantRanges
-        };
-        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_MinimalPipelineLayout));
-        m_MainDeleter.push_back([=, this] {
-            vkDestroyPipelineLayout(device, m_MinimalPipelineLayout, nullptr);
-        });
-    }
+    m_TransparencyPipeline.SetName("Transparency")
+            .SetDevice(device)
+            .SetKind(PipelineKind::GRAPHICS)
+            .AddDescriptorLayout(m_DescriptorLayout0)
+            .AddDescriptorLayout(m_DescriptorLayout1)
+            .AddDescriptorLayout(m_DescriptorLayout2)
+            .AddPushConstant<VertexPushConstants>(VK_SHADER_STAGE_VERTEX_BIT)
+            .AddPushConstant<FragmentPushConstants>(VK_SHADER_STAGE_FRAGMENT_BIT)
+            .AddShader(ShaderKind::VERTEX, "transparency.vert")
+            .AddShader(ShaderKind::FRAGMENT, "transparency.frag")
+            .AddColorAttachment(m_LightingTarget.view, LIGHTING_FORMAT, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE)
+            .SetDepthReadAttachment(m_DepthTarget.view, DEPTH_FORMAT, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE)
+            .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
+            .SetCulling(VK_CULL_MODE_NONE)
+            .SetDepthFlags(PIPELINE_DEPTH_TEST)
+            .SetDepthCompare(VK_COMPARE_OP_LESS_OR_EQUAL)
+            .EnableBlending(true)
+            .SetVertexInput(Vertex::GetVertexDesc())
+            .Build();
+    m_TransparencyPipeline.EnqueueCleanup(m_MainDeleter);
 
-    // ================================================== Shadow Layout ==================================================
+    m_ToneMapPipeline.SetName("Tone Map")
+            .SetDevice(device)
+            .SetKind(PipelineKind::GRAPHICS)
+            .AddDescriptorLayout(m_DescriptorLayout0)
+            .AddDescriptorLayout(m_DescriptorLayout1)
+            .AddShader(ShaderKind::VERTEX, "fullscreen.vert")
+            .AddShader(ShaderKind::FRAGMENT, "tonemap.frag")
+            .AddColorAttachment(m_ToneMapTarget.view, TONE_MAP_FORMAT, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
+            .SetCulling(VK_CULL_MODE_BACK_BIT)
+            .SetDepthCompare(VK_COMPARE_OP_ALWAYS)
+            .Build();
+    m_ToneMapPipeline.EnqueueCleanup(m_MainDeleter);
 
-    {
-        VkPushConstantRange shadowPushConstantRange = {
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
-            .size = sizeof(ShadowPushConstants),
-        };
-
-        VkPipelineLayoutCreateInfo pipelineInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .pushConstantRangeCount = 1,
-            .pPushConstantRanges = &shadowPushConstantRange
-        };
-        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_ShadowPipelineLayout));
-        m_MainDeleter.push_back([=, this] {
-            vkDestroyPipelineLayout(device, m_ShadowPipelineLayout, nullptr);
-        });
-    }
-
-    // ================================================== Light Culling Layout ==================================================
-
-    {
-        VkDescriptorSetLayout lightCullingLayouts[3] = { 
-            m_DescriptorLayout0, 
-            m_DummyDescriptorLayout, 
-            m_DescriptorLayout2 
-        };
-        VkPipelineLayoutCreateInfo pipelineInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 3,
-            .pSetLayouts = lightCullingLayouts,
-        };
-        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_LightCullingPipelineLayout));
-        m_MainDeleter.push_back([=, this] {
-            vkDestroyPipelineLayout(device, m_LightCullingPipelineLayout, nullptr);
-        });
-    }
-
-    // ================================================== Lighting Layout ==================================================
-
-    {
-        VkDescriptorSetLayout lightingLayouts[3] = { 
-            m_DescriptorLayout0, 
-            m_DescriptorLayout1, 
-            m_DescriptorLayout2 
-        };
-        VkPipelineLayoutCreateInfo pipelineInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 3,
-            .pSetLayouts = lightingLayouts,
-            .pushConstantRangeCount = 2,
-            .pPushConstantRanges = mainPushConstantRanges
-        };
-        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_LightingPipelineLayout));
-        m_MainDeleter.push_back([=, this] {
-            vkDestroyPipelineLayout(device, m_LightingPipelineLayout, nullptr);
-        });
-    }
-
-    // ================================================== Bloom Layout ==================================================
-
-    {
-        VkPushConstantRange bloomPushConstantRange = {
-            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-            .size = sizeof(BloomPushConstants),
-        };
-
-        VkDescriptorSetLayout bloomLayouts[4] = { 
-            m_DescriptorLayout0, 
-            m_DummyDescriptorLayout, 
-            m_DescriptorLayout2,
-            m_DescriptorLayout3 
-        };
-        VkPipelineLayoutCreateInfo pipelineInfo = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 4,
-            .pSetLayouts = bloomLayouts,
-            .pushConstantRangeCount = 1,
-            .pPushConstantRanges = &bloomPushConstantRange
-        };
-        VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_BloomPipelineLayout));
-        m_MainDeleter.push_back([=, this] {
-            vkDestroyPipelineLayout(device, m_BloomPipelineLayout, nullptr);
-        });
-    }
-
-    // ================================================== Graphics Pipelines ==================================================
-
-    VertexInputDesc depthVertexDesc = Vertex::GetDepthVertexDesc();
-    m_DepthPipeline = CreateGraphicsPipeline({
-        .pipelineName = "Depth",
-        .vertexShader = "depth.vert",
-        .fragmentShader = "depth.frag",
-        .viewport = &m_Viewport,
-        .scissor = &m_ScissorRect,
-        .pipelineLayout = m_MinimalPipelineLayout,
-        .vertexInput = &depthVertexDesc,
-        .cullMode = VK_CULL_MODE_BACK_BIT,
-        .depthFlags = GraphicsPipelineCreateInfo::PIPELINE_DEPTH_TEST 
-                | GraphicsPipelineCreateInfo::PIPELINE_DEPTH_WRITE,
-        .depthCompare = VK_COMPARE_OP_LESS_OR_EQUAL,
-        .depthFormat = DEPTH_FORMAT
-    });
-
-    m_ShadowPipeline = CreateGraphicsPipeline({
-        .pipelineName = "Shadow",
-        .vertexShader = "shadow.vert",
-        .viewport = &m_ShadowViewport,
-        .scissor = &m_ShadowScissorRect,
-        .pipelineLayout = m_ShadowPipelineLayout,
-        .vertexInput = &depthVertexDesc,
-        .cullMode = VK_CULL_MODE_BACK_BIT,
-        .depthFlags = GraphicsPipelineCreateInfo::PIPELINE_DEPTH_TEST 
-                | GraphicsPipelineCreateInfo::PIPELINE_DEPTH_WRITE,
-        .depthCompare = VK_COMPARE_OP_LESS_OR_EQUAL,
-        .depthFormat = DEPTH_FORMAT
-    });
-
-    VertexInputDesc vertexDesc = Vertex::GetVertexDesc();
-    m_GBufferPipeline = CreateGraphicsPipeline({
-        .pipelineName = "GBuffer",
-        .vertexShader = "gBuffer.vert",
-        .fragmentShader = "gBuffer.frag",
-        .viewport = &m_Viewport,
-        .scissor = &m_ScissorRect,
-        .pipelineLayout = m_MinimalPipelineLayout,
-        .vertexInput = &vertexDesc,
-        .depthFlags = GraphicsPipelineCreateInfo::PIPELINE_DEPTH_TEST,
-        .depthCompare = VK_COMPARE_OP_LESS_OR_EQUAL,
-        .depthFormat = DEPTH_FORMAT,
-        .attachmentFormats = { ALBEDO_FORMAT, NORMAL_FORMAT, MATERIAL_FORMAT }
-    });
-
-    m_TransparencyPipeline = CreateGraphicsPipeline({
-        .pipelineName = "Transparency",
-        .vertexShader = "transparency.vert",
-        .fragmentShader = "transparency.frag",
-        .viewport = &m_Viewport,
-        .scissor = &m_ScissorRect,
-        .pipelineLayout = m_LightingPipelineLayout,
-        .vertexInput = &vertexDesc,
-        .cullMode = VK_CULL_MODE_NONE,
-        .blendEnable = true,
-        .depthFlags = GraphicsPipelineCreateInfo::PIPELINE_DEPTH_TEST,
-        .depthCompare = VK_COMPARE_OP_LESS_OR_EQUAL,
-        .depthFormat = DEPTH_FORMAT,
-        .attachmentFormats = { LIGHTING_FORMAT }
-    });
-
-    m_ToneMapPipeline = CreateGraphicsPipeline({
-        .pipelineName = "Tonemapping",
-        .vertexShader = "fullscreen.vert", 
-        .fragmentShader = "tonemap.frag", 
-        .viewport = &m_Viewport, 
-        .scissor = &m_ScissorRect, 
-        .pipelineLayout = m_MinimalPipelineLayout, 
-        .cullMode = VK_CULL_MODE_BACK_BIT,
-        .depthCompare = VK_COMPARE_OP_ALWAYS, 
-        .attachmentFormats = { TONE_MAP_FORMAT }
-    });
-
-    m_AntiAliasingPipeline = CreateGraphicsPipeline({
-        .pipelineName = "Anti-aliasing",
-        .vertexShader = "fullscreen.vert", 
-        .fragmentShader = "antialias.frag", 
-        .viewport = &m_Viewport, 
-        .scissor = &m_ScissorRect, 
-        .pipelineLayout = m_MinimalPipelineLayout, 
-        .cullMode = VK_CULL_MODE_BACK_BIT,
-        .depthCompare = VK_COMPARE_OP_ALWAYS, 
-        .attachmentFormats = { m_SwapchainFormat }
-    });
+    m_AntiAliasingPipeline.SetName("Anti Aliasing")
+            .SetDevice(device)
+            .SetKind(PipelineKind::GRAPHICS)
+            .AddDescriptorLayout(m_DescriptorLayout0)
+            .AddDescriptorLayout(m_DescriptorLayout1)
+            .AddShader(ShaderKind::VERTEX, "fullscreen.verte")
+            .AddShader(ShaderKind::FRAGMENT, "antialias.frag")
+            .SetDynamicColorAttachment(m_SwapchainFormat)
+            .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
+            .SetCulling(VK_CULL_MODE_BACK_BIT)
+            .SetDepthCompare(VK_COMPARE_OP_ALWAYS)
+            .Build();
+    m_AntiAliasingPipeline.EnqueueCleanup(m_MainDeleter);
 
     // ================================================== Compute Pipelines ==================================================
 
-    m_LightCullingPipeline = CreateComputePipeline({
-        .pipelineName = "Light-Culling",
-        .computeShader = "lightCulling.comp",
-        .pipelineLayout = m_LightCullingPipelineLayout
-    });
+    m_LightCullingPipeline.SetName("Light Culling")
+            .SetDevice(device)
+            .SetKind(PipelineKind::COMPUTE)
+            .AddDescriptorLayout(m_DescriptorLayout0)
+            .AddDescriptorLayout(m_DummyDescriptorLayout)
+            .AddDescriptorLayout(m_DescriptorLayout2)
+            .AddShader(ShaderKind::COMPUTE, "lightCulling.comp")
+            .Build();
+    m_LightCullingPipeline.EnqueueCleanup(m_MainDeleter);
 
-    m_LightingPipeline = CreateComputePipeline({
-        .pipelineName = "Lighting",
-        .computeShader = "lighting.comp",
-        .pipelineLayout = m_LightingPipelineLayout
-    });
+    m_LightingPipeline.SetName("Lighting")
+            .SetDevice(device)
+            .SetKind(PipelineKind::COMPUTE)
+            .AddDescriptorLayout(m_DescriptorLayout0)
+            .AddDescriptorLayout(m_DescriptorLayout1)
+            .AddDescriptorLayout(m_DescriptorLayout2)
+            .AddShader(ShaderKind::COMPUTE, "lighting.comp")
+            .Build();
+    m_LightingPipeline.EnqueueCleanup(m_MainDeleter);
 
-    m_BloomLightExtractionPipeline = CreateComputePipeline({
-        .pipelineName = "Bloom-Light-Extraction",
-        .computeShader = "lightExtraction.comp",
-        .pipelineLayout = m_BloomPipelineLayout
-    });
+    m_BloomLightExtractionPipeline.SetName("Bloom (Light Extraction)")
+            .SetDevice(device)
+            .SetKind(PipelineKind::COMPUTE)
+            .AddDescriptorLayout(m_DescriptorLayout0)
+            .AddDescriptorLayout(m_DummyDescriptorLayout)
+            .AddDescriptorLayout(m_DescriptorLayout2)
+            .AddDescriptorLayout(m_DescriptorLayout3)
+            .AddPushConstant<BloomPushConstants>(VK_SHADER_STAGE_COMPUTE_BIT)
+            .AddShader(ShaderKind::COMPUTE, "lightExtraction.comp")
+            .Build();
+    m_BloomLightExtractionPipeline.EnqueueCleanup(m_MainDeleter);
 
-    m_BloomDownsamplePipeline = CreateComputePipeline({
-        .pipelineName = "Bloom-Downsample",
-        .computeShader = "downsample.comp",
-        .pipelineLayout = m_BloomPipelineLayout
-    });
+    m_BloomDownsamplePipeline.SetName("Bloom (Downsample)")
+            .SetDevice(device)
+            .SetKind(PipelineKind::COMPUTE)
+            .AddDescriptorLayout(m_DescriptorLayout0)
+            .AddDescriptorLayout(m_DummyDescriptorLayout)
+            .AddDescriptorLayout(m_DescriptorLayout2)
+            .AddDescriptorLayout(m_DescriptorLayout3)
+            .AddPushConstant<BloomPushConstants>(VK_SHADER_STAGE_COMPUTE_BIT)
+            .AddShader(ShaderKind::COMPUTE, "downsample.comp")
+            .Build();
+    m_BloomDownsamplePipeline.EnqueueCleanup(m_MainDeleter);
 
-    m_BloomHorizontalBlurPipeline = CreateComputePipeline({
-        .pipelineName = "Bloom-Horizontal-Blur",
-        .computeShader = "horizontalBlur.comp",
-        .pipelineLayout = m_BloomPipelineLayout
-    });
+    m_BloomHorizontalBlurPipeline.SetName("Bloom (Horizontal Blur)")
+            .SetDevice(device)
+            .SetKind(PipelineKind::COMPUTE)
+            .AddDescriptorLayout(m_DescriptorLayout0)
+            .AddDescriptorLayout(m_DummyDescriptorLayout)
+            .AddDescriptorLayout(m_DescriptorLayout2)
+            .AddDescriptorLayout(m_DescriptorLayout3)
+            .AddPushConstant<BloomPushConstants>(VK_SHADER_STAGE_COMPUTE_BIT)
+            .AddShader(ShaderKind::COMPUTE, "horizontalBlur.comp")
+            .Build();
+    m_BloomHorizontalBlurPipeline.EnqueueCleanup(m_MainDeleter);
 
-    m_BloomVerticalBlurPipeline = CreateComputePipeline({
-        .pipelineName = "Bloom-Vertical-Blur",
-        .computeShader = "verticalBlur.comp",
-        .pipelineLayout = m_BloomPipelineLayout
-    });
+    m_BloomVerticalBlurPipeline.SetName("Bloom (Vertical Blur)")
+            .SetDevice(device)
+            .SetKind(PipelineKind::COMPUTE)
+            .AddDescriptorLayout(m_DescriptorLayout0)
+            .AddDescriptorLayout(m_DummyDescriptorLayout)
+            .AddDescriptorLayout(m_DescriptorLayout2)
+            .AddDescriptorLayout(m_DescriptorLayout3)
+            .AddPushConstant<BloomPushConstants>(VK_SHADER_STAGE_COMPUTE_BIT)
+            .AddShader(ShaderKind::COMPUTE, "verticalBlur.comp")
+            .Build();
+    m_BloomVerticalBlurPipeline.EnqueueCleanup(m_MainDeleter);
 
-    m_BloomAccumulatePipeline = CreateComputePipeline({
-        .pipelineName = "Bloom-Accumulate",
-        .computeShader = "accumulate.comp",
-        .pipelineLayout = m_BloomPipelineLayout
-    });
+    m_BloomAccumulatePipeline.SetName("Bloom (Upscale / Accumulate)")
+            .SetDevice(device)
+            .SetKind(PipelineKind::COMPUTE)
+            .AddDescriptorLayout(m_DescriptorLayout0)
+            .AddDescriptorLayout(m_DummyDescriptorLayout)
+            .AddDescriptorLayout(m_DescriptorLayout2)
+            .AddDescriptorLayout(m_DescriptorLayout3)
+            .AddPushConstant<BloomPushConstants>(VK_SHADER_STAGE_COMPUTE_BIT)
+            .AddShader(ShaderKind::COMPUTE, "accumulate.comp")
+            .Build();
+    m_BloomAccumulatePipeline.EnqueueCleanup(m_MainDeleter);
 }
 
 void VulkanBackend::InitMiscBuffers()
@@ -2494,231 +2348,14 @@ void VulkanBackend::InitMiscDescriptors()
 
 void VulkanBackend::InitMiscPipelines()
 {
-    VkPushConstantRange normalMipmapPushConstantRange = {
-        .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-        .size = sizeof(NormalMipmapPushConstants),
-    };
-
-    VkPipelineLayoutCreateInfo pipelineInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .setLayoutCount = 1,
-        .pSetLayouts = &m_NormalMipmapDescriptorLayout,
-        .pushConstantRangeCount = 1,
-        .pPushConstantRanges = &normalMipmapPushConstantRange
-    };
-    VK_CHECK(vkCreatePipelineLayout(device, &pipelineInfo, nullptr, &m_NormalMipmapPipelineLayout));
-    m_MainDeleter.push_back([=, this] {
-        vkDestroyPipelineLayout(device, m_NormalMipmapPipelineLayout, nullptr);
-    });
-
-    m_NormalMipmapPipeline = CreateComputePipeline({
-        .pipelineName = "Normal-Mipmap",
-        .computeShader = "normalMipmap.comp",
-        .pipelineLayout = m_NormalMipmapPipelineLayout
-    });
-}
-
-VkPipeline VulkanBackend::CreateComputePipeline(const ComputePipelineCreateInfo&& info)
-{
-    INFO("Creating compute pipeline: " << info.pipelineName);
-
-    fs::path computeShaderFullPath("src/Engine/Resource/Shader" / info.computeShader);
-    computeShaderFullPath.replace_extension(".comp.spirv");
-    VkShaderModule computeModule = LoadShaderModule(computeShaderFullPath);
-    VkComputePipelineCreateInfo lightCullingComputePipelineInfo = {
-        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-        .stage = {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-            .module = computeModule,
-            .pName = "main"
-        },
-        .layout = info.pipelineLayout
-    };
-
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &lightCullingComputePipelineInfo, nullptr, &pipeline));
-
-    vkDestroyShaderModule(device, computeModule, nullptr);
-    m_MainDeleter.push_back([=, this] {
-        vkDestroyPipeline(device, pipeline, nullptr);
-    });
-
-    return pipeline;
-}
-
-VkPipeline VulkanBackend::CreateGraphicsPipeline(const GraphicsPipelineCreateInfo&& info)
-{
-    INFO("Creating graphics pipeline: " << info.pipelineName);
-
-    bool depthTest = FLAGS_CONTAIN(info.depthFlags, GraphicsPipelineCreateInfo::PIPELINE_DEPTH_TEST);
-    bool depthWrite = FLAGS_CONTAIN(info.depthFlags, GraphicsPipelineCreateInfo::PIPELINE_DEPTH_WRITE);
-    bool depthBias = FLAGS_CONTAIN(info.depthFlags, GraphicsPipelineCreateInfo::PIPELINE_DEPTH_BIAS);
-
-    uint32_t attachmentCount = info.attachmentFormats.size();
-    uint32_t stageCount = (info.fragmentShader.empty()) ? 1 : 2;
-
-    fs::path vertexShaderFullPath("src/Engine/Resource/Shader" / info.vertexShader);
-    vertexShaderFullPath.replace_extension(".vert.spirv");
-    VkShaderModule vertexModule = LoadShaderModule(vertexShaderFullPath);
-
-    VkShaderModule fragmentModule = VK_NULL_HANDLE;
-    if (stageCount == 2) {
-        fs::path fragmentShaderFullPath("src/Engine/Resource/Shader" / info.fragmentShader);
-        fragmentShaderFullPath.replace_extension(".frag.spirv");
-        fragmentModule = LoadShaderModule(fragmentShaderFullPath);
-    }
-
-    VkPipelineShaderStageCreateInfo shaderStages[2] = { 
-        {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .stage = VK_SHADER_STAGE_VERTEX_BIT,
-            .module = vertexModule,
-            .pName = "main",
-        },
-        {
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .module = fragmentModule,
-            .pName = "main"
-        }
-    };
-
-    VkPipelineVertexInputStateCreateInfo vertexInputState = { 
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .vertexBindingDescriptionCount = (info.vertexInput) ? static_cast<uint32_t>(info.vertexInput->bindings.size()) : 0,
-        .pVertexBindingDescriptions = (info.vertexInput) ? info.vertexInput->bindings.data() : nullptr,
-        .vertexAttributeDescriptionCount = (info.vertexInput) ? static_cast<uint32_t>(info.vertexInput->attributes.size()) : 0,
-        .pVertexAttributeDescriptions = (info.vertexInput) ? info.vertexInput->attributes.data() : nullptr,
-    };
-
-    VkPipelineInputAssemblyStateCreateInfo inputAssembly = { 
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
-    };
-
-    VkPipelineViewportStateCreateInfo viewportState = { 
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-        .viewportCount = 1,
-        .pViewports = info.viewport,
-        .scissorCount = 1,
-        .pScissors = info.scissor,
-    };
-
-    VkPipelineRasterizationStateCreateInfo rasterizationState = { 
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-        .cullMode = info.cullMode,
-        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        .depthBiasEnable = (depthBias) ? VK_TRUE : VK_FALSE,
-        .depthBiasConstantFactor = (depthBias) ? 1.25f : 0.0f,
-        .depthBiasSlopeFactor = (depthBias) ? 1.75f : 0.0f,
-        .lineWidth = 1.0
-    };
-
-    VkPipelineMultisampleStateCreateInfo multisampleState = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
-    };
-
-    VkPipelineDepthStencilStateCreateInfo stencilState = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .depthTestEnable = (depthTest) ? VK_TRUE : VK_FALSE,
-        .depthWriteEnable = (depthWrite) ? VK_TRUE : VK_FALSE,
-        .depthCompareOp = info.depthCompare,
-        .minDepthBounds = 0.0,
-        .maxDepthBounds = 1.0,
-    };
-
-    VkDynamicState dynamicStates[2] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
-    VkPipelineDynamicStateCreateInfo dynamicState = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-        .dynamicStateCount = 2,
-        .pDynamicStates = dynamicStates,
-    };
-
-    std::vector<VkPipelineColorBlendAttachmentState> blendAttachments;
-    blendAttachments.reserve(attachmentCount);
-    for (uint32_t i = 0; i < attachmentCount; i++) {
-        blendAttachments.push_back({
-            .blendEnable = (info.blendEnable) ? VK_TRUE : VK_FALSE,
-            .srcColorBlendFactor = (info.blendEnable) ? VK_BLEND_FACTOR_SRC_ALPHA : VK_BLEND_FACTOR_ZERO,
-            .dstColorBlendFactor = (info.blendEnable) ? VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA : VK_BLEND_FACTOR_ZERO,
-            .srcAlphaBlendFactor = (info.blendEnable) ? VK_BLEND_FACTOR_ONE : VK_BLEND_FACTOR_ZERO,
-            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_A_BIT
-        });
-    };
-
-    VkPipelineColorBlendStateCreateInfo blendState = { 
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-        .logicOpEnable = VK_FALSE,
-        .logicOp = VK_LOGIC_OP_COPY,
-        .attachmentCount = attachmentCount,
-        .pAttachments = (attachmentCount > 0) ? blendAttachments.data() : nullptr
-    };
-
-    std::vector<VkFormat> formatList(info.attachmentFormats);
-    VkPipelineRenderingCreateInfoKHR renderingInfo = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR,
-        .colorAttachmentCount = attachmentCount,
-        .pColorAttachmentFormats = (attachmentCount > 0) ? formatList.data() : nullptr,
-        .depthAttachmentFormat = info.depthFormat,
-    };
-
-    VkGraphicsPipelineCreateInfo pipelineInfo = {
-        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        .pNext = &renderingInfo,
-        .stageCount = stageCount,
-        .pStages = shaderStages,
-        .pVertexInputState = &vertexInputState,
-        .pInputAssemblyState = &inputAssembly,
-        .pViewportState = &viewportState,
-        .pRasterizationState = &rasterizationState,
-        .pMultisampleState = &multisampleState,
-        .pDepthStencilState = &stencilState,
-        .pColorBlendState = &blendState,
-        .pDynamicState = &dynamicState,
-        .layout = info.pipelineLayout
-    };
-
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline));
-    m_MainDeleter.push_back([=, this] {
-        vkDestroyPipeline(device, pipeline, nullptr);
-    });
-
-    vkDestroyShaderModule(device, vertexModule, nullptr);
-    if (stageCount == 2) {
-        vkDestroyShaderModule(device, fragmentModule, nullptr);
-    }
-    return pipeline;
-}
-
-VkShaderModule VulkanBackend::LoadShaderModule(const std::filesystem::path& path)
-{
-    std::ifstream file(path, std::ios::ate | std::ios::binary);
-    if (!file.is_open()) {
-        FATAL("Failed to open shader file");
-    }
-
-    size_t fileSize = file.tellg();
-    uint32_t *buf = new uint32_t[fileSize];
-
-    file.seekg(0);
-    file.read((char *) buf, fileSize);
-    file.close();
-
-    VkShaderModule shaderModule;
-    VkShaderModuleCreateInfo info = {
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = fileSize,
-        .pCode = buf,
-    };
-    VkResult err = vkCreateShaderModule(device, &info, nullptr, &shaderModule);
-    ASSERT(!err && "Failed to create shader module");
-
-    delete[] buf;
-
-    return shaderModule;
+    m_NormalMipmapPipeline.SetName("Normal Mipmap")
+            .SetDevice(device)
+            .SetKind(PipelineKind::COMPUTE)
+            .AddDescriptorLayout(m_NormalMipmapDescriptorLayout)
+            .AddPushConstant<NormalMipmapPushConstants>(VK_SHADER_STAGE_COMPUTE_BIT)
+            .AddShader(ShaderKind::COMPUTE, "normalMipmap.comp")
+            .Build();
+    m_NormalMipmapPipeline.EnqueueCleanup(m_MainDeleter);
 }
 
 void VulkanBackend::GenerateMips(AllocatedTexture allocation, const ImageResource& image, GraphicsFrontend& frontend)
@@ -3073,11 +2710,14 @@ void VulkanBackend::GenerateMips(AllocatedTexture allocation, const ImageResourc
             };
             vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
 
+            DescriptorSets descriptors = { &m_NormalMipmapDescriptorSet, 1 };
+            m_NormalMipmapPipeline.BeginCompute(commandBuffer, descriptors);
+
             // Prepare to compute
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_NormalMipmapPipeline);
-            vkCmdBindDescriptorSets(commandBuffer, 
-                    VK_PIPELINE_BIND_POINT_COMPUTE, m_NormalMipmapPipelineLayout, 
-                    0, 1, &m_NormalMipmapDescriptorSet, 0, nullptr);
+            // vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_NormalMipmapPipeline);
+            // vkCmdBindDescriptorSets(commandBuffer, 
+            //         VK_PIPELINE_BIND_POINT_COMPUTE, m_NormalMipmapPipelineLayout, 
+            //         0, 1, &m_NormalMipmapDescriptorSet, 0, nullptr);
 
             // Scale up staging image to top mip level
             NormalMipmapPushConstants constants = {
@@ -3089,7 +2729,8 @@ void VulkanBackend::GenerateMips(AllocatedTexture allocation, const ImageResourc
                 .dstHeight = textureArray.resolution
             };
             vkCmdPushConstants(commandBuffer, 
-                    m_NormalMipmapPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
+                    // m_NormalMipmapPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
+                    m_NormalMipmapPipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
                     0, sizeof(NormalMipmapPushConstants), 
                     &constants);
 
@@ -3123,7 +2764,8 @@ void VulkanBackend::GenerateMips(AllocatedTexture allocation, const ImageResourc
                 };
 
                 vkCmdPushConstants(commandBuffer, 
-                        m_NormalMipmapPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
+                        // m_NormalMipmapPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
+                        m_NormalMipmapPipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
                         0, sizeof(NormalMipmapPushConstants), 
                         &constants);
 
@@ -3137,6 +2779,8 @@ void VulkanBackend::GenerateMips(AllocatedTexture allocation, const ImageResourc
                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
                         0, 0, nullptr, 0, nullptr, 1, &barrier);
             }
+
+            m_NormalMipmapPipeline.EndCompute();
 
             // Transition all levels to shader readable
             barrier.image = textureArray.image.image;
