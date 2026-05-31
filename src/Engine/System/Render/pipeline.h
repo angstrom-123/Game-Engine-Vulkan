@@ -49,8 +49,6 @@ enum PipelineInfoFlag {
 };
 using PipelineInfoFlags = uint32_t;
 
-// TODO: Attachments, start rendering, bind pipeline, bind descriptor sets, 
-
 // TODO: Each image gets a class with a view, format, layout, etc.
 
 // TODO: Push constants here are copied into shader code?

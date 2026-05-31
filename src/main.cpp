@@ -12,8 +12,7 @@ int main(int argc, const char *argv[]) {
         .appName = "My App",
         .vsync = Config::VsyncEnabled(argc, argv),
         .windowWidth = 1600,
-        .windowHeight = 900,
-        .msaaSamples = 4,
+        .windowHeight = 900
     };
     Engine engine(config);
 
@@ -21,7 +20,7 @@ int main(int argc, const char *argv[]) {
     engine.RegisterScene<ApesScene>("src/Application/ApesScene");
     engine.RegisterScene<ShadowTestScene>("src/Application/ShadowTestScene");
 
-    // Scene name specified in its MANIFEST.yaml under the `manifest` tag
+    // NOTE: Scene name specified in its MANIFEST.yaml under the `manifest` tag
     engine.Run("SponzaScene");
     // engine.Run("ShadowTestScene");
 

@@ -17,8 +17,6 @@ Engine::Engine(Config& config)
 {
     ASSERT(config.windowWidth > 0 && "Window width must not be 0");
     ASSERT(config.windowHeight > 0 && "Window height must not be 0");
-    ASSERT(config.msaaSamples > 0 && "MSAA samples must not be 0");
-    ASSERT(std::floor(std::log2(config.msaaSamples)) == std::log2(config.msaaSamples) && "MSAA sample count must be a power of 2");
 
     // Window
     glfwInit();

@@ -9,7 +9,6 @@ struct Config {
     bool vsync;
     uint32_t windowWidth;
     uint32_t windowHeight;
-    uint64_t msaaSamples;
 
     static bool VsyncEnabled(int argc, const char *argv[]);
 };
