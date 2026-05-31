@@ -32,7 +32,7 @@ void RenderSystem::Update(ECS *ecs, VulkanBackend *backend)
 {
     PROFILER_PROFILE_SCOPE("RenderSystem::Update");
     m_LightSystem->Update(ecs);
-    m_ShadowSystem->Update(ecs, m_Frontend.camera);
+    m_ShadowSystem->Update(ecs, m_Frontend.camera, backend->settings);
     backend->Draw(ecs, m_Frontend, entities);
 }
 
@@ -276,8 +276,8 @@ Entity RenderSystem::CreateText(ECS *ecs, const TextCreateInfo& info, VulkanBack
 
             float x0 = penX + g.offset.x * METRES_PER_PIXEL;
             float y0 = penY - g.offset.y * METRES_PER_PIXEL;
-            float x1 = x0 + (g.uv1.x - g.uv0.x) * static_cast<float>(FONT_RESOLUTION) * METRES_PER_PIXEL;
-            float y1 = y0 - (g.uv1.y - g.uv0.y) * static_cast<float>(FONT_RESOLUTION) * METRES_PER_PIXEL;
+            float x1 = x0 + (g.uv1.x - g.uv0.x) * static_cast<float>(backend->settings.fontResolution) * METRES_PER_PIXEL;
+            float y1 = y0 - (g.uv1.y - g.uv0.y) * static_cast<float>(backend->settings.fontResolution) * METRES_PER_PIXEL;
 
             vertices.emplace_back(glm::vec3(x0, y0, 0.0), glm::vec3(0.0, 0.0, 1.0), glm::vec2(g.uv0.x, g.uv0.y), glm::vec4(1.0, glm::vec3(0.0))); // 0
             vertices.emplace_back(glm::vec3(x0, y1, 0.0), glm::vec3(0.0, 0.0, 1.0), glm::vec2(g.uv0.x, g.uv1.y), glm::vec4(1.0, glm::vec3(0.0))); // 1
@@ -459,6 +459,12 @@ void RenderSystem::UploadFont(Resource resource, ResourceManager *manager, Vulka
     }
 
     FontResource& fontResource = manager->GetData<FontResource>(resource);
-    m_Fonts.insert({path.generic_string(), fontResource.Pack({12, 20, 28, 36, 44, 52, 60, 68, 76})});
-    m_Textures.insert({path.generic_string(), backend->AllocateTexture(fontResource.bitmap, glm::ivec2(FONT_RESOLUTION), IMAGE_FLAG_FONT_ATLAS, 1, m_Frontend)});
+    m_Fonts.insert({
+        path.generic_string(),
+        fontResource.Pack({12, 20, 28, 36, 44, 52, 60, 68, 76}, backend)
+    });
+    m_Textures.insert({
+        path.generic_string(),
+        backend->AllocateTexture(fontResource.bitmap, glm::ivec2(backend->settings.fontResolution), IMAGE_FLAG_FONT_ATLAS, 1, m_Frontend)
+    });
 }

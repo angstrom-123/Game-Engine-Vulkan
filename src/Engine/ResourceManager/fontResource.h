@@ -40,7 +40,7 @@ struct FontInfo {
 class FontResource {
 public:
     bool Load(const std::filesystem::path& path);
-    FontMetrics Pack(std::initializer_list<int32_t> sizes);
+    FontMetrics Pack(std::initializer_list<int32_t> sizes, class VulkanBackend *backend);
 
 public:
     uint8_t *bitmap = nullptr; // This is a raw pointer for interop with image resources that use stb image

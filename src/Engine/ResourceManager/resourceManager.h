@@ -33,7 +33,7 @@ public:
     PathString GetPath(Resource resource) const;
     void DestroyResource(Resource resource);
     ResourceManifest GetManifest(const fs::path& sceneDir) const;
-    void GetArraySizes(const ResourceManifest& manifest, uint32_t (&results)[TEXTURE_ARRAY_MAX_ENUM]) const;
+    void GetArraySizes(const ResourceManifest& manifest, uint32_t (&results)[static_cast<size_t>(TextureArrayID::MAX_ENUM)], const VulkanBackendSettings& settings) const;
     DefaultTextures GetDefaultTextures() const { return m_DefaultTextures; }
     DefaultFonts GetDefaultFonts() const { return m_DefaultFonts; }
 

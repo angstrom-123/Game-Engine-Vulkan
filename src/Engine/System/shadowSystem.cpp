@@ -3,7 +3,7 @@
 #include "System/Render/backendTypes.h"
 #include "Util/profiler.h"
 
-void ShadowSystem::Update(ECS *ecs, Entity cameraEntity)
+void ShadowSystem::Update(ECS *ecs, Entity cameraEntity, const VulkanBackendSettings& settings)
 {
     PROFILER_PROFILE_SCOPE("ShadowSystem::Update");
 
@@ -19,7 +19,7 @@ void ShadowSystem::Update(ECS *ecs, Entity cameraEntity)
             Shadowcaster::CalculateFrustumCorners(camera, corners);
             for (uint32_t i = 0; i < SHADOW_CASCADE_COUNT; i++) {
                 ASSERT(shadowcaster.cascades[i].shadowMapIndex != UINT32_MAX && "Unallocated shadow map");
-                shadowcaster.cascades[i].vp = Shadowcaster::CalculateDirectionalVP(corners[i], light);
+                shadowcaster.cascades[i].vp = Shadowcaster::CalculateDirectionalVP(corners[i], light, settings);
                 shadowcaster.cascades[i].far = corners[i].far;
                 shadowcaster.cascades[i].near = corners[i].near;
             }

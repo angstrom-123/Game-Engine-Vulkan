@@ -13,10 +13,9 @@ void GLFWErrorCb(int error, const char *desc)
     ERROR(desc);
 }
 
-Engine::Engine(Config& config)
+Engine::Engine()
 {
-    ASSERT(config.windowWidth > 0 && "Window width must not be 0");
-    ASSERT(config.windowHeight > 0 && "Window height must not be 0");
+    m_Config = Config("src/CONFIG.yaml");
 
     // Window
     glfwInit();
@@ -26,9 +25,9 @@ Engine::Engine(Config& config)
     glfwWindowHint(GLFW_FOCUSED, GLFW_TRUE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
     glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
-    m_Window = glfwCreateWindow(config.windowWidth, config.windowHeight, config.appName, nullptr, nullptr);
+    m_Window = glfwCreateWindow(m_Config.windowWidth, m_Config.windowHeight, m_Config.appName.c_str(), nullptr, nullptr);
 
-    m_GraphicsBackend.Init(m_Window, config);
+    m_GraphicsBackend.Init(m_Window, m_Config);
 
     m_ResourceManager.Init();
 
@@ -47,11 +46,13 @@ Engine::~Engine()
     glfwTerminate();
 }
 
-void Engine::Run(const std::string& startSceneName)
+void Engine::Run()
 {
+    PROFILER_BEGIN_SESSION("Profiling_Session");
+
     double lastTime = GetTime();
 
-    m_SceneManager.SwitchScene(this, &m_GraphicsBackend, &m_ResourceManager, startSceneName, false);
+    m_SceneManager.SwitchScene(this, &m_GraphicsBackend, &m_ResourceManager, m_Config.startScene, false);
 
     // Main loop
     while (!glfwWindowShouldClose(m_Window)) {
@@ -67,6 +68,8 @@ void Engine::Run(const std::string& startSceneName)
     }
 
     INFO("Done");
+
+    PROFILER_END_SESSION();
 }
 
 void Engine::EventCallback(Event event)
@@ -83,4 +86,31 @@ void Engine::EventHook(Event event, void *data)
 void Engine::SetScene(const std::string& name, bool showLoadingScene)
 {
     m_SceneManager.SwitchScene(this, &m_GraphicsBackend, &m_ResourceManager, name, showLoadingScene);
+}
+
+double Engine::GetTime()
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count() / 1000000.0;
+}
+
+uint64_t Engine::GetFrameNumber()
+{
+    return m_GraphicsBackend.frameNumber;
+}
+
+glm::vec2 Engine::GetFrameMouseDelta()
+{
+    return m_EventManager.mousePos - m_EventManager.mousePosLastFrame;
+}
+
+glm::ivec2 Engine::GetWindowSize()
+{
+    glm::ivec2 res;
+    glfwGetFramebufferSize(m_Window, &res.x, &res.y);
+    return res;
+}
+
+bool *Engine::GetKeysDown()
+{
+    return m_EventManager.keysDown;
 }

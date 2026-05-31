@@ -13,6 +13,7 @@ enum class TextureKind : uint32_t {
 
 class TextureArray {
 public:
+    TextureArray() = default;
     TextureArray(uint32_t resolution, VkFormat format, TextureKind kind);
     void Init(uint32_t layerCount, class VulkanBackend& backend);
     void Cleanup(VkDevice device, VmaAllocator allocator);

@@ -1,0 +1,13 @@
+app:
+  name: "Example App"
+  startScene: "SponzaScene"
+
+window:
+  width: 1600
+  height: 900
+
+graphics:
+  vsync: true
+  shadowQuality: 3
+  # bloom: false
+  bloom: true

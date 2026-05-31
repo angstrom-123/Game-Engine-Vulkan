@@ -8,9 +8,9 @@ FragmentPushConstants::Material Material::Pack()
         .metallic = metallic,
         .ao = ao,
         .emissive = emissive,
-        .diffuseIndex = diffuseTexture.arrayID,
+        .diffuseIndex = static_cast<uint32_t>(diffuseTexture.arrayID),
         .diffuseLayer = diffuseTexture.layerID,
-        .normalIndex = normalTexture.arrayID,
+        .normalIndex = static_cast<uint32_t>(normalTexture.arrayID),
         .normalLayer = normalTexture.layerID,
         .flags = flags
     };

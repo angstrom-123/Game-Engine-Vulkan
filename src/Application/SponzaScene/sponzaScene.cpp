@@ -13,11 +13,6 @@
 #include <glm/trigonometric.hpp>
 #include <glm/vec3.hpp>
 
-float Random(float min, float max)
-{
-    return min + static_cast<float>(rand()) / (static_cast<float>(RAND_MAX) / (max - min));
-}
-
 void SponzaScene::OnInit(const SceneConfig& config)
 {
     m_LastFrame = 0;
@@ -29,7 +24,9 @@ void SponzaScene::OnInit(const SceneConfig& config)
 
     // Get the sponza 3d model from this scene's resources
     const auto [origin, _] = core.renderSystem->GetModel(core.ecs, "Resource/sponza.obj");
-    core.ecs->GetComponent<Transform>(origin).Scale(0.015).Translate(0.0, -2.0, 0.0);
+    core.ecs->GetComponent<Transform>(origin)
+            .Scale(0.015)
+            .Translate(0.0, -2.0, 0.0);
 
     // Directional shadowcasting light
     LightCreateInfo sunLightInfo = {
@@ -41,19 +38,6 @@ void SponzaScene::OnInit(const SceneConfig& config)
         .shadowcaster       = true,
     };
     core.renderSystem->CreateDirectionalLight(core.ecs, sunLightInfo, core.graphicsBackend);
-
-    // // Spot shadowcasting light
-    // LightCreateInfo spotLightInfo = {
-    //     .position           = glm::vec3(0.0, 6.0, 0.0),
-    //     .color              = glm::vec3(1.0, 0.0, 1.0),
-    //     .direction          = glm::vec3(-1.0, 0.0, 0.3),
-    //     .intensity          = 1.0,
-    //     .radius             = 20.0,
-    //     .innerConeRadians   = glm::radians(20.0),
-    //     .outerConeRadians   = glm::radians(45.0),
-    //     .shadowcaster       = true
-    // };
-    // core.renderSystem->CreateSpotLight(core.ecs, spotLightInfo, core.graphicsBackend);
 }
 
 void SponzaScene::OnUpdate(double deltaTime)

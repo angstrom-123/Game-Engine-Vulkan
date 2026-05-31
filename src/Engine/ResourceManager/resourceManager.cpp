@@ -205,14 +205,14 @@ ResourceManifest ResourceManager::GetManifest(const fs::path& sceneDir) const
     return it->second;
 }
 
-void ResourceManager::GetArraySizes(const ResourceManifest& manifest, uint32_t (&results)[TEXTURE_ARRAY_MAX_ENUM]) const
+void ResourceManager::GetArraySizes(const ResourceManifest& manifest, uint32_t (&results)[static_cast<size_t>(TextureArrayID::MAX_ENUM)], const VulkanBackendSettings& settings) const
 {
     // Enough space for default textures
-    results[TEXTURE_ARRAY_COLOR_SMALL] = 3;
-    results[TEXTURE_ARRAY_COLOR_LARGE] = 1;
-    results[TEXTURE_ARRAY_DATA_SMALL] = 1;
-    results[TEXTURE_ARRAY_DATA_LARGE] = 1;
-    results[TEXTURE_ARRAY_FONT] = 1;
+    results[static_cast<size_t>(TextureArrayID::COLOR_SMALL)] = 3;
+    results[static_cast<size_t>(TextureArrayID::COLOR_LARGE)] = 1;
+    results[static_cast<size_t>(TextureArrayID::DATA_SMALL)] = 1;
+    results[static_cast<size_t>(TextureArrayID::DATA_LARGE)] = 1;
+    results[static_cast<size_t>(TextureArrayID::FONT)] = 1;
 
     std::set<fs::path> counted;
 
@@ -227,10 +227,10 @@ void ResourceManager::GetArraySizes(const ResourceManifest& manifest, uint32_t (
         for (const SubMaterialResource& subMaterial : GetData<MaterialResource>(resource).subMaterials) {
             if (!counted.contains(subMaterial.diffuseTexture)) {
                 const ImageResource& img = GetData<ImageResource>(GetResource(subMaterial.diffuseTexture));
-                if (Fits(img.size, COLOR_SMALL_RESOLUTION)) {
-                    results[TEXTURE_ARRAY_COLOR_SMALL]++;
-                } else if (Fits(img.size, COLOR_LARGE_RESOLUTION)) {
-                    results[TEXTURE_ARRAY_COLOR_LARGE]++;
+                if (Fits(img.size, settings.colorSmallResolution)) {
+                    results[static_cast<size_t>(TextureArrayID::COLOR_SMALL)]++;
+                } else if (Fits(img.size, settings.colorLargeResolution)) {
+                    results[static_cast<size_t>(TextureArrayID::COLOR_LARGE)]++;
                 } else {
                     FATAL("Image too large to allocate in texture array");
                 }
@@ -239,10 +239,10 @@ void ResourceManager::GetArraySizes(const ResourceManifest& manifest, uint32_t (
 
             if (!counted.contains(subMaterial.normalTexture)) {
                 const ImageResource& img = GetData<ImageResource>(GetResource(subMaterial.normalTexture));
-                if (Fits(img.size, DATA_SMALL_RESOLUTION)) {
-                    results[TEXTURE_ARRAY_DATA_SMALL]++;
-                } else if (Fits(img.size, DATA_LARGE_RESOLUTION)) {
-                    results[TEXTURE_ARRAY_DATA_LARGE]++;
+                if (Fits(img.size, settings.dataSmallResolution)) {
+                    results[static_cast<size_t>(TextureArrayID::DATA_SMALL)]++;
+                } else if (Fits(img.size, settings.dataLargeResolution)) {
+                    results[static_cast<size_t>(TextureArrayID::DATA_LARGE)]++;
                 } else {
                     FATAL("Image too large to allocate in texture array");
                 }

@@ -50,7 +50,7 @@ void Shadowcaster::CalculateFrustumCorners(const Camera& camera, FrustumCorners 
     }
 }
 
-glm::mat4x4 Shadowcaster::CalculateDirectionalVP(const FrustumCorners& cascade, const Light& light)
+glm::mat4x4 Shadowcaster::CalculateDirectionalVP(const FrustumCorners& cascade, const Light& light, const VulkanBackendSettings& settings)
 {
     glm::vec3 dir = glm::normalize(light.direction);
     glm::vec3 up = glm::vec3(0.0, 1.0, 0.0);
@@ -76,11 +76,11 @@ glm::mat4x4 Shadowcaster::CalculateDirectionalVP(const FrustumCorners& cascade, 
     // Texel snapping
     glm::mat4x4 rawVP = rawProj * rawView;
     glm::vec4 shadowOrigin = rawVP * glm::vec4(0.0, 0.0, 0.0, 1.0);
-    shadowOrigin *= (static_cast<float>(SHADOW_RESOLUTION) / 2.0);
+    shadowOrigin *= (static_cast<float>(settings.shadowResolution) / 2.0);
 
     glm::vec2 roundedOrigin = glm::round(glm::vec2(shadowOrigin));
     glm::vec2 texelOffset = roundedOrigin - glm::vec2(shadowOrigin);
-    texelOffset *= (2.0 / static_cast<float>(SHADOW_RESOLUTION));
+    texelOffset *= (2.0 / static_cast<float>(settings.shadowResolution));
 
     // Apply texel offset to matrix translation components
     rawProj[3][0] += texelOffset.x;

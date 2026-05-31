@@ -2,6 +2,10 @@
 
 #define BLOOM_INTENSITY 0.2
 
+layout (push_constant) uniform Constants {
+    uint bloomEnabled;
+} constants;
+
 layout (set = 0, binding = 0) uniform PerFrameUniforms { 
     // Camera
     mat4 view;
@@ -63,7 +67,7 @@ vec3 LinearToSRGB(vec3 color)
 void main()
 {
     vec3 hdr = texture(hdrTexture, vUV).rgb;
-    vec3 bloom = texture(bloomTexture, vUV).rgb;
+    vec3 bloom = (bool(constants.bloomEnabled)) ? texture(bloomTexture, vUV).rgb : vec3(0.0);
     hdr += bloom * BLOOM_INTENSITY;
 
     vec3 ldr;

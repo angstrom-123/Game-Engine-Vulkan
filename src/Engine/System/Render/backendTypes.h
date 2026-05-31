@@ -8,35 +8,35 @@
 #include "textureArray.h"
 
 const uint32_t FRAMES_IN_FLIGHT = 2;
-const VkFormat DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT; 
-const VkFormat ALBEDO_FORMAT = VK_FORMAT_R8G8B8A8_UNORM; 
-const VkFormat NORMAL_FORMAT = VK_FORMAT_R8G8B8A8_UNORM; 
-const VkFormat MATERIAL_FORMAT = VK_FORMAT_R8G8B8A8_UNORM; 
-const VkFormat LIGHTING_FORMAT = VK_FORMAT_R16G16B16A16_SFLOAT; 
-const VkFormat BLOOM_FORMAT = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
-const VkFormat TONE_MAP_FORMAT = VK_FORMAT_R8G8B8A8_SRGB;
-const uint32_t SHADOW_RESOLUTION = 2048;
-const uint32_t COLOR_SMALL_RESOLUTION = 1024;
-const uint32_t COLOR_LARGE_RESOLUTION = 2048;
-const uint32_t DATA_SMALL_RESOLUTION = 1024;
-const uint32_t DATA_LARGE_RESOLUTION = 2048;
-const uint32_t FONT_RESOLUTION = 2048;
 const uint32_t MAX_LIGHTS = 1024;
-const uint32_t MAX_SHADOWCASTERS = 24;
-const uint32_t SHADOW_CASCADE_COUNT = 3;
-const uint32_t MAX_LIGHTS_PER_TILE = 256;
-const uint32_t COMPUTE_TILE_SIZE = 16;
 const uint32_t MAX_BLOOM_MIPS = 5;
-const uint32_t BLOOM_BLUR_RADIUS = 4;
 const uint32_t MAX_NORMAL_MIPS = 16;
+const uint32_t BLOOM_BLUR_RADIUS = 4;
+const uint32_t SHADOW_CASCADE_COUNT = 3;
 
-struct NormalMipmapPushConstants {
-    uint32_t srcIndex;
-    uint32_t srcWidth;
-    uint32_t srcHeight;
-    uint32_t dstIndex;
-    uint32_t dstWidth;
-    uint32_t dstHeight;
+struct VulkanBackendSettings {
+    VkFormat depthFormat = VK_FORMAT_D32_SFLOAT; 
+    VkFormat albedoFormat = VK_FORMAT_R8G8B8A8_UNORM; 
+    VkFormat normalFormat = VK_FORMAT_R8G8B8A8_UNORM; 
+    VkFormat materialFormat = VK_FORMAT_R8G8B8A8_UNORM; 
+    VkFormat lightingFormat = VK_FORMAT_R16G16B16A16_SFLOAT; 
+    VkFormat bloomFormat = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+    VkFormat tonemapFormat = VK_FORMAT_R8G8B8A8_SRGB;
+    uint32_t shadowResolution = 2048;
+    VkFormat colorTextureFormat = VK_FORMAT_R8G8B8A8_SRGB;
+    VkFormat dataTextureFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormat fontTextureFormat = VK_FORMAT_R8_UNORM;
+    uint32_t colorSmallResolution = 1024;
+    uint32_t colorLargeResolution = 2048;
+    uint32_t dataSmallResolution = 1024;
+    uint32_t dataLargeResolution = 2048;
+    uint32_t fontResolution = 2048;
+    uint32_t maxShadowcasters = 24;
+    uint32_t maxLightsPerTile = 256;
+    uint32_t computeTileSize = 16;
+
+    bool vsync = true;
+    bool bloomEnabled = true;
 };
 
 struct PerFrameUniforms {
@@ -60,11 +60,24 @@ struct PerFrameUniforms {
     } settings;
 
     struct {
-        uint32_t tileSize{COMPUTE_TILE_SIZE};
+        uint32_t tileSize{0};
         uint32_t tilesX{0};
         uint32_t tilesY{0};
-        uint32_t maxLightsPerTile{MAX_LIGHTS_PER_TILE};
+        uint32_t maxLightsPerTile{0};
     } lightCulling;
+};
+
+struct ToneMapPushConstants {
+    uint32_t bloomEnabled{0};
+};
+
+struct NormalMipmapPushConstants {
+    uint32_t srcIndex{0};
+    uint32_t srcWidth{0};
+    uint32_t srcHeight{0};
+    uint32_t dstIndex{0};
+    uint32_t dstWidth{0};
+    uint32_t dstHeight{0};
 };
 
 struct BloomPushConstants {
@@ -143,38 +156,30 @@ struct OffscreenTarget {
     VkImageView view{VK_NULL_HANDLE};
 };
 
-enum TextureArrayID {
-    TEXTURE_ARRAY_COLOR_SMALL,
-    TEXTURE_ARRAY_COLOR_LARGE,
-    TEXTURE_ARRAY_DATA_SMALL,
-    TEXTURE_ARRAY_DATA_LARGE,
-    TEXTURE_ARRAY_FONT,
-    TEXTURE_ARRAY_MAX_ENUM
+enum class TextureArrayID {
+    COLOR_SMALL,
+    COLOR_LARGE,
+    DATA_SMALL,
+    DATA_LARGE,
+    FONT,
+    MAX_ENUM
 };
 
 struct AllocatedTexture {
-    TextureArrayID arrayID = TEXTURE_ARRAY_MAX_ENUM;
-    uint32_t layerID = UINT32_MAX;
+    TextureArrayID arrayID{TextureArrayID::MAX_ENUM};
+    uint32_t layerID{UINT32_MAX};
 };
 
 struct GraphicsFrontendInfo {
     Entity camera{INVALID_HANDLE};
     uint32_t maxShadows{0};
-    uint32_t arrayLayers[TEXTURE_ARRAY_MAX_ENUM];
+    uint32_t arrayLayers[static_cast<size_t>(TextureArrayID::MAX_ENUM)];
 };
 
 struct GraphicsFrontend {
     Entity camera{INVALID_HANDLE};
-
-    TextureArray textureArrays[TEXTURE_ARRAY_MAX_ENUM] {
-        { COLOR_SMALL_RESOLUTION, VK_FORMAT_R8G8B8A8_SRGB, TextureKind::COLOR },    // Color small
-        { COLOR_LARGE_RESOLUTION, VK_FORMAT_R8G8B8A8_SRGB, TextureKind::COLOR },    // Color large
-        { DATA_SMALL_RESOLUTION, VK_FORMAT_R8G8B8A8_UNORM, TextureKind::NORMAL },   // Data small
-        { DATA_LARGE_RESOLUTION, VK_FORMAT_R8G8B8A8_UNORM, TextureKind::NORMAL },   // Data large
-        { FONT_RESOLUTION, VK_FORMAT_R8_UNORM, TextureKind::COLOR }                 // Font
-    };
-
     uint32_t maxShadows{0};
-    AttachmentArray shadowArray{ SHADOW_RESOLUTION, VK_FORMAT_D32_SFLOAT };
+    TextureArray textureArrays[static_cast<size_t>(TextureArrayID::MAX_ENUM)];
+    AttachmentArray shadowArray;
 };
 

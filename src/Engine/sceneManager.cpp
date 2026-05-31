@@ -99,7 +99,7 @@ void SceneManager::LoadScene(Engine *engine, VulkanBackend *backend, ResourceMan
         .camera = sceneBase->core.camera,
         .maxShadows = manifest.maxShadows,
     };
-    manager->GetArraySizes(manifest, graphicsInfo.arrayLayers);
+    manager->GetArraySizes(manifest, graphicsInfo.arrayLayers, backend->settings);
     sceneBase->core.renderSystem->Init(sceneBase->core.ecs, renderInfo, graphicsInfo, backend);
     sceneBase->core.renderSystem->UploadResources(resources, sceneBase->core.path, manager, backend);
     sceneBase->Init((SceneConfig) {
@@ -153,7 +153,7 @@ void SceneManager::Update(Engine *engine, VulkanBackend *backend, ResourceManage
                     .camera = sceneBase->core.camera,
                     .maxShadows = manifest.maxShadows
                 };
-                manager->GetArraySizes(manifest, graphicsInfo.arrayLayers);
+                manager->GetArraySizes(manifest, graphicsInfo.arrayLayers, backend->settings);
                 sceneBase->core.renderSystem->Init(sceneBase->core.ecs, renderInfo, graphicsInfo, backend);
                 sceneBase->core.renderSystem->UploadResources(m_SceneFuture.resourceFuture.get(), sceneBase->core.path, manager, backend);
                 sceneBase->Init((SceneConfig) {

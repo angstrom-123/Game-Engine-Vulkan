@@ -44,19 +44,19 @@
 #include "ECS/ecs.h"
 #include "ECS/ecsTypes.h"
 #include "Geometry/vertex.h"
-#include "System/Render/backendDefs.h"
-#include "System/Render/pipeline.h"
+#include "backendDefs.h"
+#include "pipeline.h"
 #include "backendTypes.h"
-#include "System/Render/commandSubmitter.h"
+#include "commandSubmitter.h"
 #include "config.h"
-#include "vulkan_core.h"
+#include <vulkan/vulkan_core.h>
 
 namespace fs = std::filesystem;
 
 class VulkanBackend {
 public:
     ~VulkanBackend();
-    void Init(struct GLFWwindow *window, Config &config);
+    void Init(struct GLFWwindow *window, const Config &config);
     void InitFrontend(GraphicsFrontend& frontend, const GraphicsFrontendInfo& info);
     void CleanupFrontend(GraphicsFrontend& frontend);
     void Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<Entity>& entities);
@@ -70,6 +70,8 @@ public:
 public:
     // A funny idiom, publicly viewable but not editable without need for a getter
     const uint64_t& frameNumber{m_InternalFrameNumber};
+
+    VulkanBackendSettings settings;
 
     VkPhysicalDevice physicalDevice{VK_NULL_HANDLE};
     VkDevice device{VK_NULL_HANDLE};
@@ -110,6 +112,7 @@ private:
         VkPipelineLayout pipelineLayout{VK_NULL_HANDLE};
     };
 
+    void ReadConfig(const Config& config);
     void Resize(ECS *ecs);
     void InitVulkan(struct GLFWwindow *window);
     void InitDynamics();
@@ -142,9 +145,9 @@ private:
     VkInstance m_Instance{VK_NULL_HANDLE};
     VkDebugUtilsMessengerEXT m_DebugMessenger{VK_NULL_HANDLE};
     VkPhysicalDeviceProperties m_PhysicalDeviceProperties{0};
-    PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR m_PFNGetSurfaceCapabilities{nullptr};
-    PFN_vkCmdBeginRenderingKHR m_PFNCmdBeginRendering{nullptr};
-    PFN_vkCmdEndRenderingKHR m_PFNCmdEndRendering{nullptr};
+    PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR pfn_GetSurfaceCapabilities{nullptr};
+    PFN_vkCmdBeginRenderingKHR pfn_CmdBeginRendering{nullptr};
+    PFN_vkCmdEndRenderingKHR pfn_CmdEndRendering{nullptr};
 
     VkSurfaceKHR m_Surface{VK_NULL_HANDLE};
     VkSwapchainKHR m_Swapchain{VK_NULL_HANDLE};
@@ -152,13 +155,13 @@ private:
     VkPresentModeKHR m_PresentMode{VK_PRESENT_MODE_IMMEDIATE_KHR};
     std::vector<SwapchainImageData> m_Images;
 
-    VkExtent2D m_Extent{100, 100};
-    VkViewport m_Viewport{0.0, 0.0, 100.0, 100.0, 0.0, 1.0};
-    VkRect2D m_ScissorRect{{0, 0}, {100, 100}};
+    VkExtent2D m_Extent{0};
+    VkViewport m_Viewport{0};
+    VkRect2D m_ScissorRect{0};
 
-    VkExtent2D m_ShadowExtent{SHADOW_RESOLUTION, SHADOW_RESOLUTION};
-    VkViewport m_ShadowViewport{0.0, 0.0, SHADOW_RESOLUTION, SHADOW_RESOLUTION, 0.0, 1.0};
-    VkRect2D m_ShadowScissorRect{{0, 0}, {SHADOW_RESOLUTION, SHADOW_RESOLUTION}};
+    VkExtent2D m_ShadowExtent{0};
+    VkViewport m_ShadowViewport{0};
+    VkRect2D m_ShadowScissorRect{0};
 
     std::deque<std::function<void ()>> m_DynamicDeleter;
     std::deque<std::function<void ()>> m_MainDeleter;
@@ -203,26 +206,6 @@ private:
     Pipeline m_ToneMapPipeline;
     Pipeline m_AntiAliasingPipeline;
 
-    // VkPipelineLayout m_MinimalPipelineLayout{VK_NULL_HANDLE};
-    // VkPipelineLayout m_ShadowPipelineLayout{VK_NULL_HANDLE};
-    // VkPipelineLayout m_LightCullingPipelineLayout{VK_NULL_HANDLE};
-    // VkPipelineLayout m_LightingPipelineLayout{VK_NULL_HANDLE};
-    // VkPipelineLayout m_BloomPipelineLayout{VK_NULL_HANDLE};
-    //
-    // VkPipeline m_DepthPipeline{VK_NULL_HANDLE};
-    // VkPipeline m_ShadowPipeline{VK_NULL_HANDLE};
-    // VkPipeline m_GBufferPipeline{VK_NULL_HANDLE};
-    // VkPipeline m_LightCullingPipeline{VK_NULL_HANDLE};
-    // VkPipeline m_LightingPipeline{VK_NULL_HANDLE};
-    // VkPipeline m_BloomLightExtractionPipeline{VK_NULL_HANDLE};
-    // VkPipeline m_BloomDownsamplePipeline{VK_NULL_HANDLE};
-    // VkPipeline m_BloomHorizontalBlurPipeline{VK_NULL_HANDLE};
-    // VkPipeline m_BloomVerticalBlurPipeline{VK_NULL_HANDLE};
-    // VkPipeline m_BloomAccumulatePipeline{VK_NULL_HANDLE};
-    // VkPipeline m_TransparencyPipeline = VK_NULL_HANDLE;
-    // VkPipeline m_ToneMapPipeline{VK_NULL_HANDLE};
-    // VkPipeline m_AntiAliasingPipeline{VK_NULL_HANDLE};
-
     // Miscellaneous (mipmap gen, etc.)
     VkDescriptorPool m_MiscDescriptorPool{VK_NULL_HANDLE};
 
@@ -230,6 +213,4 @@ private:
     VkDescriptorSetLayout m_NormalMipmapDescriptorLayout{VK_NULL_HANDLE};
     VkDescriptorSet m_NormalMipmapDescriptorSet{VK_NULL_HANDLE};
     Pipeline m_NormalMipmapPipeline;
-    // VkPipelineLayout m_NormalMipmapPipelineLayout{VK_NULL_HANDLE};
-    // VkPipeline m_NormalMipmapPipeline{VK_NULL_HANDLE};
 };

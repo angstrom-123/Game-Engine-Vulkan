@@ -23,6 +23,6 @@ struct Shadowcaster {
     } cascades[SHADOW_CASCADE_COUNT];
 
     static void CalculateFrustumCorners(const Camera& camera, FrustumCorners (&cascades)[SHADOW_CASCADE_COUNT]);
-    static glm::mat4x4 CalculateDirectionalVP(const FrustumCorners& corners, const Light& light);
+    static glm::mat4x4 CalculateDirectionalVP(const FrustumCorners& corners, const Light& light, const VulkanBackendSettings& settings);
     static glm::mat4x4 CalculateSpotVP(const Light& light);
 };

@@ -10,24 +10,27 @@
 
 class Engine {
 public:
-    Engine(Config& config);
+    Engine();
     ~Engine();
-    void Run(const std::string& startSceneName);
+    void Run();
     void EventCallback(Event event);
     static void EventHook(Event event, void *data);
     void SetScene(const std::string& name, bool showLoadingScene);
-    template<Derived<SceneBase> T> void RegisterScene(const fs::path& path) { m_SceneManager.RegisterScene<T>(path); }
-
-    double GetTime() { return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now().time_since_epoch()).count() / 1000000.0; }
-    uint64_t GetFrameNumber() { return m_GraphicsBackend.frameNumber; }
-    glm::vec2 GetFrameMouseDelta() { return m_EventManager.mousePos - m_EventManager.mousePosLastFrame; }
-    glm::ivec2 GetWindowSize() { glm::ivec2 res; glfwGetFramebufferSize(m_Window, &res.x, &res.y); return res; }
-    bool *GetKeysDown() { return m_EventManager.keysDown; }
+    template<Derived<SceneBase> T> void RegisterScene(const fs::path& path)
+    {
+        m_SceneManager.RegisterScene<T>(path);
+    }
+    double GetTime();
+    uint64_t GetFrameNumber();
+    glm::vec2 GetFrameMouseDelta();
+    glm::ivec2 GetWindowSize();
+    bool *GetKeysDown();
 
 private:
-    struct GLFWwindow *m_Window = nullptr;
-    VulkanBackend m_GraphicsBackend;
-    EventManager m_EventManager;
-    SceneManager m_SceneManager;
-    ResourceManager m_ResourceManager;
+    Config m_Config;
+    struct GLFWwindow *m_Window{nullptr};
+    VulkanBackend m_GraphicsBackend{};
+    EventManager m_EventManager{};
+    SceneManager m_SceneManager{};
+    ResourceManager m_ResourceManager{};
 };

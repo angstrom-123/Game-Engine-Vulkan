@@ -8,7 +8,7 @@
 
 class ShadowSystem : public System {
 public:
-    void Update(ECS *ecs, Entity camera);
+    void Update(ECS *ecs, Entity camera, const VulkanBackendSettings& settings);
     Signature GetSignature(ECS *ecs) override { return ecs->GetBit<Transform>() | ecs->GetBit<Light>() | ecs->GetBit<Shadowcaster>(); };
 
 private:

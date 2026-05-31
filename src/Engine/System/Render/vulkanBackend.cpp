@@ -1,12 +1,8 @@
 #include "vulkanBackend.h"
-#include "System/Render/pipeline.h"
-#include "backendDefs.h"
-#include "Component/shadowcaster.h"
-#include "ECS/ecsTypes.h"
 #include "System/Render/backendTypes.h"
+#include "config.h"
 
 #include <algorithm>
-#include <alloca.h>
 #include <cstdint>
 #include <functional>
 #include <ranges>
@@ -20,6 +16,10 @@
     #define VMA_ASSERT_LEAK(expr) if (!(expr)) { abort(); }
 #endif
 #include <VulkanMemoryAllocator/vk_mem_alloc.h>
+
+#include "backendDefs.h"
+#include "Component/shadowcaster.h"
+#include "ECS/ecsTypes.h"
 
 #include "Component/camera.h"
 #include "Component/light.h"
@@ -78,13 +78,51 @@ VulkanBackend::~VulkanBackend()
     vkDestroyInstance(m_Instance, nullptr);
 }
 
-void VulkanBackend::Init(struct GLFWwindow *window, Config &config)
+void VulkanBackend::ReadConfig(const Config& config)
 {
+    m_PresentMode = config.vsync ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
+    m_Extent = { config.windowWidth, config.windowHeight };
+    
+    settings.vsync = config.vsync;
+    settings.bloomEnabled = config.bloom;
+    switch (config.shadowQuality) {
+        case ShadowQuality::LOW:
+            settings.shadowResolution = 512;
+            break;
+        case ShadowQuality::MEDIUM:
+            settings.shadowResolution = 1024;
+            break;
+        case ShadowQuality::HIGH:
+            settings.shadowResolution = 2048;
+            break;
+        case ShadowQuality::ULTRA:
+            settings.shadowResolution = 4096;
+            break;
+        default:
+            UNREACHABLE("Bad shadow quality");
+    };
+
+    m_ShadowExtent = { settings.shadowResolution, settings.shadowResolution };
+    m_ShadowViewport = {
+        .x = 0.0,
+        .y = 0.0,
+        .width = static_cast<float>(m_ShadowExtent.width),
+        .height = static_cast<float>(m_ShadowExtent.height),
+        .minDepth = 0.0,
+        .maxDepth = 1.0
+    };
+    m_ShadowScissorRect = { 
+        .offset = {0, 0}, 
+        .extent = m_ShadowExtent 
+    };
+}
+
+void VulkanBackend::Init(struct GLFWwindow *window, const Config &config)
+{
+    ReadConfig(config);
+
     m_SortingBuffer.reserve(MAX_ENTITIES);
 
-    m_PresentMode = config.vsync ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
-
-    m_Extent = { config.windowWidth, config.windowHeight };
     m_Viewport = {
         .x = 0.0,
         .y = 0.0,
@@ -122,11 +160,16 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
     m_ResizeCameras.push_back(frontend.camera);
 
     // ================================================== Texture Arrays ==================================================
+    frontend.textureArrays[static_cast<size_t>(TextureArrayID::COLOR_SMALL)] = TextureArray(settings.colorSmallResolution, settings.colorTextureFormat, TextureKind::COLOR);
+    frontend.textureArrays[static_cast<size_t>(TextureArrayID::COLOR_LARGE)] = TextureArray(settings.colorLargeResolution, settings.colorTextureFormat, TextureKind::COLOR);
+    frontend.textureArrays[static_cast<size_t>(TextureArrayID::DATA_SMALL)] = TextureArray(settings.dataSmallResolution, settings.dataTextureFormat, TextureKind::NORMAL);
+    frontend.textureArrays[static_cast<size_t>(TextureArrayID::DATA_LARGE)] = TextureArray(settings.dataLargeResolution, settings.dataTextureFormat, TextureKind::NORMAL);
+    frontend.textureArrays[static_cast<size_t>(TextureArrayID::FONT)] = TextureArray(settings.fontResolution, settings.fontTextureFormat, TextureKind::COLOR);
 
-    const uint32_t MINIMUM_SIZES[TEXTURE_ARRAY_MAX_ENUM] = { 3, 1, 1, 1 };
-    VkDescriptorImageInfo arrayImageInfos[TEXTURE_ARRAY_MAX_ENUM] = {};
+    const uint32_t MINIMUM_SIZES[static_cast<size_t>(TextureArrayID::MAX_ENUM)] = { 3, 1, 1, 1 };
+    VkDescriptorImageInfo arrayImageInfos[static_cast<size_t>(TextureArrayID::MAX_ENUM)] = {};
 
-    for (uint32_t arrayId = 0; arrayId < TEXTURE_ARRAY_MAX_ENUM; arrayId++) {
+    for (size_t arrayId = 0; arrayId < static_cast<size_t>(TextureArrayID::MAX_ENUM); arrayId++) {
         frontend.textureArrays[arrayId].Init(std::max(info.arrayLayers[arrayId], MINIMUM_SIZES[arrayId]), *this);
 
         arrayImageInfos[arrayId] = {
@@ -142,7 +185,7 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = frames[i].descriptorSet1,
             .dstBinding = 0,
-            .descriptorCount = TEXTURE_ARRAY_MAX_ENUM,
+            .descriptorCount = static_cast<uint32_t>(TextureArrayID::MAX_ENUM),
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             .pImageInfo = arrayImageInfos
         };
@@ -151,8 +194,9 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
 
     // ================================================== Shadow Arrays ==================================================
 
-    frontend.maxShadows = info.maxShadows;
-    frontend.shadowArray.Init(std::max(info.maxShadows * SHADOW_CASCADE_COUNT, 1u), *this);
+    frontend.maxShadows = std::min(info.maxShadows, settings.maxShadowcasters);
+    frontend.shadowArray = AttachmentArray(settings.shadowResolution, settings.depthFormat);
+    frontend.shadowArray.Init(std::max(std::min(info.maxShadows * SHADOW_CASCADE_COUNT, settings.maxShadowcasters), 1u), *this);
     VkDescriptorImageInfo shadowComparisonImageInfo = {
         .sampler = m_ComparisonShadowSampler,
         .imageView = frontend.shadowArray.view,
@@ -252,12 +296,12 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
 
     // Copy across shadow data 
     const auto[shadowCount, shadowcasters] = ecs->GetData<Shadowcaster>();
-    std::memset(frame.shadowBuffer.data, 0, MAX_SHADOWCASTERS * sizeof(Shadowcaster));
+    std::memset(frame.shadowBuffer.data, 0, settings.maxShadowcasters * sizeof(Shadowcaster));
     std::memcpy(frame.shadowBuffer.data, shadowcasters, shadowCount * sizeof(Shadowcaster));
 
      // Zero light culling outputs
-    uint32_t tilesX = (m_Extent.width + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
-    uint32_t tilesY = (m_Extent.height + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+    uint32_t tilesX = (m_Extent.width + settings.computeTileSize - 1) / settings.computeTileSize;
+    uint32_t tilesY = (m_Extent.height + settings.computeTileSize  - 1) / settings.computeTileSize;
     vkCmdFillBuffer(frame.commandBuffer, frame.lightIndexBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
     vkCmdFillBuffer(frame.commandBuffer, frame.lightTileCountBuffer.buffer, 0, VK_WHOLE_SIZE, 0);
     VkBufferMemoryBarrier fillBarrier = {
@@ -292,13 +336,13 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         .ambientIntensity = 0.15,
         .lightCount = lightCount,
         .screenSize = glm::ivec2(m_Extent.width, m_Extent.height),
-        .shadowSize = glm::ivec2(SHADOW_RESOLUTION),
+        .shadowSize = glm::ivec2(settings.shadowResolution),
     };
     uniforms->lightCulling = {
-        .tileSize = COMPUTE_TILE_SIZE,
+        .tileSize = settings.computeTileSize,
         .tilesX = tilesX,
         .tilesY = tilesY,
-        .maxLightsPerTile = MAX_LIGHTS_PER_TILE
+        .maxLightsPerTile = settings.maxLightsPerTile
     };
 
     // ================================================== Organize Entities ==================================================
@@ -369,7 +413,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
             frame.descriptorSet1
         };
         DescriptorSets descriptors = { descriptorSets, 2 };
-        m_DepthPipeline.BeginRendering(frame.commandBuffer, m_PFNCmdBeginRendering, descriptors);
+        m_DepthPipeline.BeginRendering(frame.commandBuffer, pfn_CmdBeginRendering, descriptors);
         {
             for (const Entity e : visibleOpaqueEntities) {
                 VertexPushConstants vertexConstants = {
@@ -394,7 +438,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
             }
         }
-        m_DepthPipeline.EndRendering(frame.commandBuffer, m_PFNCmdEndRendering);
+        m_DepthPipeline.EndRendering(frame.commandBuffer, pfn_CmdEndRendering);
 
         // Transition depth attachment to read only
         depthBarrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -443,7 +487,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
             frame.descriptorSet1
         };
         DescriptorSets descriptors = { descriptorSets, 2 };
-        m_GBufferPipeline.BeginRendering(frame.commandBuffer, m_PFNCmdBeginRendering, descriptors);
+        m_GBufferPipeline.BeginRendering(frame.commandBuffer, pfn_CmdBeginRendering, descriptors);
         {
             for (const Entity e : visibleOpaqueEntities) {
                 VertexPushConstants vertexConstants = {
@@ -468,7 +512,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
             }
         }
-        m_GBufferPipeline.EndRendering(frame.commandBuffer, m_PFNCmdEndRendering);
+        m_GBufferPipeline.EndRendering(frame.commandBuffer, pfn_CmdEndRendering);
 
         // Transition color attachments to shader readable 
         for (int32_t i = 0; i < 3; i++) {
@@ -529,7 +573,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                         break;
                     }
 
-                    m_ShadowPipeline.BeginDynamicDepthRendering(frame.commandBuffer, m_PFNCmdBeginRendering, 
+                    m_ShadowPipeline.BeginDynamicDepthRendering(frame.commandBuffer, pfn_CmdBeginRendering, 
                             frontend.shadowArray.arrayViews[cascade.shadowMapIndex], 
                             VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE);
                     {
@@ -557,7 +601,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                             vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
                         }
                     }
-                    m_ShadowPipeline.EndDynamicRendering(frame.commandBuffer, m_PFNCmdEndRendering);
+                    m_ShadowPipeline.EndDynamicRendering(frame.commandBuffer, pfn_CmdEndRendering);
                 }
             }
 
@@ -666,7 +710,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                 frame.descriptorSet2 
             };
             DescriptorSets descriptors = { descriptorSets, 3 };
-            m_TransparencyPipeline.BeginRendering(frame.commandBuffer, m_PFNCmdBeginRendering, descriptors);
+            m_TransparencyPipeline.BeginRendering(frame.commandBuffer, pfn_CmdBeginRendering, descriptors);
             {
                 for (const auto& [_, e] : visibleTransparentEntities) {
                     VertexPushConstants vertexConstants = {
@@ -691,7 +735,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                     vkCmdDraw(frame.commandBuffer, mesh.vertexCount, 1, 0, 0);
                 }
             }
-            m_TransparencyPipeline.EndRendering(frame.commandBuffer, m_PFNCmdEndRendering);
+            m_TransparencyPipeline.EndRendering(frame.commandBuffer, pfn_CmdEndRendering);
 
             // Transition hdr image from attachment to general
             hdrBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -712,225 +756,246 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
 
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
-        VkMemoryBarrier writeBarrier = {
-            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT
-        };
-
-        // Transition ping-pong image to general
-        VkImageMemoryBarrier barrierToGeneral = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .srcAccessMask = 0,
-            .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-            .image = m_BloomPingPongTarget.image.image,
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .levelCount = 1,
-                .layerCount = 1
-            }
-        };
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                0, 0, nullptr, 0, nullptr, 1, &barrierToGeneral);
-
-        // Transition pyramid to general
-        VkImageMemoryBarrier pyramidBarriers[MAX_BLOOM_MIPS] = {};
-        for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
-            pyramidBarriers[i] = barrierToGeneral;
-            pyramidBarriers[i].srcAccessMask = 0;
-            pyramidBarriers[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            pyramidBarriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            pyramidBarriers[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            pyramidBarriers[i].image = m_BloomPyramidTarget.images[i].image;
-        }
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                0, 0, nullptr, 0, nullptr, m_BloomPyramidTarget.count, pyramidBarriers);
-
-        // Downsample hdr image into pyramid[0]
-        VkDescriptorSet descriptorSets[4] = { 
-            frame.descriptorSet0, 
-            frame.dummyDescriptorSet, 
-            frame.descriptorSet2, 
-            frame.descriptorSet3, 
-        };
-        DescriptorSets descriptors = { descriptorSets, 4 };
-        m_BloomDownsamplePipeline.BeginCompute(frame.commandBuffer, descriptors);
-        {
-            BloomPushConstants constants = {
-                .currentIndex = 0,
+        if (settings.bloomEnabled) {
+            VkMemoryBarrier writeBarrier = {
+                .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT
             };
-            vkCmdPushConstants(frame.commandBuffer, 
-                    // m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
-                    m_BloomDownsamplePipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
-                    0, sizeof(BloomPushConstants), 
-                    &constants);
-            uint32_t w = std::max(m_Extent.width >> 1, 1u);
-            uint32_t h = std::max(m_Extent.height >> 1, 1u);
-            uint32_t groupsX = (w + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
-            uint32_t groupsY = (h + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
-            vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
-        }
-        m_BloomDownsamplePipeline.EndCompute();
 
-        // Wait first downsample to complete
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
+            // Transition ping-pong image to general
+            VkImageMemoryBarrier barrierToGeneral = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .image = m_BloomPingPongTarget.image.image,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .levelCount = 1,
+                    .layerCount = 1
+                }
+            };
+            vkCmdPipelineBarrier(frame.commandBuffer, 
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    0, 0, nullptr, 0, nullptr, 1, &barrierToGeneral);
 
-        // In place light extraction on pyramid[0]
+            // Transition pyramid to general
+            VkImageMemoryBarrier pyramidBarriers[MAX_BLOOM_MIPS] = {};
+            for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
+                pyramidBarriers[i] = barrierToGeneral;
+                pyramidBarriers[i].srcAccessMask = 0;
+                pyramidBarriers[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                pyramidBarriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                pyramidBarriers[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                pyramidBarriers[i].image = m_BloomPyramidTarget.images[i].image;
+            }
+            vkCmdPipelineBarrier(frame.commandBuffer, 
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    0, 0, nullptr, 0, nullptr, m_BloomPyramidTarget.count, pyramidBarriers);
 
-        m_BloomLightExtractionPipeline.BeginCompute(frame.commandBuffer, descriptors);
-        {
-            vkCmdDispatch(frame.commandBuffer, tilesX, tilesY, 1);
-        }
-        m_BloomLightExtractionPipeline.EndCompute();
-
-        // Wait for bright pass to complete
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
-
-        // Downsample Pyramid
-
-        // Dispatch Compute for each layer
-        m_BloomDownsamplePipeline.BeginCompute(frame.commandBuffer, descriptors);
-        {
-            for (uint32_t i = 1; i < m_BloomPyramidTarget.count; i++) {
+            // Downsample hdr image into pyramid[0]
+            VkDescriptorSet descriptorSets[4] = { 
+                frame.descriptorSet0, 
+                frame.dummyDescriptorSet, 
+                frame.descriptorSet2, 
+                frame.descriptorSet3, 
+            };
+            DescriptorSets descriptors = { descriptorSets, 4 };
+            m_BloomDownsamplePipeline.BeginCompute(frame.commandBuffer, descriptors);
+            {
                 BloomPushConstants constants = {
-                    .currentIndex = i,
+                    .currentIndex = 0,
                 };
                 vkCmdPushConstants(frame.commandBuffer, 
                         // m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
                         m_BloomDownsamplePipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
                         0, sizeof(BloomPushConstants), 
                         &constants);
-
-                uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
-                uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
-                uint32_t groupsX = (w + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
-                uint32_t groupsY = (h + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
-                vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
-
-                // Wait for current layer to downsample before dispatching next
-                vkCmdPipelineBarrier(frame.commandBuffer, 
-                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                        0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
-            }
-        }
-        m_BloomDownsamplePipeline.EndCompute();
-
-        // Blur 
-
-        // Dispatch Compute for each layer
-        for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
-            const uint32_t BLUR_COMPUTE_GROUP_SIZE = 256;
-            uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
-            uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
-
-            uint32_t groupsX = (w + BLUR_COMPUTE_GROUP_SIZE - 1) / BLUR_COMPUTE_GROUP_SIZE;
-            uint32_t groupsY = h;
-
-            BloomPushConstants constants = {
-                .currentIndex = i,
-                .blurKernelRadius = BLOOM_BLUR_RADIUS,
-                .blurKernelWeights = { 0.007, 0.032, 0.059, 0.079, 0.088, 0.079, 0.059, 0.032, 0.007 }, // Gaussian
-            };
-
-            m_BloomHorizontalBlurPipeline.BeginCompute(frame.commandBuffer, descriptors);
-            {
-                vkCmdPushConstants(frame.commandBuffer, 
-                        m_BloomHorizontalBlurPipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
-                        0, sizeof(BloomPushConstants), 
-                        &constants);
+                uint32_t w = std::max(m_Extent.width >> 1, 1u);
+                uint32_t h = std::max(m_Extent.height >> 1, 1u);
+                uint32_t groupsX = (w + settings.computeTileSize - 1) / settings.computeTileSize;
+                uint32_t groupsY = (h + settings.computeTileSize - 1) / settings.computeTileSize;
                 vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
             }
-            m_BloomHorizontalBlurPipeline.EndCompute();
+            m_BloomDownsamplePipeline.EndCompute();
 
-            // Wait for horizontal blurs to finish before the vertical ones are dispatched
+            // Wait first downsample to complete
             vkCmdPipelineBarrier(frame.commandBuffer, 
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
                     0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
 
-            groupsX = w;
-            groupsY = (h + BLUR_COMPUTE_GROUP_SIZE - 1) / BLUR_COMPUTE_GROUP_SIZE;
+            // In place light extraction on pyramid[0]
 
-            m_BloomVerticalBlurPipeline.BeginCompute(frame.commandBuffer, descriptors);
+            m_BloomLightExtractionPipeline.BeginCompute(frame.commandBuffer, descriptors);
             {
-                vkCmdPushConstants(frame.commandBuffer, 
-                        m_BloomVerticalBlurPipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
-                        0, sizeof(BloomPushConstants), 
-                        &constants);
-                vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+                vkCmdDispatch(frame.commandBuffer, tilesX, tilesY, 1);
             }
-            m_BloomVerticalBlurPipeline.EndCompute();
+            m_BloomLightExtractionPipeline.EndCompute();
 
-            // Wait for vertical blurs to finish before next level or upsampling
+            // Wait for bright pass to complete
             vkCmdPipelineBarrier(frame.commandBuffer, 
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
                     VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
                     0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
-        }
 
-        // Upsample / Accumulate
+            // Downsample Pyramid
 
-        m_BloomAccumulatePipeline.BeginCompute(frame.commandBuffer, descriptors);
-        {
-            // NOTE: Using int32_t instead of uint32_t for i because the decrement causes underflow when i = 0
-            for (int32_t i = m_BloomPyramidTarget.count - 2; i >= 0; i--) { // Shader upsamples the layer above (smaller)
-                BloomPushConstants constants = {
-                    .currentIndex = static_cast<uint32_t>(i),
-                    .accumulationFactor = 0.1,
-                };
-                vkCmdPushConstants(frame.commandBuffer, 
-                        m_BloomAccumulatePipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
-                        0, sizeof(BloomPushConstants), 
-                        &constants);
+            // Dispatch Compute for each layer
+            m_BloomDownsamplePipeline.BeginCompute(frame.commandBuffer, descriptors);
+            {
+                for (uint32_t i = 1; i < m_BloomPyramidTarget.count; i++) {
+                    BloomPushConstants constants = {
+                        .currentIndex = i,
+                    };
+                    vkCmdPushConstants(frame.commandBuffer, 
+                            // m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
+                            m_BloomDownsamplePipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
+                            0, sizeof(BloomPushConstants), 
+                            &constants);
 
-                const uint32_t UPSAMPLE_COMPUTE_GROUP_SIZE = 8;
+                    uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
+                    uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
+                    uint32_t groupsX = (w + settings.computeTileSize - 1) / settings.computeTileSize;
+                    uint32_t groupsY = (h + settings.computeTileSize - 1) / settings.computeTileSize;
+                    vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+
+                    // Wait for current layer to downsample before dispatching next
+                    vkCmdPipelineBarrier(frame.commandBuffer, 
+                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                            0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
+                }
+            }
+            m_BloomDownsamplePipeline.EndCompute();
+
+            // Blur 
+
+            // Dispatch Compute for each layer
+            for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
+                const uint32_t BLUR_COMPUTE_GROUP_SIZE = 256;
                 uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
                 uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
 
-                uint32_t groupsX = (w + UPSAMPLE_COMPUTE_GROUP_SIZE - 1) / UPSAMPLE_COMPUTE_GROUP_SIZE;
+                uint32_t groupsX = (w + BLUR_COMPUTE_GROUP_SIZE - 1) / BLUR_COMPUTE_GROUP_SIZE;
                 uint32_t groupsY = h;
-                vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
 
-                // Wait for current layer to accumulate before starting next
+                BloomPushConstants constants = {
+                    .currentIndex = i,
+                    .blurKernelRadius = BLOOM_BLUR_RADIUS,
+                    .blurKernelWeights = { 0.007, 0.032, 0.059, 0.079, 0.088, 0.079, 0.059, 0.032, 0.007 }, // Gaussian
+                };
+
+                m_BloomHorizontalBlurPipeline.BeginCompute(frame.commandBuffer, descriptors);
+                {
+                    vkCmdPushConstants(frame.commandBuffer, 
+                            m_BloomHorizontalBlurPipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
+                            0, sizeof(BloomPushConstants), 
+                            &constants);
+                    vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+                }
+                m_BloomHorizontalBlurPipeline.EndCompute();
+
+                // Wait for horizontal blurs to finish before the vertical ones are dispatched
+                vkCmdPipelineBarrier(frame.commandBuffer, 
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                        0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
+
+                groupsX = w;
+                groupsY = (h + BLUR_COMPUTE_GROUP_SIZE - 1) / BLUR_COMPUTE_GROUP_SIZE;
+
+                m_BloomVerticalBlurPipeline.BeginCompute(frame.commandBuffer, descriptors);
+                {
+                    vkCmdPushConstants(frame.commandBuffer, 
+                            m_BloomVerticalBlurPipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
+                            0, sizeof(BloomPushConstants), 
+                            &constants);
+                    vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+                }
+                m_BloomVerticalBlurPipeline.EndCompute();
+
+                // Wait for vertical blurs to finish before next level or upsampling
                 vkCmdPipelineBarrier(frame.commandBuffer, 
                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
                         0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
             }
-        }
-        m_BloomAccumulatePipeline.EndCompute();
 
-        // Transition highest pyramid level (where the accumulated bloom is) to shader readable
-        VkImageMemoryBarrier bloomBarrier = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-            .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            .image = m_BloomPyramidTarget.images[0].image,
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .levelCount = 1,
-                .layerCount = 1
+            // Upsample / Accumulate
+
+            m_BloomAccumulatePipeline.BeginCompute(frame.commandBuffer, descriptors);
+            {
+                // NOTE: Using int32_t instead of uint32_t for i because the decrement causes underflow when i = 0
+                for (int32_t i = m_BloomPyramidTarget.count - 2; i >= 0; i--) { // Shader upsamples the layer above (smaller)
+                    BloomPushConstants constants = {
+                        .currentIndex = static_cast<uint32_t>(i),
+                        .accumulationFactor = 0.1,
+                    };
+                    vkCmdPushConstants(frame.commandBuffer, 
+                            m_BloomAccumulatePipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
+                            0, sizeof(BloomPushConstants), 
+                            &constants);
+
+                    const uint32_t UPSAMPLE_COMPUTE_GROUP_SIZE = 8;
+                    uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
+                    uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
+
+                    uint32_t groupsX = (w + UPSAMPLE_COMPUTE_GROUP_SIZE - 1) / UPSAMPLE_COMPUTE_GROUP_SIZE;
+                    uint32_t groupsY = h;
+                    vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
+
+                    // Wait for current layer to accumulate before starting next
+                    vkCmdPipelineBarrier(frame.commandBuffer, 
+                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                            0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
+                }
             }
-        };
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
-                0, 0, nullptr, 0, nullptr, 1, &bloomBarrier);
+            m_BloomAccumulatePipeline.EndCompute();
+
+            // Transition highest pyramid level (where the accumulated bloom is) to shader readable
+            VkImageMemoryBarrier bloomBarrier = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .image = m_BloomPyramidTarget.images[0].image,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .levelCount = 1,
+                    .layerCount = 1
+                }
+            };
+            vkCmdPipelineBarrier(frame.commandBuffer, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+                    0, 0, nullptr, 0, nullptr, 1, &bloomBarrier);
+        } else {
+            // Transition highest pyramid level to shader readable
+            VkImageMemoryBarrier bloomBarrier = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .srcAccessMask = 0,
+                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .image = m_BloomPyramidTarget.images[0].image,
+                .subresourceRange = {
+                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                    .levelCount = 1,
+                    .layerCount = 1
+                }
+            };
+            vkCmdPipelineBarrier(frame.commandBuffer, 
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+                    0, 0, nullptr, 0, nullptr, 1, &bloomBarrier);
+        }
 
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
@@ -976,11 +1041,17 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
             frame.descriptorSet1, 
         };
         DescriptorSets descriptors = { descriptorSets, 2 };
-        m_ToneMapPipeline.BeginRendering(frame.commandBuffer, m_PFNCmdBeginRendering, descriptors);
+        m_ToneMapPipeline.BeginRendering(frame.commandBuffer, pfn_CmdBeginRendering, descriptors);
         {
+            ToneMapPushConstants constants = {
+                .bloomEnabled = (settings.bloomEnabled) ? 1u : 0u
+            };
+            vkCmdPushConstants(frame.commandBuffer, 
+                    m_ToneMapPipeline.GetLayout(), VK_SHADER_STAGE_FRAGMENT_BIT, 
+                    0, sizeof(ToneMapPushConstants), &constants);
             vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
         }
-        m_ToneMapPipeline.EndRendering(frame.commandBuffer, m_PFNCmdEndRendering);
+        m_ToneMapPipeline.EndRendering(frame.commandBuffer, pfn_CmdEndRendering);
 
         // Transition tone mapped attachment to shader readable 
         toneMapBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -1027,13 +1098,13 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         };
         DescriptorSets descriptors = { descriptorSets, 2 };
         m_AntiAliasingPipeline.PrepareForDynamicRendering(frame.commandBuffer, descriptors);
-        m_AntiAliasingPipeline.BeginDynamicColorRendering(frame.commandBuffer, m_PFNCmdBeginRendering, 
+        m_AntiAliasingPipeline.BeginDynamicColorRendering(frame.commandBuffer, pfn_CmdBeginRendering, 
                 swapchainImage.view, 
                 VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE);
         {
             vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
         }
-        m_AntiAliasingPipeline.EndDynamicRendering(frame.commandBuffer, m_PFNCmdEndRendering);
+        m_AntiAliasingPipeline.EndDynamicRendering(frame.commandBuffer, pfn_CmdEndRendering);
 
         // Transition swapchain attachment to present source
         swapchainBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -1140,28 +1211,28 @@ AllocatedTexture VulkanBackend::AllocateTexture(ImageResource& image, GraphicsFr
         return imageSize.x <= arrayResolution && imageSize.y <= arrayResolution;
     };
 
-    TextureArrayID arrayID = TEXTURE_ARRAY_MAX_ENUM;
-    if (FLAGS_CONTAIN(image.flags, IMAGE_FLAG_FONT_ATLAS) && image.size == glm::ivec2(FONT_RESOLUTION)) {
-        arrayID = TEXTURE_ARRAY_FONT;
+    TextureArrayID arrayID = TextureArrayID::MAX_ENUM;
+    if (FLAGS_CONTAIN(image.flags, IMAGE_FLAG_FONT_ATLAS) && image.size == glm::ivec2(settings.fontResolution)) {
+        arrayID = TextureArrayID::FONT;
     } else if (FLAGS_CONTAIN(image.flags, IMAGE_FLAG_NON_COLOR)) {
-        if (Fits(image.size, DATA_SMALL_RESOLUTION)) {
-            arrayID = TEXTURE_ARRAY_DATA_SMALL;
-        } else if (Fits(image.size, DATA_LARGE_RESOLUTION)) {
-            arrayID = TEXTURE_ARRAY_DATA_LARGE;
+        if (Fits(image.size, settings.dataSmallResolution)) {
+            arrayID = TextureArrayID::DATA_SMALL;
+        } else if (Fits(image.size, settings.dataLargeResolution)) {
+            arrayID = TextureArrayID::DATA_LARGE;
         }
     } else if (FLAGS_CONTAIN_ANY(image.flags, IMAGE_FLAG_TRANSPARENT, IMAGE_FLAG_CUTOUT) || image.flags == 0) {
-        if (Fits(image.size, COLOR_SMALL_RESOLUTION)) {
-            arrayID = TEXTURE_ARRAY_COLOR_SMALL;
-        } else if (Fits(image.size, COLOR_LARGE_RESOLUTION)){
-            arrayID = TEXTURE_ARRAY_COLOR_LARGE;
+        if (Fits(image.size, settings.colorSmallResolution)) {
+            arrayID = TextureArrayID::COLOR_SMALL;
+        } else if (Fits(image.size, settings.colorLargeResolution)){
+            arrayID = TextureArrayID::COLOR_LARGE;
         }
     }
-    if (arrayID == TEXTURE_ARRAY_MAX_ENUM) {
+    if (arrayID == TextureArrayID::MAX_ENUM) {
         FATAL("Texture too large for arrays (" << image.size.x << ", " << image.size.y << ")");
     }
 
     // Allocate
-    uint32_t layerIndex = frontend.textureArrays[arrayID].Allocate(image, *this);
+    uint32_t layerIndex = frontend.textureArrays[static_cast<size_t>(arrayID)].Allocate(image, *this);
     AllocatedTexture allocation = { arrayID, layerIndex };
 
     // Generate mips
@@ -1184,7 +1255,7 @@ void VulkanBackend::Resize(ECS *ecs)
 
     // Check if valid
     VkSurfaceCapabilitiesKHR capabilities;
-    VK_CHECK(m_PFNGetSurfaceCapabilities(physicalDevice, m_Surface, &capabilities));
+    VK_CHECK(pfn_GetSurfaceCapabilities(physicalDevice, m_Surface, &capabilities));
     VkExtent2D extent = capabilities.currentExtent;
     if (extent.width == 0 || extent.height == 0 || extent.width == UINT32_MAX || extent.height == UINT32_MAX) {
         m_ResizeCameras.clear();
@@ -1291,9 +1362,9 @@ void VulkanBackend::InitVulkan(struct GLFWwindow *window)
     };
     vmaCreateAllocator(&allocInfo, &allocator);
 
-    m_PFNGetSurfaceCapabilities = GetFunctionPointer<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>("vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
-    m_PFNCmdBeginRendering = GetFunctionPointer<PFN_vkCmdBeginRenderingKHR>("vkCmdBeginRenderingKHR");
-    m_PFNCmdEndRendering = GetFunctionPointer<PFN_vkCmdEndRenderingKHR>("vkCmdEndRenderingKHR");
+    pfn_GetSurfaceCapabilities = GetFunctionPointer<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>("vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
+    pfn_CmdBeginRendering = GetFunctionPointer<PFN_vkCmdBeginRenderingKHR>("vkCmdBeginRenderingKHR");
+    pfn_CmdEndRendering = GetFunctionPointer<PFN_vkCmdEndRenderingKHR>("vkCmdEndRenderingKHR");
 
     VkCommandPoolCreateInfo createInfo = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -1385,12 +1456,12 @@ void VulkanBackend::InitDynamics()
 
     // ================================================== Depth Target ==================================================
 
-    imageCreateInfo.format = DEPTH_FORMAT;
+    imageCreateInfo.format = settings.depthFormat;
     imageCreateInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_DepthTarget.image.image, &m_DepthTarget.image.allocation, nullptr);
 
     viewCreateInfo.image = m_DepthTarget.image.image;
-    viewCreateInfo.format = DEPTH_FORMAT;
+    viewCreateInfo.format = settings.depthFormat;
     viewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
     VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_DepthTarget.view));
 
@@ -1401,12 +1472,12 @@ void VulkanBackend::InitDynamics()
 
     // ================================================== Albedo Target ==================================================
 
-    imageCreateInfo.format = ALBEDO_FORMAT;
+    imageCreateInfo.format = settings.albedoFormat;
     imageCreateInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_AlbedoTarget.image.image, &m_AlbedoTarget.image.allocation, nullptr);
 
     viewCreateInfo.image = m_AlbedoTarget.image.image;
-    viewCreateInfo.format = ALBEDO_FORMAT;
+    viewCreateInfo.format = settings.albedoFormat;
     viewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_AlbedoTarget.view));
 
@@ -1417,11 +1488,11 @@ void VulkanBackend::InitDynamics()
 
     // ================================================== Normal Target ==================================================
 
-    imageCreateInfo.format = NORMAL_FORMAT;
+    imageCreateInfo.format = settings.normalFormat;
     vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_NormalTarget.image.image, &m_NormalTarget.image.allocation, nullptr);
 
     viewCreateInfo.image = m_NormalTarget.image.image;
-    viewCreateInfo.format = NORMAL_FORMAT;
+    viewCreateInfo.format = settings.normalFormat;
     VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_NormalTarget.view));
 
     m_DynamicDeleter.push_back([=, this] {
@@ -1431,11 +1502,11 @@ void VulkanBackend::InitDynamics()
 
     // ================================================== Material Target ==================================================
 
-    imageCreateInfo.format = MATERIAL_FORMAT;
+    imageCreateInfo.format = settings.materialFormat;
     vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_MaterialTarget.image.image, &m_MaterialTarget.image.allocation, nullptr);
 
     viewCreateInfo.image = m_MaterialTarget.image.image;
-    viewCreateInfo.format = MATERIAL_FORMAT;
+    viewCreateInfo.format = settings.materialFormat;
     VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_MaterialTarget.view));
 
     m_DynamicDeleter.push_back([=, this] {
@@ -1445,12 +1516,12 @@ void VulkanBackend::InitDynamics()
 
     // ================================================== Lighting Target ==================================================
 
-    imageCreateInfo.format = LIGHTING_FORMAT;
+    imageCreateInfo.format = settings.lightingFormat;
     imageCreateInfo.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_LightingTarget.image.image, &m_LightingTarget.image.allocation, nullptr);
 
     viewCreateInfo.image = m_LightingTarget.image.image;
-    viewCreateInfo.format = LIGHTING_FORMAT;
+    viewCreateInfo.format = settings.lightingFormat;
     VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_LightingTarget.view));
 
     m_DynamicDeleter.push_back([=, this] {
@@ -1462,8 +1533,8 @@ void VulkanBackend::InitDynamics()
 
     m_BloomPyramidTarget.count = std::min(static_cast<uint32_t>(std::floor(std::log2(std::max(m_Extent.width, m_Extent.height)))), MAX_BLOOM_MIPS);
 
-    imageCreateInfo.format = BLOOM_FORMAT;
-    viewCreateInfo.format = BLOOM_FORMAT;
+    imageCreateInfo.format = settings.bloomFormat;
+    viewCreateInfo.format = settings.bloomFormat;
     for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
         imageCreateInfo.extent.width = std::max(m_Extent.width >> (i + 1), 1u);
         imageCreateInfo.extent.height = std::max(m_Extent.height >> (i + 1), 1u);
@@ -1493,12 +1564,12 @@ void VulkanBackend::InitDynamics()
 
     // ================================================== Tone-Map Target ==================================================
 
-    imageCreateInfo.format = TONE_MAP_FORMAT;
+    imageCreateInfo.format = settings.tonemapFormat;
     imageCreateInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_ToneMapTarget.image.image, &m_ToneMapTarget.image.allocation, nullptr);
 
     viewCreateInfo.image = m_ToneMapTarget.image.image;
-    viewCreateInfo.format = TONE_MAP_FORMAT;
+    viewCreateInfo.format = settings.tonemapFormat;
     VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_ToneMapTarget.view));
 
     m_DynamicDeleter.push_back([=, this] {
@@ -1554,15 +1625,15 @@ void VulkanBackend::InitBuffers()
 
     VkBufferCreateInfo shadowBufferInfo = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = MAX_SHADOWCASTERS * sizeof(Shadowcaster),
+        .size = settings.maxShadowcasters * sizeof(Shadowcaster),
         .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 
     };
 
-    uint32_t tilesX = (m_Extent.width + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
-    uint32_t tilesY = (m_Extent.height + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+    uint32_t tilesX = (m_Extent.width + settings.computeTileSize - 1) / settings.computeTileSize;
+    uint32_t tilesY = (m_Extent.height + settings.computeTileSize - 1) / settings.computeTileSize;
     VkBufferCreateInfo lightIndexBufferInfo = { // Up to MAX_LIGHTS_PER_TILE indices per tile
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = MAX_LIGHTS_PER_TILE * tilesX * tilesY * sizeof(uint32_t),
+        .size = settings.maxLightsPerTile * tilesX * tilesY * sizeof(uint32_t),
         .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 
     };
     VkBufferCreateInfo lightTileCountBufferInfo = { // One count for each tile
@@ -1675,16 +1746,17 @@ void VulkanBackend::InitSamplers()
 void VulkanBackend::InitDescriptors()
 {
     const uint32_t FIF = FRAMES_IN_FLIGHT;
+    const uint32_t TEX_ARRAY_COUNT = static_cast<uint32_t>(TextureArrayID::MAX_ENUM);
     VkDescriptorPoolSize poolSizes[9] = {
-        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, FIF },                                  // Uniform buffer
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * 4 },                      // 4x GBuffer
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * TEXTURE_ARRAY_MAX_ENUM }, // MAXx Texture arrays
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * 3},                       // HDR, LDR, Bloom samplers
-        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * 2 },                      // Shadow array comparison, shadow array regular
-        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FIF },                                   // HDR storage image
-        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, FIF * 4 },                              // Lights, Light indices, Tile counts, Shadowcasters
-        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FIF },                                   // PingPong Buffer
-        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FIF * MAX_BLOOM_MIPS },                  // Bloom Downsample pyramid
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, FIF },                           // Uniform buffer
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * 4 },               // 4x GBuffer
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * TEX_ARRAY_COUNT }, // MAXx Texture arrays
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * 3},                // HDR, LDR, Bloom samplers
+        { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, FIF * 2 },               // Shadow array comparison, shadow array regular
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FIF },                            // HDR storage image
+        { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, FIF * 4 },                       // Lights, Light indices, Tile counts, Shadowcasters
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FIF },                            // PingPong Buffer
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, FIF * MAX_BLOOM_MIPS },           // Bloom Downsample pyramid
     };
     VkDescriptorPoolCreateInfo poolInfo = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -1748,7 +1820,7 @@ void VulkanBackend::InitDescriptors()
             { // Texture arrays
                 .binding = 0,
                 .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = TEXTURE_ARRAY_MAX_ENUM,
+                .descriptorCount = TEX_ARRAY_COUNT,
                 .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT
             },
             { // Shadow array (comparison)
@@ -2109,7 +2181,7 @@ void VulkanBackend::InitPipelines()
             .AddPushConstant<FragmentPushConstants>(VK_SHADER_STAGE_FRAGMENT_BIT)
             .AddShader(ShaderKind::VERTEX, "depth.vert")
             .AddShader(ShaderKind::FRAGMENT, "depth.frag")
-            .SetDepthWriteAttachment(m_DepthTarget.view, DEPTH_FORMAT, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .SetDepthWriteAttachment(m_DepthTarget.view, settings.depthFormat, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
             .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
             .SetCulling(VK_CULL_MODE_BACK_BIT)
             .SetDepthFlags(PIPELINE_DEPTH_WRITE | PIPELINE_DEPTH_TEST)
@@ -2125,7 +2197,7 @@ void VulkanBackend::InitPipelines()
             .AddDescriptorLayout(m_DescriptorLayout1)
             .AddPushConstant<ShadowPushConstants>(VK_SHADER_STAGE_VERTEX_BIT)
             .AddShader(ShaderKind::VERTEX, "shadow.vert")
-            .SetDynamicDepthAttachment(DEPTH_FORMAT)
+            .SetDynamicDepthAttachment(settings.depthFormat)
             .SetBounds(m_ShadowViewport, m_ShadowScissorRect, m_ShadowExtent)
             .SetCulling(VK_CULL_MODE_BACK_BIT)
             .SetDepthFlags(PIPELINE_DEPTH_WRITE | PIPELINE_DEPTH_TEST)
@@ -2143,10 +2215,10 @@ void VulkanBackend::InitPipelines()
             .AddPushConstant<FragmentPushConstants>(VK_SHADER_STAGE_FRAGMENT_BIT)
             .AddShader(ShaderKind::VERTEX, "gBuffer.vert")
             .AddShader(ShaderKind::FRAGMENT, "gBuffer.frag")
-            .AddColorAttachment(m_AlbedoTarget.view, ALBEDO_FORMAT, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
-            .AddColorAttachment(m_NormalTarget.view, NORMAL_FORMAT, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
-            .AddColorAttachment(m_MaterialTarget.view, MATERIAL_FORMAT, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
-            .SetDepthReadAttachment(m_DepthTarget.view, DEPTH_FORMAT, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE)
+            .AddColorAttachment(m_AlbedoTarget.view, settings.albedoFormat, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .AddColorAttachment(m_NormalTarget.view, settings.normalFormat, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .AddColorAttachment(m_MaterialTarget.view, settings.materialFormat, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .SetDepthReadAttachment(m_DepthTarget.view, settings.depthFormat, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE)
             .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
             .SetCulling(VK_CULL_MODE_BACK_BIT)
             .SetDepthFlags(PIPELINE_DEPTH_TEST)
@@ -2165,8 +2237,8 @@ void VulkanBackend::InitPipelines()
             .AddPushConstant<FragmentPushConstants>(VK_SHADER_STAGE_FRAGMENT_BIT)
             .AddShader(ShaderKind::VERTEX, "transparency.vert")
             .AddShader(ShaderKind::FRAGMENT, "transparency.frag")
-            .AddColorAttachment(m_LightingTarget.view, LIGHTING_FORMAT, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE)
-            .SetDepthReadAttachment(m_DepthTarget.view, DEPTH_FORMAT, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE)
+            .AddColorAttachment(m_LightingTarget.view, settings.lightingFormat, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE)
+            .SetDepthReadAttachment(m_DepthTarget.view, settings.depthFormat, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE)
             .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
             .SetCulling(VK_CULL_MODE_NONE)
             .SetDepthFlags(PIPELINE_DEPTH_TEST)
@@ -2181,9 +2253,10 @@ void VulkanBackend::InitPipelines()
             .SetKind(PipelineKind::GRAPHICS)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DescriptorLayout1)
+            .AddPushConstant<ToneMapPushConstants>(VK_SHADER_STAGE_FRAGMENT_BIT)
             .AddShader(ShaderKind::VERTEX, "fullscreen.vert")
             .AddShader(ShaderKind::FRAGMENT, "tonemap.frag")
-            .AddColorAttachment(m_ToneMapTarget.view, TONE_MAP_FORMAT, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .AddColorAttachment(m_ToneMapTarget.view, settings.tonemapFormat, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
             .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
             .SetCulling(VK_CULL_MODE_BACK_BIT)
             .SetDepthCompare(VK_COMPARE_OP_ALWAYS)
@@ -2364,7 +2437,7 @@ void VulkanBackend::GenerateMips(AllocatedTexture allocation, const ImageResourc
     uint32_t imageHeight = image.size.y;
     VkDeviceSize imageSizeBytes = imageWidth * imageHeight * image.channels;
 
-    const TextureArray& textureArray = frontend.textureArrays[allocation.arrayID];
+    const TextureArray& textureArray = frontend.textureArrays[static_cast<size_t>(allocation.arrayID)];
 
     // Staging image
     VkExtent3D extent = {
@@ -2713,12 +2786,6 @@ void VulkanBackend::GenerateMips(AllocatedTexture allocation, const ImageResourc
             DescriptorSets descriptors = { &m_NormalMipmapDescriptorSet, 1 };
             m_NormalMipmapPipeline.BeginCompute(commandBuffer, descriptors);
 
-            // Prepare to compute
-            // vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, m_NormalMipmapPipeline);
-            // vkCmdBindDescriptorSets(commandBuffer, 
-            //         VK_PIPELINE_BIND_POINT_COMPUTE, m_NormalMipmapPipelineLayout, 
-            //         0, 1, &m_NormalMipmapDescriptorSet, 0, nullptr);
-
             // Scale up staging image to top mip level
             NormalMipmapPushConstants constants = {
                 .srcIndex = 0,
@@ -2734,8 +2801,8 @@ void VulkanBackend::GenerateMips(AllocatedTexture allocation, const ImageResourc
                     0, sizeof(NormalMipmapPushConstants), 
                     &constants);
 
-            uint32_t groupsX = (textureArray.resolution + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
-            uint32_t groupsY = (textureArray.resolution + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+            uint32_t groupsX = (textureArray.resolution + settings.computeTileSize - 1) / settings.computeTileSize;
+            uint32_t groupsY = (textureArray.resolution + settings.computeTileSize - 1) / settings.computeTileSize;
             vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
 
             barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
@@ -2769,7 +2836,7 @@ void VulkanBackend::GenerateMips(AllocatedTexture allocation, const ImageResourc
                         0, sizeof(NormalMipmapPushConstants), 
                         &constants);
 
-                uint32_t groupsXY = (dstSize + COMPUTE_TILE_SIZE - 1) / COMPUTE_TILE_SIZE;
+                uint32_t groupsXY = (dstSize + settings.computeTileSize - 1) / settings.computeTileSize;
                 vkCmdDispatch(commandBuffer, groupsXY, groupsXY, 1);
 
                 // Wait for current mip to finish rendering

@@ -1,14 +1,30 @@
 #pragma once
 
 #include <cstdint>
-#include <cstring>
-#include "Util/logger.h"
+#include <string>
+#include <filesystem>
+
+namespace fs = std::filesystem;
+
+enum ShadowQuality {
+    NONE,
+    LOW,
+    MEDIUM,
+    HIGH,
+    ULTRA,
+    MAX_ENUM
+};
 
 struct Config {
-    const char *appName;
-    bool vsync;
-    uint32_t windowWidth;
-    uint32_t windowHeight;
+    Config() = default;
+    Config(const fs::path& path);
 
-    static bool VsyncEnabled(int argc, const char *argv[]);
+    std::string appName{""};
+    std::string startScene{""};
+    uint32_t windowWidth{0};
+    uint32_t windowHeight{0};
+    bool vsync{false};
+    ShadowQuality shadowQuality{ShadowQuality::NONE};
+    bool bloom{false};
+
 };
