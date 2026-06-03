@@ -6,7 +6,7 @@
 
 namespace fs = std::filesystem;
 
-enum ShadowQuality {
+enum class ShadowQuality {
     NONE,
     LOW,
     MEDIUM,

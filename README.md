@@ -7,23 +7,19 @@ point for creating games in the future and to learn about engines.
 
 NOTE: Completely untested on ARM and on MacOS.
 
-Bear in mind that this engine is built by me, for me. As such, the build is currently 
-less-than-satisfactory. This may be addressed in a future version of the engine.
+Currently the build uses make and is only available on Linux, I have plans to switch 
+to a better build system in the future.
 
 ### Dependencies
 
-Currently there is no auto-install of dependencies. To run this code, you will require:
+Make sure you have installed:
 - Vulkan SDK (verion >= 1.4)
 - GLFW
 
-These must be installed prior to building or running anything.
-All other libraries are header-only and included directly in this repo.
-
 ### Linux 
 
-This project is being developed on Linux and this is the intended platform for developers.
-The build uses clang++ v18.1.3 by default, support for other C++ compilers is likely but not guaranteed.
-To build the default example, enter the project's root and run:
+The build currently uses clang++ (version 18.1.3).
+Run this from the project root:
 ```
 make
 ```
@@ -31,17 +27,11 @@ Once built, you can run the example by running:
 ```
 ./bin/release/output
 ```
-For this to work, you must be in the project's root directory as this is the working directory.
-
-### Windows 
-
-There is currently no supported way to build natively on Windows. It is possible to cross compile 
-for Windows from Linux using MinGW. 
 
 ### Cross Compile Linux -> Windows
 
-The build uses MinGW's g++ compiler (x86_64-w64-mingw32-g++), support for other compilers is likely but not guaranteed.
-To build for Windows, run:
+The build currently uses MinGW's g++ compiler (x86_64-w64-mingw32-g++).
+Run this from the project root:
 ```
 make TARGET_OS=windows
 ```
@@ -49,16 +39,11 @@ Once built, you can run this on Linux using wine:
 ```
 wine ./winbin/release/output.exe
 ```
-Alternatively, to run on Windows natively:
-- Clone this entire repository onto your Windows machine. Not everything from it is required, but there is currently no support for distribution builds so you will have to include the source. 
-- Copy across the compiled binary (output.exe) and the two dll's (libgcc_s_seh-1.dll, libstdc++-6.dll) from the `winbin/release` directory in your Linux environment to the same directory on your Windows machine (creating it if it doesn't exist).
-
-You can run the code natively by connecting to the project root and running:
-```
-cmd.exe /k .\winbin\release\output.exe
-```
-Alternatively, you can run the executable using Windows explorer by moving the aforementioned binary and dll's 
-to the project's root as this is the working directory.
+To run on windows:
+- Clone this entire repository onto your Windows machine. (Currently no distribution build)
+- Copy the compiled binary (output.exe) and the two dll's (libgcc_s_seh-1.dll and libstdc++-6.dll) from `winbin/release` 
+in your Linux environment to the project root in your windows environment.
+- You can then run by double-clicking the executable. 
 
 ## Libraries Used
 

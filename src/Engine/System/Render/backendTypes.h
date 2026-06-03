@@ -144,18 +144,6 @@ struct SwapchainImageData {
     VkImageView view{VK_NULL_HANDLE};
 };
 
-struct OffscreenTargetArray {
-    uint32_t count{0};
-    AllocatedImage images[MAX_BLOOM_MIPS];
-    VkImageView views[MAX_BLOOM_MIPS]{VK_NULL_HANDLE};
-    glm::ivec2 sizes[MAX_BLOOM_MIPS];
-};
-
-struct OffscreenTarget {
-    AllocatedImage image;
-    VkImageView view{VK_NULL_HANDLE};
-};
-
 enum class TextureArrayID {
     COLOR_SMALL,
     COLOR_LARGE,

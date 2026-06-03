@@ -31,6 +31,12 @@ public:
         m_Size++;
     }
 
+    void Resize(size_t newSize)
+    {
+        ASSERT(newSize <= capacity && "Resizing out of bounds");
+        m_Size = newSize;
+    }
+
     T& Front()
     {
         return m_Data[0];

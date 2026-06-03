@@ -65,10 +65,10 @@ void SponzaScene::OnEvent(Event event)
 {
     // Some simple logging
     switch (event.kind) {
-        case EVENT_MOUSE_PRESS:
+        case EventKind::MOUSE_PRESS:
             INFO("Mouse pressed (button " << static_cast<int>(event.mouseButton) << ")");
             break;
-        case EVENT_KEY_PRESS:
+        case EventKind::KEY_PRESS:
             if (event.key == GLFW_KEY_TAB) {
                 INFO("Tab pressed - Switching to apes scene");
                 core.engine->SetScene("ApesScene", false);

@@ -5,23 +5,25 @@
 #include <utility>
 #include <stb/stb_image.h>
 
-enum ImageFlag {
-    IMAGE_FLAG_NONE         = 0x0,
-    IMAGE_FLAG_NON_COLOR    = 0x1,
-    IMAGE_FLAG_TRANSPARENT  = 0x2,
-    IMAGE_FLAG_CUTOUT       = 0x4,
-    IMAGE_FLAG_FONT_ATLAS   = 0x8
+enum class ImageFlag : uint32_t {
+    NONE         = 0x0,
+    NON_COLOR    = 0x1,
+    TRANSPARENT  = 0x2,
+    CUTOUT       = 0x4,
+    FONT_ATLAS   = 0x8
 };
+using ImageFlags = uint32_t;
 
-enum ImageLoadFlag {
-    IMAGE_LOAD_FLAG_NONE                = 0x0,
-    IMAGE_LOAD_FLAG_NON_COLOR           = 0x1,
-    IMAGE_LOAD_FLAG_CHECK_TRANSPARENCY  = 0x2,
+enum class ImageLoadFlag : uint32_t {
+    NONE                = 0x0,
+    NON_COLOR           = 0x1,
+    CHECK_TRANSPARENCY  = 0x2,
 };
+using ImageLoadFlags = uint32_t;
 
 class ImageResource {
 public:
-    ImageResource(uint32_t flags, glm::ivec2 size, uint8_t *pixels, int32_t channels)
+    ImageResource(ImageFlags flags, glm::ivec2 size, uint8_t *pixels, int32_t channels)
         : flags(flags), size(size), pixels(pixels), channels(channels) {}
     ImageResource() = default;
     ~ImageResource() { if (pixels != nullptr) stbi_image_free(pixels); }
@@ -44,7 +46,7 @@ public:
     bool Load(const std::filesystem::path& path, uint32_t imageLoadFlags);
 
 public:
-    uint32_t flags = 0;
+    ImageFlags flags = 0;
     glm::ivec2 size = {0, 0};
     uint8_t *pixels = nullptr;
     int32_t channels = 0;

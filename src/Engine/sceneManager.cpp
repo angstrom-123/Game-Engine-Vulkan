@@ -40,7 +40,7 @@ void SceneManager::DispatchEvents(Event event)
     if (m_ActiveScene != INVALID_HANDLE) {
         SceneBase *sceneBase = m_Scenes[m_ActiveScene];
         switch (event.kind) {
-            case EVENT_WINDOW_RESIZE:
+            case EventKind::WINDOW_RESIZE:
                 sceneBase->core.renderSystem->RequestResize(sceneBase->core.graphicsBackend);
                 sceneBase->core.renderSystem->Update(sceneBase->core.ecs, sceneBase->core.graphicsBackend);
                 break;
@@ -118,7 +118,7 @@ SceneFuture SceneManager::LoadSceneAsync(Engine *engine, VulkanBackend *backend,
     SceneBase *sceneBase = m_Scenes[scene];
     return (SceneFuture) {
         .scene = scene,
-        .status = SCENE_LOAD_STATUS_LOADING_RESOURCES,
+        .status = SceneLoadStatus::LOADING_RESOURCES,
         .startTimestamp = static_cast<uint64_t>(chrono::time_point_cast<chrono::milliseconds>(chrono::high_resolution_clock::now()).time_since_epoch().count()),
         .resourceFuture = manager->LoadAllAsync(sceneBase->core.path),
     };
@@ -128,7 +128,7 @@ void SceneManager::Update(Engine *engine, VulkanBackend *backend, ResourceManage
 {
     // Make progress on loading a scene if required
     switch (m_SceneFuture.status) {
-        case SCENE_LOAD_STATUS_LOADING_RESOURCES: {
+        case SceneLoadStatus::LOADING_RESOURCES: {
             if (m_SceneFuture.resourceFuture.wait_for(chrono::seconds(0)) == std::future_status::ready) {
                 INFO("Async resource load complete");
                 SceneBase *sceneBase = m_Scenes[m_SceneFuture.scene];
@@ -136,11 +136,11 @@ void SceneManager::Update(Engine *engine, VulkanBackend *backend, ResourceManage
                     .windowSize = engine->GetWindowSize(),
                     .manifest = manager->GetManifest(sceneBase->core.path),
                 });
-                m_SceneFuture.status = SCENE_LOAD_STATUS_PRE_INITING_SCENE;
+                m_SceneFuture.status = SceneLoadStatus::PRE_INITING_SCENE;
             }
             break;
         }
-        case SCENE_LOAD_STATUS_PRE_INITING_SCENE: {
+        case SceneLoadStatus::PRE_INITING_SCENE: {
             if (m_SceneFuture.preInitFuture.wait_for(chrono::seconds(0)) == std::future_status::ready) {
                 INFO("Async pre init complete");
                 SceneBase *sceneBase = m_Scenes[m_SceneFuture.scene];
@@ -170,15 +170,15 @@ void SceneManager::Update(Engine *engine, VulkanBackend *backend, ResourceManage
                 sceneBase->core.renderSystem->RequestResize(sceneBase->core.graphicsBackend);
                 sceneBase->core.renderSystem->Update(sceneBase->core.ecs, sceneBase->core.graphicsBackend);
                 sceneBase->OnSelect();
-                m_SceneFuture.status = SCENE_LOAD_STATUS_DONE;
+                m_SceneFuture.status = SceneLoadStatus::DONE;
 
                 uint64_t endTimestamp = chrono::time_point_cast<chrono::milliseconds>(chrono::high_resolution_clock::now()).time_since_epoch().count();
                 INFO("Scene load took " << endTimestamp - m_SceneFuture.startTimestamp << "ms");
             }
             break;
         }
-        case SCENE_LOAD_STATUS_DONE:
-        case SCENE_LOAD_STATUS_NONE:
+        case SceneLoadStatus::DONE:
+        case SceneLoadStatus::NONE:
             // This is fine
             break;
         default:

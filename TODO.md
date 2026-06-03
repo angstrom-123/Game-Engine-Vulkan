@@ -8,6 +8,9 @@
 
 ## Improvements
 
+### VKB 
+- Replace vk bootstrap instance, device, physical device, swapchain creation
+
 ### Embedding
 - Embed some default resources as headers 
 - Could use for engine font, etc.
@@ -24,13 +27,6 @@
 - Add support for emissive materials
 
 ## Features 
-
-### Graphics settings config
-- Yaml file to specify graphics options:
-    - Bloom (on/off)
-    - Shadow resolution (low/medium/high)
-    - Anti-Aliasing (on/off)
-    - VSync (on/off)
 
 ### IBL 
 - Image based lighting 

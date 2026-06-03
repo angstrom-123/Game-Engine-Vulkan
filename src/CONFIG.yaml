@@ -9,5 +9,4 @@ window:
 graphics:
   vsync: true
   shadowQuality: 3
-  # bloom: false
   bloom: true

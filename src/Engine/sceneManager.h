@@ -8,16 +8,16 @@
 #include <unordered_map>
 #include <unordered_set>
 
-enum SceneLoadStatus {
-    SCENE_LOAD_STATUS_NONE,
-    SCENE_LOAD_STATUS_LOADING_RESOURCES,
-    SCENE_LOAD_STATUS_PRE_INITING_SCENE,
-    SCENE_LOAD_STATUS_DONE
+enum class SceneLoadStatus : uint32_t {
+    NONE,
+    LOADING_RESOURCES,
+    PRE_INITING_SCENE,
+    DONE
 };
 
 struct SceneFuture {
     Scene scene{INVALID_HANDLE};
-    SceneLoadStatus status{SCENE_LOAD_STATUS_NONE};
+    SceneLoadStatus status{SceneLoadStatus::NONE};
     uint64_t startTimestamp{0};
 
     std::future<std::vector<Resource>> resourceFuture;

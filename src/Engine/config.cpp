@@ -1,5 +1,6 @@
 #include "config.h"
 
+#include "Util/enumIndex.h"
 #include "Util/logger.h"
 
 #include <fkYAML/node.hpp>
@@ -35,8 +36,8 @@ Config::Config(const fs::path& path)
         vsync = GetIfExists(graphicsNode, "vsync").as_bool();
         bloom = GetIfExists(graphicsNode, "bloom").as_bool();
         int rawQuality = GetIfExists(graphicsNode, "shadowQuality").as_int();
-        if (rawQuality >= ShadowQuality::MAX_ENUM || rawQuality < ShadowQuality::LOW) {
-            FATAL("Shadow quality (" << rawQuality << ") out of allowed range (" << ShadowQuality::LOW << "-" << ShadowQuality::MAX_ENUM - 1 <<")");
+        if (rawQuality >= EnumBase(ShadowQuality::MAX_ENUM) || rawQuality < EnumBase(ShadowQuality::LOW)) {
+            FATAL("Shadow quality (" << rawQuality << ") out of allowed range (" << EnumBase(ShadowQuality::LOW) << "-" << EnumBase(ShadowQuality::MAX_ENUM) - 1 <<")");
         }
         shadowQuality = static_cast<ShadowQuality>(rawQuality);
     } catch (fkyaml::exception e) {

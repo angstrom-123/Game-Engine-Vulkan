@@ -9,7 +9,6 @@
 #include "Util/allocator.h"
 #include "Util/myAssert.h"
 #include "Util/profiler.h"
-#include "Util/flags.h"
 
 RenderSystem::~RenderSystem()
 {
@@ -263,8 +262,8 @@ Entity RenderSystem::CreateText(ECS *ecs, const TextCreateInfo& info, VulkanBack
             lineWidth += glyphs.GetGlyph(c).advance;
         }
         switch (info.align) {
-            case TEXT_ALIGN_CENTRE: startX = (info.maxWidth - lineWidth) * 0.5 * METRES_PER_PIXEL; break;
-            case TEXT_ALIGN_RIGHT: startX = (info.maxWidth - lineWidth); break;
+            case TextAlign::CENTRE: startX = (info.maxWidth - lineWidth) * 0.5 * METRES_PER_PIXEL; break;
+            case TextAlign::RIGHT: startX = (info.maxWidth - lineWidth); break;
             default: break;
         }
 
@@ -309,7 +308,7 @@ Entity RenderSystem::CreateText(ECS *ecs, const TextCreateInfo& info, VulkanBack
         .albedo = glm::vec4(text.color, 1.0),
         .diffuseTexture = m_Textures[text.fontPath.generic_string()],
         .normalTexture = m_Textures[m_DefaultNormal.generic_string()],
-        .flags = MATERIAL_FLAG_TRANSPARENT | MATERIAL_FLAG_DOUBLE_SIDED,
+        .flags = EnumBase(MaterialFlag::TRANSPARENT) | EnumBase(MaterialFlag::DOUBLE_SIDED),
     };
     ecs->AddComponent<Material>(e, material);
 
@@ -368,12 +367,12 @@ void RenderSystem::UploadMaterial(Resource resource, ResourceManager *manager, V
         };
 
         const ImageResource& diffuseImage = manager->GetData<ImageResource>(manager->GetResource(subMaterial.diffuseTexture));
-        if (FLAGS_CONTAIN(diffuseImage.flags, IMAGE_FLAG_TRANSPARENT)) {
-            material.flags |= MATERIAL_FLAG_TRANSPARENT;
+        if (diffuseImage.flags & EnumBase(MaterialFlag::TRANSPARENT)) {
+            material.flags |= EnumBase(MaterialFlag::TRANSPARENT);
         }
 
-        if (FLAGS_CONTAIN(diffuseImage.flags, IMAGE_FLAG_CUTOUT)) {
-            material.flags |= MATERIAL_FLAG_CUTOUT;
+        if (diffuseImage.flags & EnumBase(MaterialFlag::CUTOUT)) {
+            material.flags |= EnumBase(MaterialFlag::CUTOUT);
         }
 
         m_AllocatedMaterials.insert({(path / subMaterial.name).generic_string(), material});
@@ -465,6 +464,6 @@ void RenderSystem::UploadFont(Resource resource, ResourceManager *manager, Vulka
     });
     m_Textures.insert({
         path.generic_string(),
-        backend->AllocateTexture(fontResource.bitmap, glm::ivec2(backend->settings.fontResolution), IMAGE_FLAG_FONT_ATLAS, 1, m_Frontend)
+        backend->AllocateTexture(fontResource.bitmap, glm::ivec2(backend->settings.fontResolution), EnumBase(ImageFlag::FONT_ATLAS), 1, m_Frontend)
     });
 }

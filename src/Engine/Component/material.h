@@ -4,13 +4,13 @@
 #include <glm/mat4x4.hpp>
 #include <vulkan/vulkan_core.h>
 
-enum MaterialFlags {
-    MATERIAL_FLAG_NONE          = 0x00000000,
-    MATERIAL_FLAG_TRANSPARENT   = 0x00000001,
-    MATERIAL_FLAG_DOUBLE_SIDED  = 0x00000002,
-    MATERIAL_FLAG_CUTOUT        = 0x00000004,
-    _MATERIAL_FLAG_FORCE_32_BIT = 0x10000000,
+enum class MaterialFlag : uint32_t {
+    NONE          = 0x00000000,
+    TRANSPARENT   = 0x00000001,
+    DOUBLE_SIDED  = 0x00000002,
+    CUTOUT        = 0x00000004,
 };
+using MaterialFlags = uint32_t;
 
 struct Material {
     glm::vec4 albedo{1.0};        // rgb + alpha
@@ -20,7 +20,7 @@ struct Material {
     float emissive{0.0};
     AllocatedTexture diffuseTexture;
     AllocatedTexture normalTexture;
-    uint32_t flags{0};
+    MaterialFlags flags{0};
 
     FragmentPushConstants::Material Pack();
 };

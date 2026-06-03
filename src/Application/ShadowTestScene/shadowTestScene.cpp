@@ -59,14 +59,6 @@ void ShadowTestScene::OnSelect()
 
 void ShadowTestScene::OnEvent(Event event)
 {
-    // Some simple logging
-    switch (event.kind) {
-        case EVENT_MOUSE_PRESS:
-            INFO("Mouse pressed (button " << static_cast<int>(event.mouseButton) << ")");
-            break;
-        default:
-            break;
-    };
 }
 
 void ShadowTestScene::OnCleanup()

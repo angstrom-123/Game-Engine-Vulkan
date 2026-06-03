@@ -2,18 +2,18 @@
 
 #include <cstdint>
 
-enum EventKind {
-    EVENT_INVALID,
-    EVENT_MOUSE_MOVE,
-    EVENT_MOUSE_PRESS,
-    EVENT_MOUSE_RELEASE,
-    EVENT_MOUSE_SCROLL,
-    EVENT_MOUSE_ENTER,
-    EVENT_MOUSE_LEAVE,
-    EVENT_KEY_PRESS,
-    EVENT_KEY_RELEASE,
-    EVENT_WINDOW_RESIZE,
-    EVENT_MAX_ENUM
+enum class EventKind : uint32_t {
+    INVALID,
+    MOUSE_MOVE,
+    MOUSE_PRESS,
+    MOUSE_RELEASE,
+    MOUSE_SCROLL,
+    MOUSE_ENTER,
+    MOUSE_LEAVE,
+    KEY_PRESS,
+    KEY_RELEASE,
+    WINDOW_RESIZE,
+    MAX_ENUM
 };
 
 struct Event {

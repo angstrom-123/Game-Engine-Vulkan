@@ -1,5 +1,6 @@
 #include "vulkanBackend.h"
 #include "System/Render/backendTypes.h"
+#include "Util/enumIndex.h"
 #include "config.h"
 
 #include <algorithm>
@@ -30,7 +31,6 @@
 #include "Geometry/vertex.h"
 
 #include "Util/allocator.h"
-#include "Util/flags.h"
 #include "Util/profiler.h"
 
 #include "handle.h"
@@ -65,22 +65,17 @@ VulkanBackend::~VulkanBackend()
 {
     VK_CHECK(vkDeviceWaitIdle(device));
 
-    for (auto it = m_MainDeleter.rbegin(); it != m_MainDeleter.rend(); it++) (*it)();
-    m_MainDeleter.clear();
-
     for (auto it = m_DynamicDeleter.rbegin(); it != m_DynamicDeleter.rend(); it++) (*it)();
     m_DynamicDeleter.clear();
 
-    vmaDestroyAllocator(allocator);
-    vkDestroyDevice(device, nullptr);
-    vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr);
-    vkb::destroy_debug_utils_messenger(m_Instance, m_DebugMessenger);
-    vkDestroyInstance(m_Instance, nullptr);
+    for (auto it = m_MainDeleter.rbegin(); it != m_MainDeleter.rend(); it++) (*it)();
+    m_MainDeleter.clear();
+
 }
 
 void VulkanBackend::ReadConfig(const Config& config)
 {
-    m_PresentMode = config.vsync ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
+    m_RequestedPresentMode = config.vsync ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_MAILBOX_KHR;
     m_Extent = { config.windowWidth, config.windowHeight };
     
     settings.vsync = config.vsync;
@@ -104,8 +99,6 @@ void VulkanBackend::ReadConfig(const Config& config)
 
     m_ShadowExtent = { settings.shadowResolution, settings.shadowResolution };
     m_ShadowViewport = {
-        .x = 0.0,
-        .y = 0.0,
         .width = static_cast<float>(m_ShadowExtent.width),
         .height = static_cast<float>(m_ShadowExtent.height),
         .minDepth = 0.0,
@@ -124,15 +117,12 @@ void VulkanBackend::Init(struct GLFWwindow *window, const Config &config)
     m_SortingBuffer.reserve(MAX_ENTITIES);
 
     m_Viewport = {
-        .x = 0.0,
-        .y = 0.0,
         .width = static_cast<float>(m_Extent.width),
         .height = static_cast<float>(m_Extent.height),
         .minDepth = 0.0,
         .maxDepth = 1.0
     };
     m_ScissorRect = { 
-        .offset = {0, 0}, 
         .extent = m_Extent 
     };
 
@@ -160,17 +150,17 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
     m_ResizeCameras.push_back(frontend.camera);
 
     // ================================================== Texture Arrays ==================================================
-    frontend.textureArrays[static_cast<size_t>(TextureArrayID::COLOR_SMALL)] = TextureArray(settings.colorSmallResolution, settings.colorTextureFormat, TextureKind::COLOR);
-    frontend.textureArrays[static_cast<size_t>(TextureArrayID::COLOR_LARGE)] = TextureArray(settings.colorLargeResolution, settings.colorTextureFormat, TextureKind::COLOR);
-    frontend.textureArrays[static_cast<size_t>(TextureArrayID::DATA_SMALL)] = TextureArray(settings.dataSmallResolution, settings.dataTextureFormat, TextureKind::NORMAL);
-    frontend.textureArrays[static_cast<size_t>(TextureArrayID::DATA_LARGE)] = TextureArray(settings.dataLargeResolution, settings.dataTextureFormat, TextureKind::NORMAL);
-    frontend.textureArrays[static_cast<size_t>(TextureArrayID::FONT)] = TextureArray(settings.fontResolution, settings.fontTextureFormat, TextureKind::COLOR);
+    frontend.textureArrays[EnumBase(TextureArrayID::COLOR_SMALL)] = TextureArray(settings.colorSmallResolution, settings.colorTextureFormat, TextureKind::COLOR);
+    frontend.textureArrays[EnumBase(TextureArrayID::COLOR_LARGE)] = TextureArray(settings.colorLargeResolution, settings.colorTextureFormat, TextureKind::COLOR);
+    frontend.textureArrays[EnumBase(TextureArrayID::DATA_SMALL)] = TextureArray(settings.dataSmallResolution, settings.dataTextureFormat, TextureKind::NORMAL);
+    frontend.textureArrays[EnumBase(TextureArrayID::DATA_LARGE)] = TextureArray(settings.dataLargeResolution, settings.dataTextureFormat, TextureKind::NORMAL);
+    frontend.textureArrays[EnumBase(TextureArrayID::FONT)] = TextureArray(settings.fontResolution, settings.fontTextureFormat, TextureKind::COLOR);
 
-    const uint32_t MINIMUM_SIZES[static_cast<size_t>(TextureArrayID::MAX_ENUM)] = { 3, 1, 1, 1 };
-    VkDescriptorImageInfo arrayImageInfos[static_cast<size_t>(TextureArrayID::MAX_ENUM)] = {};
+    const uint32_t MINIMUM_SIZES[EnumBase(TextureArrayID::MAX_ENUM)] = { 3, 1, 1, 1 };
+    VkDescriptorImageInfo arrayImageInfos[EnumBase(TextureArrayID::MAX_ENUM)] = {};
 
-    for (size_t arrayId = 0; arrayId < static_cast<size_t>(TextureArrayID::MAX_ENUM); arrayId++) {
-        frontend.textureArrays[arrayId].Init(std::max(info.arrayLayers[arrayId], MINIMUM_SIZES[arrayId]), *this);
+    for (size_t arrayId = 0; arrayId < EnumBase(TextureArrayID::MAX_ENUM); arrayId++) {
+        frontend.textureArrays[arrayId].Init(glm::max(info.arrayLayers[arrayId], MINIMUM_SIZES[arrayId]), *this);
 
         arrayImageInfos[arrayId] = {
             .sampler = m_TextureSampler,
@@ -194,9 +184,9 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
 
     // ================================================== Shadow Arrays ==================================================
 
-    frontend.maxShadows = std::min(info.maxShadows, settings.maxShadowcasters);
+    frontend.maxShadows = glm::min(info.maxShadows, settings.maxShadowcasters);
     frontend.shadowArray = AttachmentArray(settings.shadowResolution, settings.depthFormat);
-    frontend.shadowArray.Init(std::max(std::min(info.maxShadows * SHADOW_CASCADE_COUNT, settings.maxShadowcasters), 1u), *this);
+    frontend.shadowArray.Init(glm::max(glm::min(info.maxShadows * SHADOW_CASCADE_COUNT, settings.maxShadowcasters), 1u), *this);
     VkDescriptorImageInfo shadowComparisonImageInfo = {
         .sampler = m_ComparisonShadowSampler,
         .imageView = frontend.shadowArray.view,
@@ -276,6 +266,9 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
     }
     swapchainImage.flightFence = frame.renderFence;
 
+    Texture swapchainTarget(device, swapchainImage.image, swapchainImage.view, 
+            m_SwapchainFormat, glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT);
+
     VK_CHECK(vkResetCommandBuffer(frame.commandBuffer, 0));
     VkCommandBufferBeginInfo beginInfo = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -354,7 +347,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         return cameraFrustum.Intersects(centreExtents.ToWorldSpace(model));
     };
     auto PredicateIsTransparent = [ecs](Entity e) {
-        return FLAGS_CONTAIN(ecs->GetComponent<Material>(e).flags, MATERIAL_FLAG_TRANSPARENT);
+        return ecs->GetComponent<Material>(e).flags & EnumBase(MaterialFlag::TRANSPARENT);
     };
 
     // Frustum Culled
@@ -367,7 +360,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
     m_SortingBuffer.resize(0);
     for (Entity e : visibleEntities) {
         // Skip opaque
-        if (!FLAGS_CONTAIN(ecs->GetComponent<Material>(e).flags, MATERIAL_FLAG_TRANSPARENT)) {
+        if (!(ecs->GetComponent<Material>(e).flags & EnumBase(MaterialFlag::TRANSPARENT))) {
             continue;
         }
 
@@ -389,23 +382,10 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
         // Transition depth image to depth attachment
-        VkImageMemoryBarrier depthBarrier = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .srcAccessMask = 0,
-            .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-            .image = m_DepthTarget.image.image,
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-                .levelCount = 1,
-                .layerCount = 1
-            }
-        };
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
-                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 
-                0, 0, nullptr, 0, nullptr, 1, &depthBarrier);
+        m_DepthTarget.Transition(frame.commandBuffer, 
+                0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, 
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 
+                VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 
         // Begin rendering
         VkDescriptorSet descriptorSets[2] = {
@@ -441,14 +421,10 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         m_DepthPipeline.EndRendering(frame.commandBuffer, pfn_CmdEndRendering);
 
         // Transition depth attachment to read only
-        depthBarrier.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        depthBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        depthBarrier.oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-        depthBarrier.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
-                0, 0, nullptr, 0, nullptr, 1, &depthBarrier);
+        m_DepthTarget.Transition(frame.commandBuffer, 
+                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, 
+                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+                VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL)
 
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
@@ -459,27 +435,18 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
         // Transition color images to attachment
-        VkImageMemoryBarrier colorBarriers[3] = {};
-        VkImage colorImages[3] = { m_AlbedoTarget.image.image, m_NormalTarget.image.image, m_MaterialTarget.image.image };
-        for (uint32_t i = 0; i < 3; i++) {
-            colorBarriers[i] = {
-                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .srcAccessMask = 0,
-                .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                .image = colorImages[i],
-                .subresourceRange = {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .levelCount = 1,
-                    .layerCount = 1
-                }
-            };
-        }
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, 
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
-                0, 0, nullptr, 0, nullptr, 3, colorBarriers);
+        m_AlbedoTarget.Transition(frame.commandBuffer, 
+                0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 
+                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        m_NormalTarget.Transition(frame.commandBuffer, 
+                0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 
+                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+        m_MaterialTarget.Transition(frame.commandBuffer, 
+                0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 
+                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
         // Begin Rendering
         VkDescriptorSet descriptorSets[2] = {
@@ -515,16 +482,18 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         m_GBufferPipeline.EndRendering(frame.commandBuffer, pfn_CmdEndRendering);
 
         // Transition color attachments to shader readable 
-        for (int32_t i = 0; i < 3; i++) {
-            colorBarriers[i].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-            colorBarriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            colorBarriers[i].oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            colorBarriers[i].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        }
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                0, 0, nullptr, 0, nullptr, 3, colorBarriers);
+        m_AlbedoTarget.Transition(frame.commandBuffer, 
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, 
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        m_NormalTarget.Transition(frame.commandBuffer, 
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, 
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        m_MaterialTarget.Transition(frame.commandBuffer, 
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, 
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
@@ -645,23 +614,10 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
         // Transition HDR image to general
-        VkImageMemoryBarrier hdrBarrier = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .srcAccessMask = 0,
-            .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-            .image = m_LightingTarget.image.image,
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .levelCount = 1,
-                .layerCount = 1
-            }
-        };
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                0, 0, nullptr, 0, nullptr, 1, &hdrBarrier);
+        m_LightingTarget.Transition(frame.commandBuffer, 
+                0, VK_ACCESS_SHADER_READ_BIT, 
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                VK_IMAGE_LAYOUT_GENERAL);
 
         VkDescriptorSet descriptorSets[3] = { 
             frame.descriptorSet0, 
@@ -684,24 +640,10 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
         if (!visibleTransparentEntities.empty()) {
-            // Transition HDR image to attachment
-            VkImageMemoryBarrier hdrBarrier = {
-                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-                .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-                .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                .image = m_LightingTarget.image.image,
-                .subresourceRange = {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .levelCount = 1,
-                    .layerCount = 1
-                }
-            };
-            vkCmdPipelineBarrier(frame.commandBuffer, 
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
-                    0, 0, nullptr, 0, nullptr, 1, &hdrBarrier);
+            m_LightingTarget.Transition(frame.commandBuffer, 
+                    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_WRITE_BIT, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+                    VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
             // // Begin Rendering
             VkDescriptorSet descriptorSets[3] = { 
@@ -738,14 +680,10 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
             m_TransparencyPipeline.EndRendering(frame.commandBuffer, pfn_CmdEndRendering);
 
             // Transition hdr image from attachment to general
-            hdrBarrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-            hdrBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-            hdrBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            hdrBarrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-            vkCmdPipelineBarrier(frame.commandBuffer, 
-                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                    0, 0, nullptr, 0, nullptr, 1, &hdrBarrier);
+            m_LightingTarget.Transition(frame.commandBuffer, 
+                    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, 
+                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    VK_IMAGE_LAYOUT_GENERAL);
         }
 
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
@@ -764,38 +702,18 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
             };
 
             // Transition ping-pong image to general
-            VkImageMemoryBarrier barrierToGeneral = {
-                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .srcAccessMask = 0,
-                .dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-                .image = m_BloomPingPongTarget.image.image,
-                .subresourceRange = {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .levelCount = 1,
-                    .layerCount = 1
-                }
-            };
-            vkCmdPipelineBarrier(frame.commandBuffer, 
-                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                    0, 0, nullptr, 0, nullptr, 1, &barrierToGeneral);
+            m_BloomPingPongTarget.Transition(frame.commandBuffer, 
+                    0, VK_ACCESS_SHADER_WRITE_BIT, 
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                    VK_IMAGE_LAYOUT_GENERAL);
 
             // Transition pyramid to general
-            VkImageMemoryBarrier pyramidBarriers[MAX_BLOOM_MIPS] = {};
-            for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
-                pyramidBarriers[i] = barrierToGeneral;
-                pyramidBarriers[i].srcAccessMask = 0;
-                pyramidBarriers[i].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-                pyramidBarriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                pyramidBarriers[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-                pyramidBarriers[i].image = m_BloomPyramidTarget.images[i].image;
+            for (uint32_t i = 0; i < m_BloomPyramidMipCount; i++) {
+                m_BloomPyramidTargets[i].Transition(frame.commandBuffer, 
+                        0, VK_ACCESS_SHADER_WRITE_BIT, 
+                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                        VK_IMAGE_LAYOUT_GENERAL);
             }
-            vkCmdPipelineBarrier(frame.commandBuffer, 
-                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                    0, 0, nullptr, 0, nullptr, m_BloomPyramidTarget.count, pyramidBarriers);
 
             // Downsample hdr image into pyramid[0]
             VkDescriptorSet descriptorSets[4] = { 
@@ -811,12 +729,11 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                     .currentIndex = 0,
                 };
                 vkCmdPushConstants(frame.commandBuffer, 
-                        // m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
                         m_BloomDownsamplePipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
                         0, sizeof(BloomPushConstants), 
                         &constants);
-                uint32_t w = std::max(m_Extent.width >> 1, 1u);
-                uint32_t h = std::max(m_Extent.height >> 1, 1u);
+                uint32_t w = glm::max(m_Extent.width >> 1, 1u);
+                uint32_t h = glm::max(m_Extent.height >> 1, 1u);
                 uint32_t groupsX = (w + settings.computeTileSize - 1) / settings.computeTileSize;
                 uint32_t groupsY = (h + settings.computeTileSize - 1) / settings.computeTileSize;
                 vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
@@ -830,7 +747,6 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                     0, 1, &writeBarrier, 0, nullptr, 0, nullptr);
 
             // In place light extraction on pyramid[0]
-
             m_BloomLightExtractionPipeline.BeginCompute(frame.commandBuffer, descriptors);
             {
                 vkCmdDispatch(frame.commandBuffer, tilesX, tilesY, 1);
@@ -848,18 +764,17 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
             // Dispatch Compute for each layer
             m_BloomDownsamplePipeline.BeginCompute(frame.commandBuffer, descriptors);
             {
-                for (uint32_t i = 1; i < m_BloomPyramidTarget.count; i++) {
+                for (uint32_t i = 1; i < m_BloomPyramidMipCount; i++) {
                     BloomPushConstants constants = {
                         .currentIndex = i,
                     };
                     vkCmdPushConstants(frame.commandBuffer, 
-                            // m_BloomPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
                             m_BloomDownsamplePipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
                             0, sizeof(BloomPushConstants), 
                             &constants);
 
-                    uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
-                    uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
+                    uint32_t w = glm::max(m_Extent.width >> (i + 1), 1u);
+                    uint32_t h = glm::max(m_Extent.height >> (i + 1), 1u);
                     uint32_t groupsX = (w + settings.computeTileSize - 1) / settings.computeTileSize;
                     uint32_t groupsY = (h + settings.computeTileSize - 1) / settings.computeTileSize;
                     vkCmdDispatch(frame.commandBuffer, groupsX, groupsY, 1);
@@ -876,10 +791,10 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
             // Blur 
 
             // Dispatch Compute for each layer
-            for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
+            for (uint32_t i = 0; i < m_BloomPyramidMipCount; i++) {
                 const uint32_t BLUR_COMPUTE_GROUP_SIZE = 256;
-                uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
-                uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
+                uint32_t w = glm::max(m_Extent.width >> (i + 1), 1u);
+                uint32_t h = glm::max(m_Extent.height >> (i + 1), 1u);
 
                 uint32_t groupsX = (w + BLUR_COMPUTE_GROUP_SIZE - 1) / BLUR_COMPUTE_GROUP_SIZE;
                 uint32_t groupsY = h;
@@ -931,7 +846,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
             m_BloomAccumulatePipeline.BeginCompute(frame.commandBuffer, descriptors);
             {
                 // NOTE: Using int32_t instead of uint32_t for i because the decrement causes underflow when i = 0
-                for (int32_t i = m_BloomPyramidTarget.count - 2; i >= 0; i--) { // Shader upsamples the layer above (smaller)
+                for (int32_t i = m_BloomPyramidMipCount - 2; i >= 0; i--) { // Shader upsamples the layer above (smaller)
                     BloomPushConstants constants = {
                         .currentIndex = static_cast<uint32_t>(i),
                         .accumulationFactor = 0.1,
@@ -942,8 +857,8 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
                             &constants);
 
                     const uint32_t UPSAMPLE_COMPUTE_GROUP_SIZE = 8;
-                    uint32_t w = std::max(m_Extent.width >> (i + 1), 1u);
-                    uint32_t h = std::max(m_Extent.height >> (i + 1), 1u);
+                    uint32_t w = glm::max(m_Extent.width >> (i + 1), 1u);
+                    uint32_t h = glm::max(m_Extent.height >> (i + 1), 1u);
 
                     uint32_t groupsX = (w + UPSAMPLE_COMPUTE_GROUP_SIZE - 1) / UPSAMPLE_COMPUTE_GROUP_SIZE;
                     uint32_t groupsY = h;
@@ -959,42 +874,16 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
             m_BloomAccumulatePipeline.EndCompute();
 
             // Transition highest pyramid level (where the accumulated bloom is) to shader readable
-            VkImageMemoryBarrier bloomBarrier = {
-                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-                .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-                .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                .image = m_BloomPyramidTarget.images[0].image,
-                .subresourceRange = {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .levelCount = 1,
-                    .layerCount = 1
-                }
-            };
-            vkCmdPipelineBarrier(frame.commandBuffer, 
-                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
-                    0, 0, nullptr, 0, nullptr, 1, &bloomBarrier);
+            m_BloomPyramidTargets[0].Transition(frame.commandBuffer, 
+                    VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, 
+                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         } else {
             // Transition highest pyramid level to shader readable
-            VkImageMemoryBarrier bloomBarrier = {
-                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .srcAccessMask = 0,
-                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-                .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                .image = m_BloomPyramidTarget.images[0].image,
-                .subresourceRange = {
-                    .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                    .levelCount = 1,
-                    .layerCount = 1
-                }
-            };
-            vkCmdPipelineBarrier(frame.commandBuffer, 
-                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
-                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
-                    0, 0, nullptr, 0, nullptr, 1, &bloomBarrier);
+            m_BloomPyramidTargets[0].Transition(frame.commandBuffer, 
+                    0, VK_ACCESS_SHADER_READ_BIT, 
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
 
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
@@ -1006,34 +895,16 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
         // Transition target to color attachment
-        VkImageMemoryBarrier toneMapBarrier = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .srcAccessMask = 0,
-            .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .image = m_ToneMapTarget.image.image,
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .levelCount = 1,
-                .layerCount = 1
-            }
-        };
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, 
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
-                0, 0, nullptr, 0, nullptr, 1, &toneMapBarrier);
+        m_ToneMapTarget.Transition(frame.commandBuffer, 
+                0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 
+                VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
         // Transition HDR image to shader readonly
-        toneMapBarrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        toneMapBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        toneMapBarrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-        toneMapBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        toneMapBarrier.image = m_LightingTarget.image.image;
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
-            0, 0, nullptr, 0, nullptr, 1, &toneMapBarrier);
+        m_LightingTarget.Transition(frame.commandBuffer, 
+                VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_SHADER_READ_BIT, 
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
         // Begin rendering
         VkDescriptorSet descriptorSets[2] = { 
@@ -1054,15 +925,10 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         m_ToneMapPipeline.EndRendering(frame.commandBuffer, pfn_CmdEndRendering);
 
         // Transition tone mapped attachment to shader readable 
-        toneMapBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        toneMapBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        toneMapBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        toneMapBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        toneMapBarrier.image = m_ToneMapTarget.image.image;
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
-                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
-                0, 0, nullptr, 0, nullptr, 1, &toneMapBarrier);
+        m_ToneMapTarget.Transition(frame.commandBuffer, 
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, 
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 
+                VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
@@ -1073,23 +939,10 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
         // Transition swapchain image to attachment attachment
-        VkImageMemoryBarrier swapchainBarrier = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .srcAccessMask = 0,
-            .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            .image = swapchainImage.image,
-            .subresourceRange = {
-                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                .levelCount = 1,
-                .layerCount = 1
-            }
-        };
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
-                0, 0, nullptr, 0, nullptr, 1, &swapchainBarrier);
+        swapchainTarget.Transition(frame.commandBuffer, 
+                0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
         // // Begin rendering
         VkDescriptorSet descriptorSets[2] = { 
@@ -1099,7 +952,7 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         DescriptorSets descriptors = { descriptorSets, 2 };
         m_AntiAliasingPipeline.PrepareForDynamicRendering(frame.commandBuffer, descriptors);
         m_AntiAliasingPipeline.BeginDynamicColorRendering(frame.commandBuffer, pfn_CmdBeginRendering, 
-                swapchainImage.view, 
+                swapchainTarget.GetView(), 
                 VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE);
         {
             vkCmdDraw(frame.commandBuffer, 3, 1, 0, 0);
@@ -1107,14 +960,10 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         m_AntiAliasingPipeline.EndDynamicRendering(frame.commandBuffer, pfn_CmdEndRendering);
 
         // Transition swapchain attachment to present source
-        swapchainBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        swapchainBarrier.dstAccessMask = 0;
-        swapchainBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        swapchainBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-        vkCmdPipelineBarrier(frame.commandBuffer, 
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 
-                VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 
-                0, 0, nullptr, 0, nullptr, 1, &swapchainBarrier);
+        swapchainTarget.Transition(frame.commandBuffer, 
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0, 
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 
+                VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
         GPU_PROFILING_TIMESTAMP(frame.commandBuffer);
 
@@ -1212,15 +1061,15 @@ AllocatedTexture VulkanBackend::AllocateTexture(ImageResource& image, GraphicsFr
     };
 
     TextureArrayID arrayID = TextureArrayID::MAX_ENUM;
-    if (FLAGS_CONTAIN(image.flags, IMAGE_FLAG_FONT_ATLAS) && image.size == glm::ivec2(settings.fontResolution)) {
+    if ((image.flags & EnumBase(ImageFlag::FONT_ATLAS)) && image.size == glm::ivec2(settings.fontResolution)) {
         arrayID = TextureArrayID::FONT;
-    } else if (FLAGS_CONTAIN(image.flags, IMAGE_FLAG_NON_COLOR)) {
+    } else if (image.flags & EnumBase(ImageFlag::NON_COLOR)) {
         if (Fits(image.size, settings.dataSmallResolution)) {
             arrayID = TextureArrayID::DATA_SMALL;
         } else if (Fits(image.size, settings.dataLargeResolution)) {
             arrayID = TextureArrayID::DATA_LARGE;
         }
-    } else if (FLAGS_CONTAIN_ANY(image.flags, IMAGE_FLAG_TRANSPARENT, IMAGE_FLAG_CUTOUT) || image.flags == 0) {
+    } else if ((image.flags & EnumBase(ImageFlag::TRANSPARENT)) || (image.flags & EnumBase(ImageFlag::CUTOUT)) || image.flags == 0) {
         if (Fits(image.size, settings.colorSmallResolution)) {
             arrayID = TextureArrayID::COLOR_SMALL;
         } else if (Fits(image.size, settings.colorLargeResolution)){
@@ -1241,7 +1090,7 @@ AllocatedTexture VulkanBackend::AllocateTexture(ImageResource& image, GraphicsFr
     return allocation;
 }
 
-AllocatedTexture VulkanBackend::AllocateTexture(uint8_t *pixels, glm::ivec2 size, uint32_t flags, int32_t channels, GraphicsFrontend& frontend)
+AllocatedTexture VulkanBackend::AllocateTexture(uint8_t *pixels, glm::ivec2 size, ImageFlags flags, int32_t channels, GraphicsFrontend& frontend)
 {
     ImageResource tmp{flags, size, pixels, channels};
     return AllocateTexture(tmp, frontend);
@@ -1283,14 +1132,14 @@ void VulkanBackend::Resize(ECS *ecs)
     UpdateDescriptors();
 
     // Update static pipeline attachments
-    m_DepthPipeline.UpdateDepthAttachment(m_DepthTarget.view);
-    m_GBufferPipeline.UpdateDepthAttachment(m_DepthTarget.view);
-    m_GBufferPipeline.UpdateColorAttachment(0, m_AlbedoTarget.view);
-    m_GBufferPipeline.UpdateColorAttachment(1, m_NormalTarget.view);
-    m_GBufferPipeline.UpdateColorAttachment(2, m_MaterialTarget.view);
-    m_TransparencyPipeline.UpdateDepthAttachment(m_DepthTarget.view);
-    m_TransparencyPipeline.UpdateColorAttachment(0, m_LightingTarget.view);
-    m_ToneMapPipeline.UpdateColorAttachment(0, m_ToneMapTarget.view);
+    m_DepthPipeline.UpdateDepthAttachment(m_DepthTarget);
+    m_GBufferPipeline.UpdateDepthAttachment(m_DepthTarget);
+    m_GBufferPipeline.UpdateColorAttachment(0, m_AlbedoTarget);
+    m_GBufferPipeline.UpdateColorAttachment(1, m_NormalTarget);
+    m_GBufferPipeline.UpdateColorAttachment(2, m_MaterialTarget);
+    m_TransparencyPipeline.UpdateDepthAttachment(m_DepthTarget);
+    m_TransparencyPipeline.UpdateColorAttachment(0, m_LightingTarget);
+    m_ToneMapPipeline.UpdateColorAttachment(0, m_ToneMapTarget);
 
     // Update graphics pipeline extents
     m_DepthPipeline.UpdateBounds(m_Viewport, m_ScissorRect, m_Extent);
@@ -1330,8 +1179,13 @@ void VulkanBackend::InitVulkan(struct GLFWwindow *window)
     vkb::Instance vkbInstance = builtInstance.value();
     m_Instance = vkbInstance.instance;
     m_DebugMessenger = vkbInstance.debug_messenger;
-
     VK_CHECK(glfwCreateWindowSurface(m_Instance, window, nullptr, &m_Surface));
+
+    m_MainDeleter.push_back([this] {
+        vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr);
+        vkb::destroy_debug_utils_messenger(m_Instance, m_DebugMessenger);
+        vkDestroyInstance(m_Instance, nullptr);
+    });
 
     vkb::PhysicalDeviceSelector selector(vkbInstance);
     auto vkbPhysicalDevice = selector.set_surface(m_Surface)
@@ -1352,6 +1206,10 @@ void VulkanBackend::InitVulkan(struct GLFWwindow *window)
     physicalDevice = vkbDevice.physical_device;
     vkGetPhysicalDeviceProperties(physicalDevice, &m_PhysicalDeviceProperties);
 
+    m_MainDeleter.push_back([this] {
+        vkDestroyDevice(device, nullptr);
+    });
+
     graphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
     graphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
 
@@ -1361,10 +1219,13 @@ void VulkanBackend::InitVulkan(struct GLFWwindow *window)
         .instance = m_Instance,
     };
     vmaCreateAllocator(&allocInfo, &allocator);
+    m_MainDeleter.push_back([this] { 
+        vmaDestroyAllocator(allocator);
+    });
 
-    pfn_GetSurfaceCapabilities = GetFunctionPointer<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>("vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
-    pfn_CmdBeginRendering = GetFunctionPointer<PFN_vkCmdBeginRenderingKHR>("vkCmdBeginRenderingKHR");
-    pfn_CmdEndRendering = GetFunctionPointer<PFN_vkCmdEndRenderingKHR>("vkCmdEndRenderingKHR");
+    pfn_GetSurfaceCapabilities = GET_FUNCTION_POINTER(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
+    pfn_CmdBeginRendering = GET_FUNCTION_POINTER(vkCmdBeginRenderingKHR);
+    pfn_CmdEndRendering = GET_FUNCTION_POINTER(vkCmdEndRenderingKHR);
 
     VkCommandPoolCreateInfo createInfo = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -1416,8 +1277,8 @@ void VulkanBackend::InitDynamics()
 
     std::vector<VkImage> swapchainImages = vkbSwapchain.get_images().value();
     std::vector<VkImageView> swapchainViews = vkbSwapchain.get_image_views().value();
-    m_Images = std::vector<SwapchainImageData>(swapchainImages.size());
-    for (size_t i = 0; i < m_Images.size(); i++) {
+    m_Images.Resize(swapchainImages.size());
+    for (size_t i = 0; i < m_Images.Size(); i++) {
         m_Images[i] = {
             .image = swapchainImages[i],
             .view = swapchainViews[i],
@@ -1427,155 +1288,52 @@ void VulkanBackend::InitDynamics()
             vkDestroyImageView(device, m_Images[i].view, nullptr); 
         });
     }
-    INFO("Using swapchain images: " << m_Images.size());
+    INFO("Using swapchain images: " << m_Images.Size());
 
-    // ================================================== Target Defaults ==================================================
+    // ================================================== Render Targets ==================================================
 
-    VmaAllocationCreateInfo imageAllocInfo = {
-        .usage = VMA_MEMORY_USAGE_GPU_ONLY,
-    };
-    VkImageCreateInfo imageCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-        .imageType = VK_IMAGE_TYPE_2D,
-        .extent = { m_Extent.width, m_Extent.height, 1 },
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .tiling = VK_IMAGE_TILING_OPTIMAL,
-    };
-    VkImageViewCreateInfo viewCreateInfo = {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .viewType = VK_IMAGE_VIEW_TYPE_2D,
-        .subresourceRange = {
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        }
-    };
+    m_DepthTarget = Texture(device, allocator, settings.depthFormat, 
+            VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
+            glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_DEPTH_BIT);
+    m_DepthTarget.EnqueueCleanup(device, allocator, m_DynamicDeleter);
 
-    // ================================================== Depth Target ==================================================
+    m_AlbedoTarget = Texture(device, allocator, settings.albedoFormat, 
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
+            glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT);
+    m_AlbedoTarget.EnqueueCleanup(device, allocator, m_DynamicDeleter);
 
-    imageCreateInfo.format = settings.depthFormat;
-    imageCreateInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_DepthTarget.image.image, &m_DepthTarget.image.allocation, nullptr);
+    m_NormalTarget = Texture(device, allocator, settings.normalFormat, 
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
+            glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT);
+    m_NormalTarget.EnqueueCleanup(device, allocator, m_DynamicDeleter);
 
-    viewCreateInfo.image = m_DepthTarget.image.image;
-    viewCreateInfo.format = settings.depthFormat;
-    viewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-    VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_DepthTarget.view));
+    m_MaterialTarget = Texture(device, allocator, settings.materialFormat, 
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
+            glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT);
+    m_MaterialTarget.EnqueueCleanup(device, allocator, m_DynamicDeleter);
 
-    m_DynamicDeleter.push_back([=, this] {
-        vkDestroyImageView(device, m_DepthTarget.view, nullptr);
-        vmaDestroyImage(allocator, m_DepthTarget.image.image, m_DepthTarget.image.allocation);
-    });
-
-    // ================================================== Albedo Target ==================================================
-
-    imageCreateInfo.format = settings.albedoFormat;
-    imageCreateInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_AlbedoTarget.image.image, &m_AlbedoTarget.image.allocation, nullptr);
-
-    viewCreateInfo.image = m_AlbedoTarget.image.image;
-    viewCreateInfo.format = settings.albedoFormat;
-    viewCreateInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_AlbedoTarget.view));
-
-    m_DynamicDeleter.push_back([=, this] {
-        vkDestroyImageView(device, m_AlbedoTarget.view, nullptr);
-        vmaDestroyImage(allocator, m_AlbedoTarget.image.image, m_AlbedoTarget.image.allocation);
-    });
-
-    // ================================================== Normal Target ==================================================
-
-    imageCreateInfo.format = settings.normalFormat;
-    vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_NormalTarget.image.image, &m_NormalTarget.image.allocation, nullptr);
-
-    viewCreateInfo.image = m_NormalTarget.image.image;
-    viewCreateInfo.format = settings.normalFormat;
-    VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_NormalTarget.view));
-
-    m_DynamicDeleter.push_back([=, this] {
-        vkDestroyImageView(device, m_NormalTarget.view, nullptr);
-        vmaDestroyImage(allocator, m_NormalTarget.image.image, m_NormalTarget.image.allocation);
-    });
-
-    // ================================================== Material Target ==================================================
-
-    imageCreateInfo.format = settings.materialFormat;
-    vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_MaterialTarget.image.image, &m_MaterialTarget.image.allocation, nullptr);
-
-    viewCreateInfo.image = m_MaterialTarget.image.image;
-    viewCreateInfo.format = settings.materialFormat;
-    VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_MaterialTarget.view));
-
-    m_DynamicDeleter.push_back([=, this] {
-        vkDestroyImageView(device, m_MaterialTarget.view, nullptr);
-        vmaDestroyImage(allocator, m_MaterialTarget.image.image, m_MaterialTarget.image.allocation);
-    });
-
-    // ================================================== Lighting Target ==================================================
-
-    imageCreateInfo.format = settings.lightingFormat;
-    imageCreateInfo.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
-    vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_LightingTarget.image.image, &m_LightingTarget.image.allocation, nullptr);
-
-    viewCreateInfo.image = m_LightingTarget.image.image;
-    viewCreateInfo.format = settings.lightingFormat;
-    VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_LightingTarget.view));
-
-    m_DynamicDeleter.push_back([=, this] {
-        vkDestroyImageView(device, m_LightingTarget.view, nullptr);
-        vmaDestroyImage(allocator, m_LightingTarget.image.image, m_LightingTarget.image.allocation);
-    });
-
-    // ================================================== Bloom Downsample Target ==================================================
-
-    m_BloomPyramidTarget.count = std::min(static_cast<uint32_t>(std::floor(std::log2(std::max(m_Extent.width, m_Extent.height)))), MAX_BLOOM_MIPS);
-
-    imageCreateInfo.format = settings.bloomFormat;
-    viewCreateInfo.format = settings.bloomFormat;
-    for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
-        imageCreateInfo.extent.width = std::max(m_Extent.width >> (i + 1), 1u);
-        imageCreateInfo.extent.height = std::max(m_Extent.height >> (i + 1), 1u);
-        vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_BloomPyramidTarget.images[i].image, &m_BloomPyramidTarget.images[i].allocation, nullptr);
-
-        viewCreateInfo.image = m_BloomPyramidTarget.images[i].image;
-        VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_BloomPyramidTarget.views[i]));
-
-        m_DynamicDeleter.push_back([=, this] {
-            vkDestroyImageView(device, m_BloomPyramidTarget.views[i], nullptr);
-            vmaDestroyImage(allocator, m_BloomPyramidTarget.images[i].image, m_BloomPyramidTarget.images[i].allocation);
-        });
+    m_LightingTarget = Texture(device, allocator, settings.lightingFormat, 
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, 
+            glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT);
+    m_LightingTarget.EnqueueCleanup(device, allocator, m_DynamicDeleter);
+    
+    m_BloomPyramidMipCount = glm::min(static_cast<uint32_t>(glm::floor(std::log2(glm::max(m_Extent.width, m_Extent.height)))), MAX_BLOOM_MIPS);
+    for (uint32_t i = 0; i < m_BloomPyramidMipCount ; i++) {
+        m_BloomPyramidTargets[i] = Texture(device, allocator, settings.bloomFormat, 
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, 
+            glm::uvec2(glm::max(m_Extent.width >> (i + 1), 1u), glm::max(m_Extent.height >> (i + 1), 1u)), VK_IMAGE_ASPECT_COLOR_BIT);
+        m_BloomPyramidTargets[i].EnqueueCleanup(device, allocator, m_DynamicDeleter);
     }
 
-    // ================================================== Bloom Ping Pong Target ==================================================
+    m_BloomPingPongTarget = Texture(device, allocator, settings.bloomFormat, 
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, 
+            glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT);
+    m_BloomPingPongTarget.EnqueueCleanup(device, allocator, m_DynamicDeleter);
 
-    imageCreateInfo.extent = { m_Extent.width, m_Extent.height, 1 };
-    vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_BloomPingPongTarget.image.image, &m_BloomPingPongTarget.image.allocation, nullptr);
-
-    viewCreateInfo.image = m_BloomPingPongTarget.image.image;
-    VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_BloomPingPongTarget.view));
-
-    m_DynamicDeleter.push_back([=, this] {
-        vkDestroyImageView(device, m_BloomPingPongTarget.view, nullptr);
-        vmaDestroyImage(allocator, m_BloomPingPongTarget.image.image, m_BloomPingPongTarget.image.allocation);
-    });
-
-    // ================================================== Tone-Map Target ==================================================
-
-    imageCreateInfo.format = settings.tonemapFormat;
-    imageCreateInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    vmaCreateImage(allocator, &imageCreateInfo, &imageAllocInfo, &m_ToneMapTarget.image.image, &m_ToneMapTarget.image.allocation, nullptr);
-
-    viewCreateInfo.image = m_ToneMapTarget.image.image;
-    viewCreateInfo.format = settings.tonemapFormat;
-    VK_CHECK(vkCreateImageView(device, &viewCreateInfo, nullptr, &m_ToneMapTarget.view));
-
-    m_DynamicDeleter.push_back([=, this] {
-        vkDestroyImageView(device, m_ToneMapTarget.view, nullptr);
-        vmaDestroyImage(allocator, m_ToneMapTarget.image.image, m_ToneMapTarget.image.allocation);
-    });
+    m_ToneMapTarget = Texture(device, allocator, settings.tonemapFormat, 
+            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+            glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT);
+    m_ToneMapTarget.EnqueueCleanup(device, allocator, m_DynamicDeleter);
 
     // ================================================== Sync Structs ==================================================
 
@@ -2017,19 +1775,19 @@ void VulkanBackend::UpdateDescriptors()
         {
             VkDescriptorImageInfo hdrSamplerInfo = {
                 .sampler = m_OffscreenSampler,
-                .imageView = m_LightingTarget.view,
+                .imageView = m_LightingTarget.GetView(),
                 .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             };
 
             VkDescriptorImageInfo ldrSamplerInfo = {
                 .sampler = m_OffscreenSampler,
-                .imageView = m_ToneMapTarget.view,
+                .imageView = m_ToneMapTarget.GetView(),
                 .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             };
 
             VkDescriptorImageInfo bloomSamplerInfo = {
                 .sampler = m_OffscreenSampler,
-                .imageView = m_BloomPyramidTarget.views[0], // Top level only (accumulation result)
+                .imageView = m_BloomPyramidTargets[0].GetView(), // Top level only (accumulation result)
                 .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             };
 
@@ -2080,15 +1838,15 @@ void VulkanBackend::UpdateDescriptors()
             };
 
             VkDescriptorImageInfo gBufferArrayInfo[4] = {
-                { m_TextureSampler, m_AlbedoTarget.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-                { m_NormalSampler, m_NormalTarget.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-                { m_TextureSampler, m_MaterialTarget.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
-                { m_TextureSampler, m_DepthTarget.view, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL },
+                { m_TextureSampler, m_AlbedoTarget.GetView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+                { m_NormalSampler, m_NormalTarget.GetView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+                { m_TextureSampler, m_MaterialTarget.GetView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL },
+                { m_TextureSampler, m_DepthTarget.GetView(), VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL }
             };
 
             VkDescriptorImageInfo hdrStorageInfo = {
                 .sampler = VK_NULL_HANDLE,
-                .imageView = m_LightingTarget.view,
+                .imageView = m_LightingTarget.GetView(),
                 .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
             };
 
@@ -2135,14 +1893,14 @@ void VulkanBackend::UpdateDescriptors()
         {
             VkDescriptorImageInfo bloomPingPongImageInfo = {
                 .sampler = VK_NULL_HANDLE,
-                .imageView = m_BloomPingPongTarget.view,
+                .imageView = m_BloomPingPongTarget.GetView(),
                 .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
             };
             VkDescriptorImageInfo downsampleImageInfos[MAX_BLOOM_MIPS] = {};
-            for (uint32_t i = 0; i < m_BloomPyramidTarget.count; i++) {
+            for (uint32_t i = 0; i < m_BloomPyramidMipCount; i++) {
                 downsampleImageInfos[i] = {
                     .sampler = VK_NULL_HANDLE,
-                    .imageView = m_BloomPyramidTarget.views[i],
+                    .imageView = m_BloomPyramidTargets[i].GetView(),
                     .imageLayout = VK_IMAGE_LAYOUT_GENERAL
                 };
             }
@@ -2160,7 +1918,7 @@ void VulkanBackend::UpdateDescriptors()
                     .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                     .dstSet = frame.descriptorSet3,
                     .dstBinding = 1,
-                    .descriptorCount = m_BloomPyramidTarget.count,
+                    .descriptorCount = m_BloomPyramidMipCount,
                     .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                     .pImageInfo = downsampleImageInfos
                 },
@@ -2181,10 +1939,10 @@ void VulkanBackend::InitPipelines()
             .AddPushConstant<FragmentPushConstants>(VK_SHADER_STAGE_FRAGMENT_BIT)
             .AddShader(ShaderKind::VERTEX, "depth.vert")
             .AddShader(ShaderKind::FRAGMENT, "depth.frag")
-            .SetDepthWriteAttachment(m_DepthTarget.view, settings.depthFormat, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .SetDepthWriteAttachment(m_DepthTarget, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
             .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
             .SetCulling(VK_CULL_MODE_BACK_BIT)
-            .SetDepthFlags(PIPELINE_DEPTH_WRITE | PIPELINE_DEPTH_TEST)
+            .SetDepthFlags(EnumBase(PipelineDepthFlag::WRITE) | EnumBase(PipelineDepthFlag::TEST))
             .SetDepthCompare(VK_COMPARE_OP_LESS_OR_EQUAL)
             .SetVertexInput(Vertex::GetDepthVertexDesc())
             .Build();
@@ -2200,7 +1958,7 @@ void VulkanBackend::InitPipelines()
             .SetDynamicDepthAttachment(settings.depthFormat)
             .SetBounds(m_ShadowViewport, m_ShadowScissorRect, m_ShadowExtent)
             .SetCulling(VK_CULL_MODE_BACK_BIT)
-            .SetDepthFlags(PIPELINE_DEPTH_WRITE | PIPELINE_DEPTH_TEST)
+            .SetDepthFlags(EnumBase(PipelineDepthFlag::WRITE) | EnumBase(PipelineDepthFlag::TEST))
             .SetDepthCompare(VK_COMPARE_OP_LESS_OR_EQUAL)
             .SetVertexInput(Vertex::GetDepthVertexDesc())
             .Build();
@@ -2215,13 +1973,13 @@ void VulkanBackend::InitPipelines()
             .AddPushConstant<FragmentPushConstants>(VK_SHADER_STAGE_FRAGMENT_BIT)
             .AddShader(ShaderKind::VERTEX, "gBuffer.vert")
             .AddShader(ShaderKind::FRAGMENT, "gBuffer.frag")
-            .AddColorAttachment(m_AlbedoTarget.view, settings.albedoFormat, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
-            .AddColorAttachment(m_NormalTarget.view, settings.normalFormat, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
-            .AddColorAttachment(m_MaterialTarget.view, settings.materialFormat, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
-            .SetDepthReadAttachment(m_DepthTarget.view, settings.depthFormat, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE)
+            .AddColorAttachment(m_AlbedoTarget, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .AddColorAttachment(m_NormalTarget, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .AddColorAttachment(m_MaterialTarget, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .SetDepthReadAttachment(m_DepthTarget, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE)
             .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
             .SetCulling(VK_CULL_MODE_BACK_BIT)
-            .SetDepthFlags(PIPELINE_DEPTH_TEST)
+            .SetDepthFlags(EnumBase(PipelineDepthFlag::TEST))
             .SetDepthCompare(VK_COMPARE_OP_LESS_OR_EQUAL)
             .SetVertexInput(Vertex::GetVertexDesc())
             .Build();
@@ -2237,11 +1995,11 @@ void VulkanBackend::InitPipelines()
             .AddPushConstant<FragmentPushConstants>(VK_SHADER_STAGE_FRAGMENT_BIT)
             .AddShader(ShaderKind::VERTEX, "transparency.vert")
             .AddShader(ShaderKind::FRAGMENT, "transparency.frag")
-            .AddColorAttachment(m_LightingTarget.view, settings.lightingFormat, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE)
-            .SetDepthReadAttachment(m_DepthTarget.view, settings.depthFormat, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE)
+            .AddColorAttachment(m_LightingTarget, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_STORE)
+            .SetDepthReadAttachment(m_DepthTarget, VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_STORE_OP_DONT_CARE)
             .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
             .SetCulling(VK_CULL_MODE_NONE)
-            .SetDepthFlags(PIPELINE_DEPTH_TEST)
+            .SetDepthFlags(EnumBase(PipelineDepthFlag::TEST))
             .SetDepthCompare(VK_COMPARE_OP_LESS_OR_EQUAL)
             .EnableBlending(true)
             .SetVertexInput(Vertex::GetVertexDesc())
@@ -2256,7 +2014,7 @@ void VulkanBackend::InitPipelines()
             .AddPushConstant<ToneMapPushConstants>(VK_SHADER_STAGE_FRAGMENT_BIT)
             .AddShader(ShaderKind::VERTEX, "fullscreen.vert")
             .AddShader(ShaderKind::FRAGMENT, "tonemap.frag")
-            .AddColorAttachment(m_ToneMapTarget.view, settings.tonemapFormat, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
+            .AddColorAttachment(m_ToneMapTarget, VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_STORE_OP_STORE)
             .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
             .SetCulling(VK_CULL_MODE_BACK_BIT)
             .SetDepthCompare(VK_COMPARE_OP_ALWAYS)
@@ -2796,7 +2554,6 @@ void VulkanBackend::GenerateMips(AllocatedTexture allocation, const ImageResourc
                 .dstHeight = textureArray.resolution
             };
             vkCmdPushConstants(commandBuffer, 
-                    // m_NormalMipmapPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
                     m_NormalMipmapPipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
                     0, sizeof(NormalMipmapPushConstants), 
                     &constants);
@@ -2831,7 +2588,6 @@ void VulkanBackend::GenerateMips(AllocatedTexture allocation, const ImageResourc
                 };
 
                 vkCmdPushConstants(commandBuffer, 
-                        // m_NormalMipmapPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 
                         m_NormalMipmapPipeline.GetLayout(), VK_SHADER_STAGE_COMPUTE_BIT, 
                         0, sizeof(NormalMipmapPushConstants), 
                         &constants);

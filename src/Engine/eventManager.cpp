@@ -51,13 +51,13 @@ void EventManager::OnKeyPress(GLFWwindow *window, int key, int scancode, int act
         }
 
         manager->ForwardEvent((Event) {
-            .kind = EVENT_KEY_PRESS,
+            .kind = EventKind::KEY_PRESS,
             .key = static_cast<uint16_t>(key)
         });
     } else if (action == GLFW_RELEASE) {
         manager->keysDown[key] = false;
         manager->ForwardEvent((Event) {
-            .kind = EVENT_KEY_RELEASE,
+            .kind = EventKind::KEY_RELEASE,
             .key = static_cast<uint16_t>(key)
         });
     }
@@ -68,7 +68,7 @@ void EventManager::OnResize(GLFWwindow *window, int width, int height)
     EventManager *manager = static_cast<EventManager *>(glfwGetWindowUserPointer(window));
 
     manager->ForwardEvent((Event) {
-        .kind = EVENT_WINDOW_RESIZE,
+        .kind = EventKind::WINDOW_RESIZE,
         .windowWidth = static_cast<uint16_t>(width),
         .windowHeight = static_cast<uint16_t>(height),
     });
@@ -82,7 +82,7 @@ void EventManager::OnMouseMove(GLFWwindow *window, double xPos, double yPos)
     float yFloat = static_cast<float>(yPos);
     manager->mousePos = glm::vec2(xFloat, yFloat);
     manager->ForwardEvent((Event) {
-        .kind = EVENT_MOUSE_MOVE,
+        .kind = EventKind::MOUSE_MOVE,
         .mouseX = xFloat,
         .mouseY = yFloat
     });
@@ -93,7 +93,7 @@ void EventManager::OnMouseEnterOrLeave(GLFWwindow *window, int entered)
     EventManager *manager = static_cast<EventManager *>(glfwGetWindowUserPointer(window));
 
     manager->ForwardEvent((Event) {
-        .kind = (entered) ? EVENT_MOUSE_ENTER : EVENT_MOUSE_LEAVE
+        .kind = (entered) ? EventKind::MOUSE_ENTER : EventKind::MOUSE_LEAVE
     });
 }
 
@@ -112,7 +112,7 @@ void EventManager::OnMousePress(GLFWwindow *window, int button, int action, int 
     }
 
     manager->ForwardEvent((Event) {
-        .kind = (action == GLFW_PRESS) ? EVENT_MOUSE_PRESS : EVENT_MOUSE_RELEASE,
+        .kind = (action == GLFW_PRESS) ? EventKind::MOUSE_PRESS : EventKind::MOUSE_RELEASE,
         .mouseX = manager->mousePos.x,
         .mouseY = manager->mousePos.y,
         .mouseButton = static_cast<uint8_t>(button),
@@ -124,7 +124,7 @@ void EventManager::OnMouseScroll(GLFWwindow *window, double xOffset, double yOff
     EventManager *manager = static_cast<EventManager *>(glfwGetWindowUserPointer(window));
 
     manager->ForwardEvent((Event) {
-        .kind = EVENT_MOUSE_SCROLL,
+        .kind = EventKind::MOUSE_SCROLL,
         .mouseX = manager->mousePos.x,
         .mouseY = manager->mousePos.y,
         .scrollX = static_cast<float>(xOffset),

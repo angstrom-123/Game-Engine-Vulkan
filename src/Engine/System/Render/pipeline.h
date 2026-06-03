@@ -1,5 +1,7 @@
 #pragma once
 
+#include "System/Render/texture.h"
+#include "Util/enumIndex.h"
 #include "Util/stackVector.h"
 #include "Geometry/vertex.h"
 
@@ -29,27 +31,25 @@ enum class ShaderKind : uint32_t {
     COMPUTE
 };
 
-enum PipelineDepthFlag {
-    PIPELINE_DEPTH_NONE  = 0x0,
-    PIPELINE_DEPTH_WRITE = 0x1,
-    PIPELINE_DEPTH_TEST  = 0x2,
-    PIPELINE_DEPTH_BIAS  = 0x4,
+enum class PipelineDepthFlag : uint32_t {
+    NONE  = 0x0,
+    WRITE = 0x1,
+    TEST  = 0x2,
+    BIAS  = 0x4,
 };
 using PipelineDepthFlags = uint32_t;
 
-enum PipelineInfoFlag {
-    PIPELINE_INFO_NONE              = 0x0000'0000,
-    PIPELINE_INFO_FRAGMENT_SHADER   = 0x0000'0001,
-    PIPELINE_INFO_VERTEX_SHADER     = 0x0000'0002,
-    PIPELINE_INFO_COMPUTE_SHADER    = 0x0000'0004,
-    PIPELINE_INFO_COLOR_ATTACHMENTS = 0x0000'0008,
-    PIPELINE_INFO_DEPTH_ATTACHMENT  = 0x0000'0010,
-    PIPELINE_INFO_BOUNDS            = 0x0000'0020,
-    PIPELINE_INFO_PUSH_CONSTANTS    = 0x0000'0040,
+enum class PipelineInfoFlag : uint32_t {
+    NONE              = 0x0,
+    FRAGMENT_SHADER   = 0x1,
+    VERTEX_SHADER     = 0x2,
+    COMPUTE_SHADER    = 0x4,
+    COLOR_ATTACHMENTS = 0x8,
+    DEPTH_ATTACHMENT  = 0x10,
+    BOUNDS            = 0x20,
+    PUSH_CONSTANTS    = 0x40,
 };
 using PipelineInfoFlags = uint32_t;
-
-// TODO: Each image gets a class with a view, format, layout, etc.
 
 // TODO: Push constants here are copied into shader code?
 //       - But then I need to compile shaders at runtime
@@ -71,15 +71,15 @@ public:
         ASSERT(m_PushConstantsSize + sizeof(T) <= 128 && "Push constants too large");
         m_PushConstantRanges.EmplaceBack(stage, m_PushConstantsSize, sizeof(T));
         m_PushConstantsSize += sizeof(T);
-        m_InfoFlags |= PIPELINE_INFO_PUSH_CONSTANTS;
+        m_InfoFlags |= EnumBase(PipelineInfoFlag::PUSH_CONSTANTS);
         return *this;
     };
     Pipeline& AddShader(ShaderKind shaderKind, const fs::path& path);
     Pipeline& SetDynamicDepthAttachment(VkFormat format);
     Pipeline& SetDynamicColorAttachment(VkFormat format);
-    Pipeline& AddColorAttachment(VkImageView view, VkFormat format, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
-    Pipeline& SetDepthWriteAttachment(VkImageView view, VkFormat format, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
-    Pipeline& SetDepthReadAttachment(VkImageView view, VkFormat format, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
+    Pipeline& AddColorAttachment(Texture texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
+    Pipeline& SetDepthWriteAttachment(Texture texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
+    Pipeline& SetDepthReadAttachment(Texture texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
     Pipeline& SetBounds(VkViewport viewport, VkRect2D scissor, VkExtent2D extent);
     Pipeline& SetCulling(VkCullModeFlags culling);
     Pipeline& EnableBlending(bool enabled);
@@ -97,8 +97,8 @@ public:
     void BeginCompute(VkCommandBuffer commandBufffer, DescriptorSets descriptorSets);
     void EndCompute();
 
-    void UpdateDepthAttachment(VkImageView view);
-    void UpdateColorAttachment(uint32_t index, VkImageView view);
+    void UpdateDepthAttachment(Texture texture);
+    void UpdateColorAttachment(uint32_t index, Texture texture);
     void UpdateBounds(VkViewport viewport, VkRect2D scissor, VkExtent2D extent);
 
     VkPipelineLayout GetLayout() const { return m_PipelineLayout; }
@@ -116,7 +116,7 @@ private:
     VkDevice m_Device{VK_NULL_HANDLE};
     PipelineKind m_Kind{PipelineKind::NONE};
     std::string m_Name{"Pipeline"};
-    PipelineInfoFlags m_InfoFlags{PIPELINE_INFO_NONE};
+    PipelineInfoFlags m_InfoFlags{EnumBase(PipelineInfoFlag::NONE)};
     uint32_t m_PushConstantsSize{0};
 
     // Rendering

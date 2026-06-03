@@ -1,6 +1,5 @@
 #include "pipeline.h"
 #include "backendDefs.h"
-#include "Util/flags.h"
 #include "Util/logger.h"
 #include "vulkan_core.h"
 #include <fstream>
@@ -70,19 +69,19 @@ Pipeline& Pipeline::AddShader(ShaderKind shaderKind, const fs::path& path)
             ASSERT(m_Shaders.Empty() && "Vertex shader must be the first shader");
             ASSERT(m_Kind == PipelineKind::GRAPHICS && "Vertex shader must be in a graphics pipeline");
             fullPath.replace_extension(".vert.spirv");
-            m_InfoFlags |= PIPELINE_INFO_VERTEX_SHADER;
+            m_InfoFlags |= EnumBase(PipelineInfoFlag::VERTEX_SHADER);
             break;
         case ShaderKind::FRAGMENT:
             ASSERT(!m_Shaders.Empty() && "Fragment shader cannot be the first shader");
             ASSERT(m_Kind == PipelineKind::GRAPHICS && "Fragment shader must be in a graphics pipeline");
             fullPath.replace_extension(".frag.spirv");
-            m_InfoFlags |= PIPELINE_INFO_FRAGMENT_SHADER;
+            m_InfoFlags |= EnumBase(PipelineInfoFlag::FRAGMENT_SHADER);
             break;
         case ShaderKind::COMPUTE:
             ASSERT(m_Shaders.Empty() && "Compute shader must be the only shader");
             ASSERT(m_Kind == PipelineKind::COMPUTE && "Compute shader must be in a compute pipeline");
             fullPath.replace_extension(".comp.spirv");
-            m_InfoFlags |= PIPELINE_INFO_COMPUTE_SHADER;
+            m_InfoFlags |= EnumBase(PipelineInfoFlag::COMPUTE_SHADER);
             break;
         default:
             FATAL("Bad shader kind"); 
@@ -114,56 +113,56 @@ Pipeline& Pipeline::AddShader(ShaderKind shaderKind, const fs::path& path)
     return *this;
 }
 
-Pipeline& Pipeline::AddColorAttachment(VkImageView view, VkFormat format, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
+Pipeline& Pipeline::AddColorAttachment(Texture texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
 {
     ASSERT(!m_IsBuilt && "Already built");
     ASSERT(m_Kind == PipelineKind::GRAPHICS && "Only graphics pipelines can have attachments");
     ASSERT(!m_DynamicColorAttachment && "Cannot have both static and dynamic color attachments");
     m_ColorAttachments.EmplaceBack((VkRenderingAttachmentInfoKHR) {
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR,
-        .imageView = view,
+        .imageView = texture.GetView(),
         .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         .loadOp = loadOp,
         .storeOp = storeOp
     });
-    m_ColorAttachmentFormats.EmplaceBack(format);
-    m_InfoFlags |= PIPELINE_INFO_COLOR_ATTACHMENTS;
+    m_ColorAttachmentFormats.EmplaceBack(texture.GetFormat());
+    m_InfoFlags |= EnumBase(PipelineInfoFlag::COLOR_ATTACHMENTS);
     return *this;
 }
 
-Pipeline& Pipeline::SetDepthWriteAttachment(VkImageView view, VkFormat format, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
+Pipeline& Pipeline::SetDepthWriteAttachment(Texture texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
 {
     ASSERT(!m_IsBuilt && "Already built");
     ASSERT(m_Kind == PipelineKind::GRAPHICS && "Only graphics pipelines can have attachments");
     ASSERT(!m_DynamicDepthAttachment && "Cannot have both static and dynamic depth attachments");
     m_DepthAttachment = {
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR,
-        .imageView = view,
+        .imageView = texture.GetView(),
         .imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
         .loadOp = loadOp,
         .storeOp = storeOp,
         .clearValue = { .depthStencil = { 1.0, 0 } }
     };
-    m_DepthAttachmentFormat = format;
-    m_InfoFlags |= PIPELINE_INFO_DEPTH_ATTACHMENT;
+    m_DepthAttachmentFormat = texture.GetFormat();
+    m_InfoFlags |= EnumBase(PipelineInfoFlag::DEPTH_ATTACHMENT);
     return *this;
 }
 
-Pipeline& Pipeline::SetDepthReadAttachment(VkImageView view, VkFormat format, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
+Pipeline& Pipeline::SetDepthReadAttachment(Texture texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
 {
     ASSERT(!m_IsBuilt && "Already built");
     ASSERT(m_Kind == PipelineKind::GRAPHICS && "Only graphics pipelines can have attachments");
     ASSERT(!m_DynamicDepthAttachment && "Cannot have both static and dynamic depth attachments");
     m_DepthAttachment = {
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR,
-        .imageView = view,
+        .imageView = texture.GetView(),
         .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
         .loadOp = loadOp,
         .storeOp = storeOp,
         .clearValue = { .depthStencil = { 1.0, 0 } }
     };
-    m_DepthAttachmentFormat = format;
-    m_InfoFlags |= PIPELINE_INFO_DEPTH_ATTACHMENT;
+    m_DepthAttachmentFormat = texture.GetFormat();
+    m_InfoFlags |= EnumBase(PipelineInfoFlag::DEPTH_ATTACHMENT);
     return *this;
 }
 
@@ -174,7 +173,7 @@ Pipeline& Pipeline::SetBounds(VkViewport viewport, VkRect2D scissor, VkExtent2D 
     m_Viewport = viewport;
     m_Scissor = scissor;
     m_Extent = extent;
-    m_InfoFlags |= PIPELINE_INFO_BOUNDS;
+    m_InfoFlags |= EnumBase(PipelineInfoFlag::BOUNDS);
     return *this;
 }
 
@@ -198,9 +197,9 @@ Pipeline& Pipeline::SetDepthFlags(PipelineDepthFlags flags)
 {
     ASSERT(!m_IsBuilt && "Already built");
     ASSERT(m_Kind == PipelineKind::GRAPHICS && "Only graphics pipelines can have depth flags");
-    m_DepthWrite = FLAGS_CONTAIN(flags, PIPELINE_DEPTH_WRITE);
-    m_DepthTest = FLAGS_CONTAIN(flags, PIPELINE_DEPTH_TEST);
-    m_DepthBias = FLAGS_CONTAIN(flags, PIPELINE_DEPTH_BIAS);
+    m_DepthWrite = flags & EnumBase(PipelineDepthFlag::WRITE);
+    m_DepthTest = flags & EnumBase(PipelineDepthFlag::TEST);
+    m_DepthBias = flags & EnumBase(PipelineDepthFlag::BIAS);
     return *this;
 }
 
@@ -244,12 +243,12 @@ void Pipeline::Build()
     // Create the pipeline
     switch (m_Kind) {
         case PipelineKind::GRAPHICS:
-            ASSERT(FLAGS_CONTAIN(m_InfoFlags, PIPELINE_INFO_BOUNDS | PIPELINE_INFO_VERTEX_SHADER)
+            ASSERT((m_InfoFlags & EnumBase(PipelineInfoFlag::BOUNDS)) || (m_InfoFlags & EnumBase(PipelineInfoFlag::VERTEX_SHADER))
                     && "Graphics pipeline must have bounds and a vertex shader");
             BuildGraphics();
             break;
         case PipelineKind::COMPUTE:
-            ASSERT(FLAGS_CONTAIN(m_InfoFlags, PIPELINE_INFO_COMPUTE_SHADER)
+            ASSERT((m_InfoFlags & EnumBase(PipelineInfoFlag::COMPUTE_SHADER))
                     && "Compute pipeline must have a compute shader");
             BuildCompute();
             break;
@@ -337,7 +336,7 @@ void Pipeline::BeginDynamicColorRendering(VkCommandBuffer commandBuffer, PFN_vkC
         .layerCount = 1,
         .colorAttachmentCount = 1,
         .pColorAttachments = &attachmentInfo,
-        .pDepthAttachment = FLAGS_CONTAIN(m_InfoFlags, PIPELINE_INFO_DEPTH_ATTACHMENT)
+        .pDepthAttachment = (m_InfoFlags & EnumBase(PipelineInfoFlag::DEPTH_ATTACHMENT))
                 ? &m_DepthAttachment
                 : nullptr
     };
@@ -374,7 +373,7 @@ void Pipeline::BeginRendering(VkCommandBuffer commandBuffer, PFN_vkCmdBeginRende
         .pColorAttachments = (m_ColorAttachments.Empty())
                 ? nullptr 
                 : m_ColorAttachments.Data(),
-        .pDepthAttachment = FLAGS_CONTAIN(m_InfoFlags, PIPELINE_INFO_DEPTH_ATTACHMENT)
+        .pDepthAttachment = (m_InfoFlags & EnumBase(PipelineInfoFlag::DEPTH_ATTACHMENT))
                 ? &m_DepthAttachment
                 : nullptr
     };
@@ -424,19 +423,19 @@ void Pipeline::EndCompute()
     m_IsComputing = false;
 }
 
-void Pipeline::UpdateDepthAttachment(VkImageView view)
+void Pipeline::UpdateDepthAttachment(Texture texture)
 {
     ASSERT(!m_DynamicDepthAttachment && !m_DynamicColorAttachment && "Cannot update dynamic attachments");
-    ASSERT(FLAGS_CONTAIN(m_InfoFlags, PIPELINE_INFO_DEPTH_ATTACHMENT) && "No depth attachment to update");
-    m_DepthAttachment.imageView = view;
+    ASSERT((m_InfoFlags & EnumBase(PipelineInfoFlag::DEPTH_ATTACHMENT)) && "No depth attachment to update");
+    m_DepthAttachment.imageView = texture.GetView();
 }
 
-void Pipeline::UpdateColorAttachment(uint32_t index, VkImageView view)
+void Pipeline::UpdateColorAttachment(uint32_t index, Texture texture)
 {
     ASSERT(!m_DynamicDepthAttachment && !m_DynamicColorAttachment && "Cannot update dynamic attachments");
-    ASSERT(FLAGS_CONTAIN(m_InfoFlags, PIPELINE_INFO_COLOR_ATTACHMENTS) && "No color attachment to update");
+    ASSERT((m_InfoFlags & EnumBase(PipelineInfoFlag::COLOR_ATTACHMENTS)) && "No color attachments to update");
     ASSERT(index < m_ColorAttachments.Size() && "Updating color attachment out of bounds");
-    m_ColorAttachments[index].imageView = view;
+    m_ColorAttachments[index].imageView = texture.GetView();
 }
 
 void Pipeline::UpdateBounds(VkViewport viewport, VkRect2D scissor, VkExtent2D extent)

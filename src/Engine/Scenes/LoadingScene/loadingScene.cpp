@@ -12,7 +12,7 @@ void LoadingScene::OnInit(const SceneConfig& config)
     core.ecs->GetComponent<Camera>(core.camera).scale = 0.005;
 
     core.ecs->GetComponent<Transform>(m_SpinnerParent).InheritFrom(m_Parent).Scale(1.0);
-    core.ecs->GetComponent<Transform>(m_BackgroundParent).InheritFrom(m_Parent).Scale(1.0).Translate(0.0, 0.0, 1.0);
+    core.ecs->GetComponent<Transform>(m_BackgroundParent).InheritFrom(m_Parent).Scale(3.0).Translate(0.0, 0.0, 2.0);
     core.ecs->GetComponent<Transform>(m_Parent).Translate(0.0, 0.0, -5.0).Rotate(glm::radians(180.0), Y_AXIS);
 }
 

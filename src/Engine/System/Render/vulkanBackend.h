@@ -44,14 +44,13 @@
 #include "ECS/ecs.h"
 #include "ECS/ecsTypes.h"
 #include "Geometry/vertex.h"
+#include "System/Render/texture.h"
 #include "backendDefs.h"
 #include "pipeline.h"
 #include "backendTypes.h"
 #include "commandSubmitter.h"
 #include "config.h"
 #include <vulkan/vulkan_core.h>
-
-namespace fs = std::filesystem;
 
 class VulkanBackend {
 public:
@@ -83,35 +82,6 @@ public:
     CommandSubmitter submitter;
     FrameData frames[FRAMES_IN_FLIGHT];
 
-private:
-    struct GraphicsPipelineCreateInfo {
-        enum PipelineDepthFlag {
-            PIPELINE_DEPTH_NONE = 0x0,
-            PIPELINE_DEPTH_WRITE = 0x1,
-            PIPELINE_DEPTH_TEST = 0x2,
-            PIPELINE_DEPTH_BIAS = 0x4,
-        };
-
-        std::string pipelineName{"unnamed pipeline"};
-        fs::path vertexShader{""};
-        fs::path fragmentShader{""};
-        VkViewport *viewport{nullptr};
-        VkRect2D *scissor{nullptr};
-        VkPipelineLayout pipelineLayout{VK_NULL_HANDLE};
-        VertexInputDesc *vertexInput{nullptr};
-        VkCullModeFlags cullMode{VK_CULL_MODE_NONE};
-        bool blendEnable{false};
-        uint32_t depthFlags{PIPELINE_DEPTH_NONE};
-        VkCompareOp depthCompare{VK_COMPARE_OP_LESS_OR_EQUAL};
-        VkFormat depthFormat{VK_FORMAT_UNDEFINED};
-        std::initializer_list<VkFormat> attachmentFormats{};
-    };
-    struct ComputePipelineCreateInfo {
-        std::string pipelineName{"unnamed pipeline"};
-        fs::path computeShader{""};
-        VkPipelineLayout pipelineLayout{VK_NULL_HANDLE};
-    };
-
     void ReadConfig(const Config& config);
     void Resize(ECS *ecs);
     void InitVulkan(struct GLFWwindow *window);
@@ -124,16 +94,16 @@ private:
     void InitMiscBuffers();
     void InitMiscDescriptors();
     void InitMiscPipelines();
-    VkPipeline CreateComputePipeline(const ComputePipelineCreateInfo&& info);
-    VkPipeline CreateGraphicsPipeline(const GraphicsPipelineCreateInfo&& info);
-    VkShaderModule LoadShaderModule(const fs::path& path);
     void GenerateMips(AllocatedTexture allocation, const ImageResource& image, GraphicsFrontend& frontend);
+
+#define GET_FUNCTION_POINTER(T) GetFunctionPointer<PFN_##T>(#T)
     template<typename T> T GetFunctionPointer(const char *name) 
     { 
         T result = reinterpret_cast<T>(vkGetInstanceProcAddr(m_Instance, name)); 
         ASSERT(result && "Failed to get function pointer");
         return result;
     }
+
 #ifdef PROFILING
     void InitProfiling();
 #endif
@@ -150,10 +120,12 @@ private:
     PFN_vkCmdEndRenderingKHR pfn_CmdEndRendering{nullptr};
 
     VkSurfaceKHR m_Surface{VK_NULL_HANDLE};
+    VkSwapchainKHR m_OldSwapchain{VK_NULL_HANDLE};
     VkSwapchainKHR m_Swapchain{VK_NULL_HANDLE};
     VkFormat m_SwapchainFormat{VK_FORMAT_UNDEFINED};
-    VkPresentModeKHR m_PresentMode{VK_PRESENT_MODE_IMMEDIATE_KHR};
-    std::vector<SwapchainImageData> m_Images;
+    VkPresentModeKHR m_RequestedPresentMode{VK_PRESENT_MODE_IMMEDIATE_KHR};
+    VkPresentModeKHR m_PresentMode{VK_PRESENT_MODE_FIFO_KHR};
+    StackVector<SwapchainImageData, FRAMES_IN_FLIGHT + 1> m_Images;
 
     VkExtent2D m_Extent{0};
     VkViewport m_Viewport{0};
@@ -167,14 +139,15 @@ private:
     std::deque<std::function<void ()>> m_MainDeleter;
     std::deque<Entity> m_ResizeCameras;
 
-    OffscreenTarget m_DepthTarget;
-    OffscreenTarget m_AlbedoTarget;
-    OffscreenTarget m_NormalTarget;
-    OffscreenTarget m_MaterialTarget;
-    OffscreenTarget m_LightingTarget;
-    OffscreenTarget m_BloomPingPongTarget;
-    OffscreenTargetArray m_BloomPyramidTarget;
-    OffscreenTarget m_ToneMapTarget;
+    Texture m_DepthTarget;
+    Texture m_AlbedoTarget;
+    Texture m_NormalTarget;
+    Texture m_MaterialTarget;
+    Texture m_LightingTarget;
+    Texture m_BloomPingPongTarget;
+    uint32_t m_BloomPyramidMipCount{0};
+    Texture m_BloomPyramidTargets[MAX_BLOOM_MIPS];
+    Texture m_ToneMapTarget;
 
     VkSampler m_OffscreenSampler{VK_NULL_HANDLE};
     VkSampler m_TextureSampler{VK_NULL_HANDLE};

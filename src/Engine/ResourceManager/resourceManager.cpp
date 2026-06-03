@@ -1,5 +1,6 @@
 #include "resourceManager.h"
 #include "System/Render/backendTypes.h"
+#include "Util/enumIndex.h"
 #include "Util/myAssert.h"
 #include "fontResource.h"
 #include "imageResource.h"
@@ -34,10 +35,10 @@ ResourceManager::~ResourceManager()
 void ResourceManager::Init()
 {
     m_DefaultTextures = {
-        .white = LoadTexture("src/Engine/Resource/Texture/white.png", IMAGE_LOAD_FLAG_NONE),
-        .gray = LoadTexture("src/Engine/Resource/Texture/gray.png", IMAGE_LOAD_FLAG_NONE),
-        .black = LoadTexture("src/Engine/Resource/Texture/black.png", IMAGE_LOAD_FLAG_NONE),
-        .normal = LoadTexture("src/Engine/Resource/Texture/normal.png", IMAGE_LOAD_FLAG_NON_COLOR)
+        .white = LoadTexture("src/Engine/Resource/Texture/white.png", EnumBase(ImageLoadFlag::NONE)),
+        .gray = LoadTexture("src/Engine/Resource/Texture/gray.png", EnumBase(ImageLoadFlag::NONE)),
+        .black = LoadTexture("src/Engine/Resource/Texture/black.png", EnumBase(ImageLoadFlag::NONE)),
+        .normal = LoadTexture("src/Engine/Resource/Texture/normal.png", EnumBase(ImageLoadFlag::NON_COLOR))
     };
 
     m_DefaultFonts = {
@@ -79,13 +80,13 @@ void ResourceManager::LoadMaterial(const fs::path& path, std::vector<Resource>& 
         if (subMaterial.diffuseTexture.empty()) {
             subMaterial.diffuseTexture = m_PathMap[m_DefaultTextures.white];
         } else if (!m_ResourceMap.contains(subMaterial.diffuseTexture.generic_string())) {
-            results.push_back(LoadTexture(subMaterial.diffuseTexture, IMAGE_LOAD_FLAG_CHECK_TRANSPARENCY));
+            results.push_back(LoadTexture(subMaterial.diffuseTexture, EnumBase(ImageLoadFlag::CHECK_TRANSPARENCY)));
         }
 
         if (subMaterial.normalTexture.empty()) {
             subMaterial.normalTexture = m_PathMap[m_DefaultTextures.normal];
         } else if (!m_ResourceMap.contains(subMaterial.normalTexture.generic_string())) {
-            results.push_back(LoadTexture(subMaterial.normalTexture, IMAGE_LOAD_FLAG_NON_COLOR));
+            results.push_back(LoadTexture(subMaterial.normalTexture, EnumBase(ImageLoadFlag::NON_COLOR)));
         }
     }
     Resource resource = CreateResource<MaterialResource>(std::move(mtl));

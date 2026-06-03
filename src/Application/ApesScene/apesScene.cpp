@@ -46,7 +46,7 @@ void ApesScene::OnInit(const SceneConfig& config)
         .position = glm::vec3(0.0, 0.0, -5.0),
         .color = glm::vec3(1.0, 0.0, 0.0),
         .text = "Hello, World!",
-        .align = TEXT_ALIGN_CENTRE
+        .align = TextAlign::CENTRE
     };
     Entity text = core.renderSystem->CreateText(core.ecs, textInfo, core.graphicsBackend);
     core.ecs->GetComponent<Transform>(text).Scale(0.25);
@@ -84,10 +84,10 @@ void ApesScene::OnEvent(Event event)
 {
     // Some simple logging
     switch (event.kind) {
-        case EVENT_MOUSE_PRESS:
+        case EventKind::MOUSE_PRESS:
             INFO("Mouse pressed (button " << static_cast<int>(event.mouseButton) << ")");
             break;
-        case EVENT_KEY_PRESS:
+        case EventKind::KEY_PRESS:
             if (event.key == GLFW_KEY_TAB) {
                 INFO("Tab pressed - Switching to sponza scene");
                 core.engine->SetScene("SponzaScene", true);
