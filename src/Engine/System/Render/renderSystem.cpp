@@ -7,7 +7,7 @@
 #include "ResourceManager/modelResource.h"
 #include "System/Render/backendTypes.h"
 #include "Util/allocator.h"
-#include "Util/myAssert.h"
+#include "Util/macros.h"
 #include "Util/profiler.h"
 
 RenderSystem::~RenderSystem()
@@ -252,6 +252,7 @@ Entity RenderSystem::CreateText(ECS *ecs, const TextCreateInfo& info, VulkanBack
     std::vector<Vertex> vertices(6 * text.text.size());
 
     float baseline = 0.0;
+    float fontResolution = backend->settings.textureArrayResolutions[EnumBase(TextureArrayID::FONT)];
     for (const std::string& line : lines) {
         if (line.empty()) continue;
 
@@ -275,8 +276,8 @@ Entity RenderSystem::CreateText(ECS *ecs, const TextCreateInfo& info, VulkanBack
 
             float x0 = penX + g.offset.x * METRES_PER_PIXEL;
             float y0 = penY - g.offset.y * METRES_PER_PIXEL;
-            float x1 = x0 + (g.uv1.x - g.uv0.x) * static_cast<float>(backend->settings.fontResolution) * METRES_PER_PIXEL;
-            float y1 = y0 - (g.uv1.y - g.uv0.y) * static_cast<float>(backend->settings.fontResolution) * METRES_PER_PIXEL;
+            float x1 = x0 + (g.uv1.x - g.uv0.x) * static_cast<float>(fontResolution) * METRES_PER_PIXEL;
+            float y1 = y0 - (g.uv1.y - g.uv0.y) * static_cast<float>(fontResolution) * METRES_PER_PIXEL;
 
             vertices.emplace_back(glm::vec3(x0, y0, 0.0), glm::vec3(0.0, 0.0, 1.0), glm::vec2(g.uv0.x, g.uv0.y), glm::vec4(1.0, glm::vec3(0.0))); // 0
             vertices.emplace_back(glm::vec3(x0, y1, 0.0), glm::vec3(0.0, 0.0, 1.0), glm::vec2(g.uv0.x, g.uv1.y), glm::vec4(1.0, glm::vec3(0.0))); // 1
@@ -457,6 +458,7 @@ void RenderSystem::UploadFont(Resource resource, ResourceManager *manager, Vulka
         return;
     }
 
+    float fontResolution = backend->settings.textureArrayResolutions[EnumBase(TextureArrayID::FONT)];
     FontResource& fontResource = manager->GetData<FontResource>(resource);
     m_Fonts.insert({
         path.generic_string(),
@@ -464,6 +466,6 @@ void RenderSystem::UploadFont(Resource resource, ResourceManager *manager, Vulka
     });
     m_Textures.insert({
         path.generic_string(),
-        backend->AllocateTexture(fontResource.bitmap, glm::ivec2(backend->settings.fontResolution), EnumBase(ImageFlag::FONT_ATLAS), 1, m_Frontend)
+        backend->AllocateTexture(fontResource.bitmap, glm::ivec2(fontResolution), EnumBase(ImageFlag::FONT_ATLAS), 1, m_Frontend)
     });
 }

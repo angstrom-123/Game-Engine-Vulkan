@@ -1,7 +1,7 @@
 #include "config.h"
 
 #include "Util/enumIndex.h"
-#include "Util/logger.h"
+#include "Util/macros.h"
 
 #include <fkYAML/node.hpp>
 #include <fstream>

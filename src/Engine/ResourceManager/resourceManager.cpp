@@ -1,7 +1,7 @@
 #include "resourceManager.h"
 #include "System/Render/backendTypes.h"
 #include "Util/enumIndex.h"
-#include "Util/myAssert.h"
+#include "Util/macros.h"
 #include "fontResource.h"
 #include "imageResource.h"
 #include "materialResource.h"
@@ -219,7 +219,8 @@ void ResourceManager::GetArraySizes(const ResourceManifest& manifest, uint32_t (
 
     // TODO: Count fonts
 
-    auto Fits = [](glm::ivec2 imageSize, int32_t resolution) {
+    auto Fits = [settings](glm::ivec2 imageSize, TextureArrayID arrayID) {
+        int32_t resolution = settings.textureArrayResolutions[EnumBase(arrayID)];
         return (imageSize.x <= resolution && imageSize.y <= resolution);
     };
 
@@ -228,9 +229,9 @@ void ResourceManager::GetArraySizes(const ResourceManifest& manifest, uint32_t (
         for (const SubMaterialResource& subMaterial : GetData<MaterialResource>(resource).subMaterials) {
             if (!counted.contains(subMaterial.diffuseTexture)) {
                 const ImageResource& img = GetData<ImageResource>(GetResource(subMaterial.diffuseTexture));
-                if (Fits(img.size, settings.colorSmallResolution)) {
+                if (Fits(img.size, TextureArrayID::COLOR_SMALL)) {
                     results[static_cast<size_t>(TextureArrayID::COLOR_SMALL)]++;
-                } else if (Fits(img.size, settings.colorLargeResolution)) {
+                } else if (Fits(img.size, TextureArrayID::COLOR_LARGE)) {
                     results[static_cast<size_t>(TextureArrayID::COLOR_LARGE)]++;
                 } else {
                     FATAL("Image too large to allocate in texture array");
@@ -240,9 +241,9 @@ void ResourceManager::GetArraySizes(const ResourceManifest& manifest, uint32_t (
 
             if (!counted.contains(subMaterial.normalTexture)) {
                 const ImageResource& img = GetData<ImageResource>(GetResource(subMaterial.normalTexture));
-                if (Fits(img.size, settings.dataSmallResolution)) {
+                if (Fits(img.size, TextureArrayID::DATA_SMALL)) {
                     results[static_cast<size_t>(TextureArrayID::DATA_SMALL)]++;
-                } else if (Fits(img.size, settings.dataLargeResolution)) {
+                } else if (Fits(img.size, TextureArrayID::DATA_LARGE)) {
                     results[static_cast<size_t>(TextureArrayID::DATA_LARGE)]++;
                 } else {
                     FATAL("Image too large to allocate in texture array");

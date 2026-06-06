@@ -4,8 +4,9 @@
 #include <vulkan/vulkan_core.h>
 
 #include "ECS/ecsTypes.h"
-#include "System/Render/attachmentArray.h"
-#include "textureArray.h"
+#include "System/Render/texture.h"
+#include "attachmentArray.h"
+#include "Util/enumIndex.h"
 
 const uint32_t FRAMES_IN_FLIGHT = 2;
 const uint32_t MAX_LIGHTS = 1024;
@@ -13,6 +14,15 @@ const uint32_t MAX_BLOOM_MIPS = 5;
 const uint32_t MAX_NORMAL_MIPS = 16;
 const uint32_t BLOOM_BLUR_RADIUS = 4;
 const uint32_t SHADOW_CASCADE_COUNT = 3;
+
+enum class TextureArrayID {
+    COLOR_SMALL,
+    COLOR_LARGE,
+    DATA_SMALL,
+    DATA_LARGE,
+    FONT,
+    MAX_ENUM
+};
 
 struct VulkanBackendSettings {
     VkFormat depthFormat = VK_FORMAT_D32_SFLOAT; 
@@ -26,11 +36,13 @@ struct VulkanBackendSettings {
     VkFormat colorTextureFormat = VK_FORMAT_R8G8B8A8_SRGB;
     VkFormat dataTextureFormat = VK_FORMAT_R8G8B8A8_UNORM;
     VkFormat fontTextureFormat = VK_FORMAT_R8_UNORM;
-    uint32_t colorSmallResolution = 1024;
-    uint32_t colorLargeResolution = 2048;
-    uint32_t dataSmallResolution = 1024;
-    uint32_t dataLargeResolution = 2048;
-    uint32_t fontResolution = 2048;
+    uint32_t textureArrayResolutions[EnumBase(TextureArrayID::MAX_ENUM)] = {
+        1024, // Color small
+        2048, // Color large
+        1024, // Data small
+        2048, // Data large
+        2048 // Font
+    };
     uint32_t maxShadowcasters = 24;
     uint32_t maxLightsPerTile = 256;
     uint32_t computeTileSize = 16;
@@ -144,15 +156,6 @@ struct SwapchainImageData {
     VkImageView view{VK_NULL_HANDLE};
 };
 
-enum class TextureArrayID {
-    COLOR_SMALL,
-    COLOR_LARGE,
-    DATA_SMALL,
-    DATA_LARGE,
-    FONT,
-    MAX_ENUM
-};
-
 struct AllocatedTexture {
     TextureArrayID arrayID{TextureArrayID::MAX_ENUM};
     uint32_t layerID{UINT32_MAX};
@@ -161,13 +164,14 @@ struct AllocatedTexture {
 struct GraphicsFrontendInfo {
     Entity camera{INVALID_HANDLE};
     uint32_t maxShadows{0};
-    uint32_t arrayLayers[static_cast<size_t>(TextureArrayID::MAX_ENUM)];
+    uint32_t arrayLayers[EnumBase(TextureArrayID::MAX_ENUM)];
 };
 
 struct GraphicsFrontend {
     Entity camera{INVALID_HANDLE};
     uint32_t maxShadows{0};
-    TextureArray textureArrays[static_cast<size_t>(TextureArrayID::MAX_ENUM)];
-    AttachmentArray shadowArray;
+    Texture arrayTextures[EnumBase(TextureArrayID::MAX_ENUM)];
+    Texture shadowArrayTexture;
+    // AttachmentArray shadowArray;
 };
 

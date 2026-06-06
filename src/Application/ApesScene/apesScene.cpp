@@ -4,7 +4,7 @@
 
 #include <Engine/ECS/ecsTypes.h>
 #include <Engine/event.h>
-#include <Engine/Util/logger.h>
+#include <Engine/Util/macros.h>
 #include <Engine/Util/profiler.h>
 #include <Engine/Component/transform.h>
 #include <Engine/Component/material.h>

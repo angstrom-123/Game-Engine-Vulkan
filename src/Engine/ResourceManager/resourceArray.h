@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Util/myAssert.h"
+#include "Util/macros.h"
 #include "resourceTypes.h"
 #include <unordered_map>
 

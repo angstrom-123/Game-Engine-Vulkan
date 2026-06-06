@@ -4,7 +4,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
 
-#include "Util/myAssert.h"
+#include "Util/macros.h"
 
 bool ImageResource::Load(const std::filesystem::path& path, uint32_t imageLoadFlags)
 {

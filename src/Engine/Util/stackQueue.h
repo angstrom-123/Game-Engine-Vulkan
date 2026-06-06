@@ -1,34 +1,55 @@
-#pragma once 
+#pragma once
 
 #include "Util/macros.h"
 #include <cstddef>
 #include <utility>
 
-const size_t MAX_STACK_VECTOR_SIZE = 256 * 1024;
+const size_t MAX_STACK_QUEUE_SIZE = 256 * 1024;
 
-template<typename T, size_t capacity> class StackVector {
-    static_assert(capacity > 0 && capacity * sizeof(T) <= MAX_STACK_VECTOR_SIZE && "Bad stack vector capacity");
+template<typename T, size_t capacity> class StackQueue {
+    static_assert(capacity > 0 && capacity * sizeof(T) <= MAX_STACK_QUEUE_SIZE && "Bad stack vector capacity");
 public:
-    ~StackVector() = default;
-    StackVector() = default;
+    ~StackQueue() = default;
+    StackQueue() = default;
 
-    void PushBack(const T& value) 
-    { 
-        ASSERT(m_Size < capacity && "Inserting out of bounds");
-        m_Data[m_Size++] = value;
-    };
-
-    void PushBack(T&& value) 
-    { 
-        ASSERT(m_Size < capacity && "Inserting out of bounds");
-        m_Data[m_Size++] = std::move(value);
-    };
-
-    template<class... Args> void EmplaceBack(Args&&... args) 
-    { 
-        // Ooh fancy
-        new (&m_Data[m_Size]) T(std::forward<Args>(args)...);
+    void Push(const T& value)
+    {
+        ASSERT(m_Size < capacity  && "Queue full");
+        m_Data[m_Back++] = value;
+        if (m_Back == capacity) {
+            m_Back = 0;
+        }
         m_Size++;
+    }
+
+    void Push(T&& value)
+    {
+        ASSERT(m_Size < capacity  && "Queue full");
+        m_Data[m_Back++] = std::move(value);
+        if (m_Back == capacity) {
+            m_Back = 0;
+        }
+        m_Size++;
+    }
+
+    template<class... Args> void Emplace(Args&&... args)
+    {
+        ASSERT(m_Size < capacity  && "Queue full");
+        new (&m_Data[m_Back++]) T(std::forward<Args>(args)...);
+        if (m_Back == capacity) {
+            m_Back = 0;
+        }
+        m_Size++;
+    }
+
+    T Pop()
+    {
+        ASSERT(m_Size > 0 && "Queue empty");
+        const T& value = m_Data[m_Front++];
+        if (m_Front == capacity) {
+            m_Front = 0;
+        }
+        return value;
     }
 
     void Resize(size_t newSize)
@@ -123,4 +144,6 @@ public:
 private:
     T m_Data[capacity]{};
     size_t m_Size{0};
+    size_t m_Front{0};
+    size_t m_Back{0};
 };

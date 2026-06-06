@@ -1,5 +1,5 @@
 #include "resourceManifest.h"
-#include "Util/myAssert.h"
+#include "Util/macros.h"
 
 #include <fkYAML/node.hpp>
 #include <fstream>

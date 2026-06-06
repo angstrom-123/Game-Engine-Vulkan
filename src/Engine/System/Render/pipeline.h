@@ -15,7 +15,7 @@
 
 namespace fs = std::filesystem;
 
-const uint32_t MAX_PIPELINE_COLOR_ATTACHMENTS = 8;
+const uint32_t MAX_PIPELINE_COLOR_ATTACHMENTS = 4;
 const fs::path SHADER_PATH = "src/Engine/Resource/Shader";
 
 enum class PipelineKind : uint32_t {
@@ -77,9 +77,11 @@ public:
     Pipeline& AddShader(ShaderKind shaderKind, const fs::path& path);
     Pipeline& SetDynamicDepthAttachment(VkFormat format);
     Pipeline& SetDynamicColorAttachment(VkFormat format);
-    Pipeline& AddColorAttachment(Texture texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
-    Pipeline& SetDepthWriteAttachment(Texture texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
-    Pipeline& SetDepthReadAttachment(Texture texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
+    Pipeline& AddColorAttachment(const Texture& texture, 
+            VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
+    Pipeline& SetDepthWriteAttachment(const Texture& texture, 
+            VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
+    Pipeline& SetDepthReadAttachment(const Texture& texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
     Pipeline& SetBounds(VkViewport viewport, VkRect2D scissor, VkExtent2D extent);
     Pipeline& SetCulling(VkCullModeFlags culling);
     Pipeline& EnableBlending(bool enabled);
@@ -89,16 +91,21 @@ public:
     void Build();
     void EnqueueCleanup(std::deque<std::function<void ()>>& deletionQueue);
     void PrepareForDynamicRendering(VkCommandBuffer commandBuffer, DescriptorSets descriptorSets);
-    void BeginDynamicDepthRendering(VkCommandBuffer commandBuffer, PFN_vkCmdBeginRenderingKHR beginCommand, VkImageView view, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
-    void BeginDynamicColorRendering(VkCommandBuffer commandBuffer, PFN_vkCmdBeginRenderingKHR beginCommand, VkImageView view, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
+    void BeginDynamicDepthRendering(VkCommandBuffer commandBuffer, 
+            PFN_vkCmdBeginRenderingKHR beginCommand, VkImageView view, 
+            VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
+    void BeginDynamicColorRendering(VkCommandBuffer commandBuffer, 
+            PFN_vkCmdBeginRenderingKHR beginCommand, VkImageView view, 
+            VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
     void EndDynamicRendering(VkCommandBuffer commandBuffer, PFN_vkCmdEndRenderingKHR endCommand);
-    void BeginRendering(VkCommandBuffer commandBuffer, PFN_vkCmdBeginRenderingKHR beginCommand, DescriptorSets descriptorSets);
+    void BeginRendering(VkCommandBuffer commandBuffer, 
+            PFN_vkCmdBeginRenderingKHR beginCommand, DescriptorSets descriptorSets);
     void EndRendering(VkCommandBuffer commandBuffer, PFN_vkCmdEndRenderingKHR endCommand);
     void BeginCompute(VkCommandBuffer commandBufffer, DescriptorSets descriptorSets);
     void EndCompute();
 
-    void UpdateDepthAttachment(Texture texture);
-    void UpdateColorAttachment(uint32_t index, Texture texture);
+    void UpdateDepthAttachment(const Texture& texture);
+    void UpdateColorAttachment(uint32_t index, const Texture& texture);
     void UpdateBounds(VkViewport viewport, VkRect2D scissor, VkExtent2D extent);
 
     VkPipelineLayout GetLayout() const { return m_PipelineLayout; }

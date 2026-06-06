@@ -1,7 +1,8 @@
 #include "pipeline.h"
 #include "backendDefs.h"
-#include "Util/logger.h"
-#include "vulkan_core.h"
+#include "Util/macros.h"
+#include <vulkan/vulkan_core.h>
+
 #include <fstream>
 
 #define ENABLE_PIPELINE_LOGGING 0
@@ -113,7 +114,7 @@ Pipeline& Pipeline::AddShader(ShaderKind shaderKind, const fs::path& path)
     return *this;
 }
 
-Pipeline& Pipeline::AddColorAttachment(Texture texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
+Pipeline& Pipeline::AddColorAttachment(const Texture& texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
 {
     ASSERT(!m_IsBuilt && "Already built");
     ASSERT(m_Kind == PipelineKind::GRAPHICS && "Only graphics pipelines can have attachments");
@@ -130,7 +131,7 @@ Pipeline& Pipeline::AddColorAttachment(Texture texture, VkAttachmentLoadOp loadO
     return *this;
 }
 
-Pipeline& Pipeline::SetDepthWriteAttachment(Texture texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
+Pipeline& Pipeline::SetDepthWriteAttachment(const Texture& texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
 {
     ASSERT(!m_IsBuilt && "Already built");
     ASSERT(m_Kind == PipelineKind::GRAPHICS && "Only graphics pipelines can have attachments");
@@ -148,7 +149,7 @@ Pipeline& Pipeline::SetDepthWriteAttachment(Texture texture, VkAttachmentLoadOp 
     return *this;
 }
 
-Pipeline& Pipeline::SetDepthReadAttachment(Texture texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
+Pipeline& Pipeline::SetDepthReadAttachment(const Texture& texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
 {
     ASSERT(!m_IsBuilt && "Already built");
     ASSERT(m_Kind == PipelineKind::GRAPHICS && "Only graphics pipelines can have attachments");
@@ -285,7 +286,8 @@ void Pipeline::PrepareForDynamicRendering(VkCommandBuffer commandBuffer, Descrip
     vkCmdSetScissor(commandBuffer, 0, 1, &m_Scissor);
 }
 
-void Pipeline::BeginDynamicDepthRendering(VkCommandBuffer commandBuffer, PFN_vkCmdBeginRenderingKHR beginCommand, VkImageView view, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
+void Pipeline::BeginDynamicDepthRendering(VkCommandBuffer commandBuffer, PFN_vkCmdBeginRenderingKHR beginCommand, VkImageView view, 
+        VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
 {
     PIPELINE_LOG("[" << m_Name << "] Begin Dynamic Depth Rendering");
     ASSERT(m_IsBuilt && "Pipeline not built");
@@ -313,7 +315,8 @@ void Pipeline::BeginDynamicDepthRendering(VkCommandBuffer commandBuffer, PFN_vkC
     m_IsRendering = true;
 }
 
-void Pipeline::BeginDynamicColorRendering(VkCommandBuffer commandBuffer, PFN_vkCmdBeginRenderingKHR beginCommand, VkImageView view, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
+void Pipeline::BeginDynamicColorRendering(VkCommandBuffer commandBuffer, PFN_vkCmdBeginRenderingKHR beginCommand, VkImageView view, 
+        VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp)
 {
     PIPELINE_LOG("[" << m_Name << "] Begin Dynamic Color Rendering");
     ASSERT(m_IsBuilt && "Pipeline not built");
@@ -423,14 +426,14 @@ void Pipeline::EndCompute()
     m_IsComputing = false;
 }
 
-void Pipeline::UpdateDepthAttachment(Texture texture)
+void Pipeline::UpdateDepthAttachment(const Texture& texture)
 {
     ASSERT(!m_DynamicDepthAttachment && !m_DynamicColorAttachment && "Cannot update dynamic attachments");
     ASSERT((m_InfoFlags & EnumBase(PipelineInfoFlag::DEPTH_ATTACHMENT)) && "No depth attachment to update");
     m_DepthAttachment.imageView = texture.GetView();
 }
 
-void Pipeline::UpdateColorAttachment(uint32_t index, Texture texture)
+void Pipeline::UpdateColorAttachment(uint32_t index, const Texture& texture)
 {
     ASSERT(!m_DynamicDepthAttachment && !m_DynamicColorAttachment && "Cannot update dynamic attachments");
     ASSERT((m_InfoFlags & EnumBase(PipelineInfoFlag::COLOR_ATTACHMENTS)) && "No color attachments to update");

@@ -4,8 +4,8 @@
 #include <initializer_list>
 #include <ranges>
 #include "System/Render/vulkanBackend.h"
-#include "Util/logger.h"
-#include "Util/myAssert.h"
+#include "Util/enumIndex.h"
+#include "Util/macros.h"
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb/stb_truetype.h>
@@ -33,7 +33,8 @@ FontMetrics FontResource::Pack(std::initializer_list<int32_t> sizes, VulkanBacke
 {
     ASSERT(!ttfBuffer.empty() && "Font resource not loaded");
 
-    bitmap = static_cast<uint8_t *>(std::calloc(backend->settings.fontResolution * backend->settings.fontResolution, 1));
+    uint32_t fontResolution = backend->settings.textureArrayResolutions[EnumBase(TextureArrayID::FONT)];
+    bitmap = static_cast<uint8_t *>(std::calloc(fontResolution * fontResolution, 1));
 
     std::vector<stbtt_pack_range> ranges(sizes.size());
     std::vector<stbtt_packedchar[LAST_CHAR - FIRST_CHAR]> metrics(sizes.size());
@@ -44,7 +45,7 @@ FontMetrics FontResource::Pack(std::initializer_list<int32_t> sizes, VulkanBacke
     // Pack font
     const uint8_t OVERSAMPLING = 2;
     stbtt_pack_context ctx;
-    stbtt_PackBegin(&ctx, bitmap, backend->settings.fontResolution, backend->settings.fontResolution, 0, 1, NULL);
+    stbtt_PackBegin(&ctx, bitmap, fontResolution, fontResolution, 0, 1, NULL);
     stbtt_PackSetOversampling(&ctx, OVERSAMPLING, OVERSAMPLING);
     stbtt_PackFontRanges(&ctx, ttfBuffer.data(), 0, ranges.data(), sizes.size());
     stbtt_PackEnd(&ctx);
@@ -57,10 +58,10 @@ FontMetrics FontResource::Pack(std::initializer_list<int32_t> sizes, VulkanBacke
             const stbtt_packedchar &pc = metrics[i][j];
 
             glyphSet.glyphs[j] = {
-                .uv0 = glm::vec2(static_cast<float>(pc.x0) / static_cast<float>(backend->settings.fontResolution), 
-                                 static_cast<float>(pc.y0) / static_cast<float>(backend->settings.fontResolution)),
-                .uv1 = glm::vec2(static_cast<float>(pc.x1) / static_cast<float>(backend->settings.fontResolution), 
-                                 static_cast<float>(pc.y1) / static_cast<float>(backend->settings.fontResolution)),
+                .uv0 = glm::vec2(static_cast<float>(pc.x0) / static_cast<float>(fontResolution), 
+                                 static_cast<float>(pc.y0) / static_cast<float>(fontResolution)),
+                .uv1 = glm::vec2(static_cast<float>(pc.x1) / static_cast<float>(fontResolution), 
+                                 static_cast<float>(pc.y1) / static_cast<float>(fontResolution)),
                 .offset = glm::vec2(pc.xoff, pc.yoff) * glm::vec2(OVERSAMPLING),
                 .advance = pc.xadvance * OVERSAMPLING
             };

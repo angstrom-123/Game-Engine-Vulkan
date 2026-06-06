@@ -2,7 +2,7 @@
 
 #include <fstream>
 
-#include "Util/myAssert.h"
+#include "Util/macros.h"
 
 constexpr uint32_t HashString(const char *str) 
 {

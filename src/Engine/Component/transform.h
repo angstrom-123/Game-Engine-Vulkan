@@ -2,7 +2,6 @@
 
 #include <glm/common.hpp>
 #include <glm/gtc/quaternion.hpp>
-#include "Util/logger.h"
 #include "ECS/ecsTypes.h"
 
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE

@@ -70,7 +70,6 @@ layout (set = 0, binding = 2) readonly buffer ShadowBuffer {
     Shadowcaster shadowcasters[]; 
 } shadowBuffer;
 layout (set = 1, binding = 1) uniform sampler2DArrayShadow shadowTextures;
-layout (set = 1, binding = 2) uniform sampler2DArray shadowTexturesRaw;
 
 layout (set = 2, binding = 0) readonly buffer LightIndexBuffer {
     uint indices[];

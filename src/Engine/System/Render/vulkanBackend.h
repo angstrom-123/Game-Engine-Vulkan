@@ -44,6 +44,7 @@
 #include "ECS/ecs.h"
 #include "ECS/ecsTypes.h"
 #include "Geometry/vertex.h"
+#include "ResourceManager/imageResource.h"
 #include "System/Render/texture.h"
 #include "backendDefs.h"
 #include "pipeline.h"
@@ -65,6 +66,9 @@ public:
     uint32_t AllocateShadowMap(GraphicsFrontend& frontend);
     void RequestResize(const GraphicsFrontend& frontend) { m_ResizeCameras.push_back(frontend.camera); }
     void WaitForIdle() { VK_CHECK(vkDeviceWaitIdle(device)); }
+
+    Pipeline& GetNormalMipmapPipeline() { return m_NormalMipmapPipeline; }
+    VkDescriptorSet GetNormalMipmapDescriptorSet() { return m_NormalMipmapDescriptorSet; }
     
 public:
     // A funny idiom, publicly viewable but not editable without need for a getter
@@ -94,7 +98,6 @@ public:
     void InitMiscBuffers();
     void InitMiscDescriptors();
     void InitMiscPipelines();
-    void GenerateMips(AllocatedTexture allocation, const ImageResource& image, GraphicsFrontend& frontend);
 
 #define GET_FUNCTION_POINTER(T) GetFunctionPointer<PFN_##T>(#T)
     template<typename T> T GetFunctionPointer(const char *name) 
@@ -139,15 +142,17 @@ private:
     std::deque<std::function<void ()>> m_MainDeleter;
     std::deque<Entity> m_ResizeCameras;
 
-    Texture m_DepthTarget;
-    Texture m_AlbedoTarget;
-    Texture m_NormalTarget;
-    Texture m_MaterialTarget;
-    Texture m_LightingTarget;
-    Texture m_BloomPingPongTarget;
+    // These structures are really large so I allocate them on the heap
+    Texture *m_TexturePool;
+    Texture *m_DepthTarget;
+    Texture *m_AlbedoTarget;
+    Texture *m_NormalTarget;
+    Texture *m_MaterialTarget;
+    Texture *m_LightingTarget;
+    Texture *m_BloomPingPongTarget;
     uint32_t m_BloomPyramidMipCount{0};
-    Texture m_BloomPyramidTargets[MAX_BLOOM_MIPS];
-    Texture m_ToneMapTarget;
+    Texture *m_BloomPyramidTargets[MAX_BLOOM_MIPS];
+    Texture *m_ToneMapTarget;
 
     VkSampler m_OffscreenSampler{VK_NULL_HANDLE};
     VkSampler m_TextureSampler{VK_NULL_HANDLE};

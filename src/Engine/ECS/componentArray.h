@@ -3,7 +3,7 @@
 #include <cstring>
 #include <unordered_map>
 
-#include "Util/myAssert.h"
+#include "Util/macros.h"
 #include "ecsTypes.h"
 #include "handle.h"
 

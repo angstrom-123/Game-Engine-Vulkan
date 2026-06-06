@@ -63,16 +63,19 @@ vec4 ComputeAlbedo()
 
 vec3 ComputeNormal()
 {
-    // TODO: Can go back to this if I fixup normal mipmapping
-    // vec3 normal = texture(textures[constants.normalIndex], vec3(vUV, constants.normalLayer)).xyz;
+    // Limit normal sample derivatives to stop sharp changes on triangle edges that mess with lighting
+    vec2 dx = dFdx(vUV);
+    vec2 dy = dFdy(vUV);
 
-    // Goofy manual lod selection to fix some visible triangle seams
-    float dist = length(vPosition - uniforms.position.xyz);
-    float lod = log2(dist * 0.8); // higher scaling factor = higher lod
-    lod = clamp(lod, 0.0, textureQueryLevels(textures[constants.normalIndex]) - 1);
+    const float threshold = 0.1;
+    if (length(dx) > threshold) {
+        dx = vec2(0.0);
+    }
+    if (length(dy) > threshold) {
+        dy = vec2(0.0);
+    }
 
-    vec3 normal = textureLod(textures[constants.normalIndex], vec3(vUV, constants.normalLayer), lod).xyz;
-
+    vec3 normal = textureGrad(textures[constants.normalIndex], vec3(vUV, constants.normalLayer), dx, dy).xyz;
     normal = normal * 2.0 - 1.0;
     normal = normalize(vTBN * normal);
     return normal * 0.5 + 0.5;

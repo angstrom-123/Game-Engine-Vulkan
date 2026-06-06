@@ -1,5 +1,5 @@
 #include "eventManager.h"
-#include "Util/logger.h"
+#include "Util/macros.h"
 
 void EventManager::Init(GLFWwindow *window)
 {

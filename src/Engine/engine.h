@@ -29,8 +29,8 @@ public:
 private:
     Config m_Config;
     struct GLFWwindow *m_Window{nullptr};
-    VulkanBackend m_GraphicsBackend{};
-    EventManager m_EventManager{};
-    SceneManager m_SceneManager{};
-    ResourceManager m_ResourceManager{};
+    VulkanBackend m_GraphicsBackend;
+    EventManager m_EventManager;
+    SceneManager m_SceneManager;
+    ResourceManager m_ResourceManager;
 };

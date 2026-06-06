@@ -1,10 +1,9 @@
 #include "sceneManager.h"
-#include "Util/myAssert.h"
+#include "Util/macros.h"
 #include "engine.h"
 #include "event.h"
 #include "scene.h"
 #include <chrono>
-#include <future>
 
 namespace chrono = std::chrono;
 
