@@ -205,6 +205,29 @@ VkCommandBuffer Device::AllocateCommandBuffer()
     return commandBuffer;
 }
 
+AllocatedBuffer Device::AllocateMappedMemory(DeletionQueue& deleter, uint32_t size, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage)
+{
+    VkBufferCreateInfo bufferInfo = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size,
+        .usage = usage
+    };
+    VmaAllocationCreateInfo allocInfo = {
+        .usage = memoryUsage
+    };
+
+    AllocatedBuffer buffer;
+    vmaCreateBuffer(m_Allocator, &bufferInfo, &allocInfo, &buffer.buffer, &buffer.allocation, nullptr);
+    vmaMapMemory(m_Allocator, buffer.allocation, &buffer.data);
+
+    deleter.push_back([buffer, this]{
+        vmaUnmapMemory(m_Allocator, buffer.allocation);
+        vmaDestroyBuffer(m_Allocator, buffer.buffer, buffer.allocation);
+    });
+
+    return buffer;
+}
+
 uint32_t Device::ScorePhysicalDevice(VkPhysicalDevice device)
 {
     VkPhysicalDeviceProperties properties;

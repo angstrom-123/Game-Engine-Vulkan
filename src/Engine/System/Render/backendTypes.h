@@ -4,7 +4,7 @@
 #include <vulkan/vulkan_core.h>
 
 #include "ECS/ecsTypes.h"
-#include "System/Render/texture.h"
+#include "texture.h"
 #include "Util/enumIndex.h"
 
 const uint32_t FRAMES_IN_FLIGHT = 2;
@@ -13,6 +13,8 @@ const uint32_t MAX_BLOOM_MIPS = 5;
 const uint32_t MAX_NORMAL_MIPS = 16;
 const uint32_t BLOOM_BLUR_RADIUS = 4;
 const uint32_t SHADOW_CASCADE_COUNT = 3;
+
+using DeletionQueue = std::deque<std::function<void ()>>;
 
 enum class TextureArrayID {
     COLOR_SMALL,

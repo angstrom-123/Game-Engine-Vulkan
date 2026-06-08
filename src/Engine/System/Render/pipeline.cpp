@@ -261,19 +261,19 @@ void Pipeline::Build()
     m_IsBuilt = true;
 }
 
+void Pipeline::Build(DeletionQueue& deleter)
+{
+    Build();
+    deleter.push_back([this] {
+        Cleanup();
+    });
+}
+
 void Pipeline::Cleanup()
 {
     ASSERT(m_IsBuilt && "Not built");
     vkDestroyPipelineLayout(m_Device, m_PipelineLayout, nullptr);
     vkDestroyPipeline(m_Device, m_Pipeline, nullptr);
-}
-
-void Pipeline::EnqueueCleanup(std::deque<std::function<void ()>>& deletionQueue) 
-{
-    ASSERT(m_IsBuilt && "Not built");
-    deletionQueue.push_back([this] {
-        Cleanup();
-    });
 }
 
 void Pipeline::PrepareForDynamicRendering(VkCommandBuffer commandBuffer, DescriptorSets descriptorSets)

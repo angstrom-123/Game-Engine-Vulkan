@@ -2,10 +2,9 @@
 
 #include "Util/enumIndex.h"
 #include "Util/stackVector.h"
+#include "backendTypes.h"
 #include "Geometry/vertex.h"
 
-#include <deque>
-#include <functional>
 #include <vulkan/vulkan_core.h>
 
 #include <cstdint>
@@ -89,9 +88,9 @@ public:
     Pipeline& SetDepthFlags(PipelineDepthFlags depthFlags); 
     Pipeline& SetDepthCompare(VkCompareOp compareOp);
     Pipeline& SetVertexInput(const VertexInputDesc& input);
+    void Build(DeletionQueue& deleter);
     void Build();
     void Cleanup();
-    void EnqueueCleanup(std::deque<std::function<void ()>>& deletionQueue);
     void PrepareForDynamicRendering(VkCommandBuffer commandBuffer, DescriptorSets descriptorSets);
     void BeginDynamicDepthRendering(VkCommandBuffer commandBuffer, 
             PFN_vkCmdBeginRenderingKHR beginCommand, VkImageView view, 

@@ -2,8 +2,6 @@
 
 #include "ResourceManager/imageResource.h"
 #include "commandSubmitter.h"
-#include "mipGenerator.h"
-#include "device.h"
 #include "Util/allocator.h"
 #include "Util/stackQueue.h"
 #include <deque>
@@ -73,11 +71,11 @@ class Texture {
 public:
     ~Texture() = default;
     Texture() = default;
-    Texture(const Device& device, 
+    Texture(const class Device& device, 
             VkFormat format, VkImageUsageFlags usage, 
             glm::uvec2 size, VkImageAspectFlags aspect, 
             uint32_t layers, TextureFlags flags);
-    Texture(const Device& device, 
+    Texture(const class Device& device, 
             VkImage image, VkImageView view, VkFormat format, 
             glm::uvec2 size, VkImageAspectFlags aspect);
     void Transition(VkCommandBuffer commandBuffer, 
@@ -95,9 +93,9 @@ public:
             uint32_t firstMip, uint32_t mipCount,
             VkImageLayout newLayout);
     uint32_t AllocateLayer();
-    void CopyToLayer(const Device& device, const CommandSubmitter& submitter, std::optional<MipGenerator>&& mipGenerator, const ImageResource& image, uint32_t layer);
-    void Cleanup(const Device& device);
-    void EnqueueCleanup(const Device& device, std::deque<std::function<void ()>>& deletionQueue);
+    void CopyToLayer(const class Device& device, const CommandSubmitter& submitter, std::optional<class MipGenerator>&& mipGenerator, const ImageResource& image, uint32_t layer);
+    void Cleanup(const class Device& device);
+    void EnqueueCleanup(const class Device& device, std::deque<std::function<void ()>>& deletionQueue);
 
     VkImage GetImage() const { return m_Image.image; }
     VkFormat GetFormat() const { return m_Format; }
@@ -105,8 +103,8 @@ public:
     VkImageView GetLayerView(uint32_t layer) const;
 
 private:
-    void GenerateCustomMips(const Device& device, const CommandSubmitter& submitter, MipGenerator& mipGenerator, const ImageResource& image, uint32_t layer);
-    void GenerateDefaultMips(const Device& device, const CommandSubmitter& submitter, const ImageResource& image, uint32_t layer);
+    void GenerateCustomMips(const class Device& device, const CommandSubmitter& submitter, MipGenerator& mipGenerator, const ImageResource& image, uint32_t layer);
+    void GenerateDefaultMips(const class Device& device, const CommandSubmitter& submitter, const ImageResource& image, uint32_t layer);
 
 private:
     // TODO: Parameterize amount of layers and mips in template

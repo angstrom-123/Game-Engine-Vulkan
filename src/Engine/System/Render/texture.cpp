@@ -1,5 +1,7 @@
 #include "texture.h"
+#include "mipGenerator.h"
 #include "backendDefs.h"
+#include "device.h"
 #include "Util/allocator.h"
 #include "Util/enumIndex.h"
 #include "Util/macros.h"

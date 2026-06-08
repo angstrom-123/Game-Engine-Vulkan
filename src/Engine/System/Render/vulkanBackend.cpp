@@ -1134,12 +1134,7 @@ AllocatedTexture VulkanBackend::AllocateTexture(ImageResource& image, GraphicsFr
     return allocation;
 }
 
-AllocatedTexture VulkanBackend::AllocateTexture(
-        uint8_t *pixels,
-        glm::ivec2 size,
-        ImageFlags flags,
-        int32_t channels,
-        GraphicsFrontend& frontend)
+AllocatedTexture VulkanBackend::AllocateTexture(uint8_t *pixels, glm::ivec2 size, ImageFlags flags, int32_t channels, GraphicsFrontend& frontend)
 {
     ImageResource tmp{flags, size, pixels, channels};
     return AllocateTexture(tmp, frontend);
@@ -1309,87 +1304,29 @@ void VulkanBackend::InitBuffers()
 {
     // ================================================== Per Frame Buffers ==================================================
 
-    VkBufferCreateInfo uniformBufferInfo = {
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = sizeof(PerFrameUniforms),
-        .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
-    };
-
-    VkBufferCreateInfo lightBufferInfo = {
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = MAX_LIGHTS * sizeof(Light),
-        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 
-    };
-
-    VkBufferCreateInfo shadowBufferInfo = {
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = settings.maxShadowcasters * sizeof(Shadowcaster),
-        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 
-    };
-
     uint32_t tilesX = (m_Extent.width + settings.computeTileSize - 1) / settings.computeTileSize;
     uint32_t tilesY = (m_Extent.height + settings.computeTileSize - 1) / settings.computeTileSize;
-    VkBufferCreateInfo lightIndexBufferInfo = { // Up to MAX_LIGHTS_PER_TILE indices per tile
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = settings.maxLightsPerTile * tilesX * tilesY * sizeof(uint32_t),
-        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 
-    };
-    VkBufferCreateInfo lightTileCountBufferInfo = { // One count for each tile
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = tilesX * tilesY * sizeof(uint32_t),
-        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 
-    };
-
-    VmaAllocationCreateInfo gpuBufferAllocInfo = {
-        .usage = VMA_MEMORY_USAGE_GPU_ONLY
-    };
-
-    VmaAllocationCreateInfo cpuGpuBufferAllocInfo = {
-        .usage = VMA_MEMORY_USAGE_CPU_TO_GPU
-    };
-
     for (FrameData& frame : frames) {
-        vmaCreateBuffer(device.GetAllocator(), 
-                &uniformBufferInfo, &cpuGpuBufferAllocInfo, 
-                &frame.uniformBuffer.buffer, &frame.uniformBuffer.allocation, nullptr);
-        vmaMapMemory(device.GetAllocator(), frame.uniformBuffer.allocation, &frame.uniformBuffer.data);
-
-        vmaCreateBuffer(device.GetAllocator(), 
-                &lightBufferInfo, &cpuGpuBufferAllocInfo, 
-                &frame.lightBuffer.buffer, &frame.lightBuffer.allocation, nullptr);
-        vmaMapMemory(device.GetAllocator(), frame.lightBuffer.allocation, &frame.lightBuffer.data);
-
-        vmaCreateBuffer(device.GetAllocator(), 
-                &shadowBufferInfo, &cpuGpuBufferAllocInfo, 
-                &frame.shadowBuffer.buffer, &frame.shadowBuffer.allocation, nullptr);
-        vmaMapMemory(device.GetAllocator(), frame.shadowBuffer.allocation, &frame.shadowBuffer.data);
-
-        vmaCreateBuffer(device.GetAllocator(), 
-                &lightIndexBufferInfo, &gpuBufferAllocInfo, 
-                &frame.lightIndexBuffer.buffer, &frame.lightIndexBuffer.allocation, nullptr);
-        vmaMapMemory(device.GetAllocator(), frame.lightIndexBuffer.allocation, &frame.lightIndexBuffer.data);
-
-        vmaCreateBuffer(device.GetAllocator(), 
-                &lightTileCountBufferInfo, &gpuBufferAllocInfo, 
-                &frame.lightTileCountBuffer.buffer, &frame.lightTileCountBuffer.allocation, nullptr);
-        vmaMapMemory(device.GetAllocator(), frame.lightTileCountBuffer.allocation, &frame.lightTileCountBuffer.data);
-
-        m_MainDeleter.push_back([frame, this] {
-            vmaUnmapMemory(device.GetAllocator(), frame.uniformBuffer.allocation);
-            vmaDestroyBuffer(device.GetAllocator(), frame.uniformBuffer.buffer, frame.uniformBuffer.allocation);
-
-            vmaUnmapMemory(device.GetAllocator(), frame.lightBuffer.allocation);
-            vmaDestroyBuffer(device.GetAllocator(), frame.lightBuffer.buffer, frame.lightBuffer.allocation);
-
-            vmaUnmapMemory(device.GetAllocator(), frame.shadowBuffer.allocation);
-            vmaDestroyBuffer(device.GetAllocator(), frame.shadowBuffer.buffer, frame.shadowBuffer.allocation);
-
-            vmaUnmapMemory(device.GetAllocator(), frame.lightIndexBuffer.allocation);
-            vmaDestroyBuffer(device.GetAllocator(), frame.lightIndexBuffer.buffer, frame.lightIndexBuffer.allocation);
-
-            vmaUnmapMemory(device.GetAllocator(), frame.lightTileCountBuffer.allocation);
-            vmaDestroyBuffer(device.GetAllocator(), frame.lightTileCountBuffer.buffer, frame.lightTileCountBuffer.allocation);
-        });
+        frame.uniformBuffer = device.AllocateMappedMemory(m_MainDeleter,
+                sizeof(PerFrameUniforms), 
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+                VMA_MEMORY_USAGE_CPU_TO_GPU);
+        frame.lightBuffer = device.AllocateMappedMemory(m_MainDeleter,
+                MAX_LIGHTS * sizeof(Light), 
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 
+                VMA_MEMORY_USAGE_CPU_TO_GPU);
+        frame.shadowBuffer = device.AllocateMappedMemory(m_MainDeleter,
+                settings.maxShadowcasters * sizeof(Shadowcaster), 
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 
+                VMA_MEMORY_USAGE_CPU_TO_GPU);
+        frame.lightIndexBuffer = device.AllocateMappedMemory(m_MainDeleter,
+                settings.maxLightsPerTile * tilesX * tilesY * sizeof(uint32_t), 
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 
+                VMA_MEMORY_USAGE_GPU_ONLY);
+        frame.lightTileCountBuffer = device.AllocateMappedMemory(m_MainDeleter,
+                tilesX * tilesY * sizeof(uint32_t), 
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, 
+                VMA_MEMORY_USAGE_GPU_ONLY);
     }
 }
 
@@ -1885,8 +1822,7 @@ void VulkanBackend::InitPipelines()
             .SetDepthFlags(EnumBase(PipelineDepthFlag::WRITE) | EnumBase(PipelineDepthFlag::TEST))
             .SetDepthCompare(VK_COMPARE_OP_LESS_OR_EQUAL)
             .SetVertexInput(Vertex::GetDepthVertexDesc())
-            .Build();
-    m_DepthPipeline.EnqueueCleanup(m_MainDeleter);
+            .Build(m_MainDeleter);
 
     m_ShadowPipeline.SetName("Shadow")
             .SetDevice(device.GetDevice())
@@ -1901,8 +1837,7 @@ void VulkanBackend::InitPipelines()
             .SetDepthFlags(EnumBase(PipelineDepthFlag::WRITE) | EnumBase(PipelineDepthFlag::TEST))
             .SetDepthCompare(VK_COMPARE_OP_LESS_OR_EQUAL)
             .SetVertexInput(Vertex::GetDepthVertexDesc())
-            .Build();
-    m_ShadowPipeline.EnqueueCleanup(m_MainDeleter);
+            .Build(m_MainDeleter);
 
     m_GBufferPipeline.SetName("GBuffer")
             .SetDevice(device.GetDevice())
@@ -1922,8 +1857,7 @@ void VulkanBackend::InitPipelines()
             .SetDepthFlags(EnumBase(PipelineDepthFlag::TEST))
             .SetDepthCompare(VK_COMPARE_OP_LESS_OR_EQUAL)
             .SetVertexInput(Vertex::GetVertexDesc())
-            .Build();
-    m_GBufferPipeline.EnqueueCleanup(m_MainDeleter);
+            .Build(m_MainDeleter);
 
     m_TransparencyPipeline.SetName("Transparency")
             .SetDevice(device.GetDevice())
@@ -1943,8 +1877,7 @@ void VulkanBackend::InitPipelines()
             .SetDepthCompare(VK_COMPARE_OP_LESS_OR_EQUAL)
             .EnableBlending(true)
             .SetVertexInput(Vertex::GetVertexDesc())
-            .Build();
-    m_TransparencyPipeline.EnqueueCleanup(m_MainDeleter);
+            .Build(m_MainDeleter);
 
     m_ToneMapPipeline.SetName("Tone Map")
             .SetDevice(device.GetDevice())
@@ -1958,8 +1891,7 @@ void VulkanBackend::InitPipelines()
             .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
             .SetCulling(VK_CULL_MODE_BACK_BIT)
             .SetDepthCompare(VK_COMPARE_OP_ALWAYS)
-            .Build();
-    m_ToneMapPipeline.EnqueueCleanup(m_MainDeleter);
+            .Build(m_MainDeleter);
 
     m_AntiAliasingPipeline.SetName("Anti Aliasing")
             .SetDevice(device.GetDevice())
@@ -1972,8 +1904,7 @@ void VulkanBackend::InitPipelines()
             .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
             .SetCulling(VK_CULL_MODE_BACK_BIT)
             .SetDepthCompare(VK_COMPARE_OP_ALWAYS)
-            .Build();
-    m_AntiAliasingPipeline.EnqueueCleanup(m_MainDeleter);
+            .Build(m_MainDeleter);
 
     // ================================================== Compute Pipelines ==================================================
 
@@ -1984,8 +1915,7 @@ void VulkanBackend::InitPipelines()
             .AddDescriptorLayout(m_DummyDescriptorLayout)
             .AddDescriptorLayout(m_DescriptorLayout2)
             .AddShader(ShaderKind::COMPUTE, "lightCulling.comp")
-            .Build();
-    m_LightCullingPipeline.EnqueueCleanup(m_MainDeleter);
+            .Build(m_MainDeleter);
 
     m_LightingPipeline.SetName("Lighting")
             .SetDevice(device.GetDevice())
@@ -1994,8 +1924,7 @@ void VulkanBackend::InitPipelines()
             .AddDescriptorLayout(m_DescriptorLayout1)
             .AddDescriptorLayout(m_DescriptorLayout2)
             .AddShader(ShaderKind::COMPUTE, "lighting.comp")
-            .Build();
-    m_LightingPipeline.EnqueueCleanup(m_MainDeleter);
+            .Build(m_MainDeleter);
 
     m_BloomLightExtractionPipeline.SetName("Bloom (Light Extraction)")
             .SetDevice(device.GetDevice())
@@ -2006,8 +1935,7 @@ void VulkanBackend::InitPipelines()
             .AddDescriptorLayout(m_DescriptorLayout3)
             .AddPushConstant<BloomPushConstants>(VK_SHADER_STAGE_COMPUTE_BIT)
             .AddShader(ShaderKind::COMPUTE, "lightExtraction.comp")
-            .Build();
-    m_BloomLightExtractionPipeline.EnqueueCleanup(m_MainDeleter);
+            .Build(m_MainDeleter);
 
     m_BloomDownsamplePipeline.SetName("Bloom (Downsample)")
             .SetDevice(device.GetDevice())
@@ -2018,8 +1946,7 @@ void VulkanBackend::InitPipelines()
             .AddDescriptorLayout(m_DescriptorLayout3)
             .AddPushConstant<BloomPushConstants>(VK_SHADER_STAGE_COMPUTE_BIT)
             .AddShader(ShaderKind::COMPUTE, "downsample.comp")
-            .Build();
-    m_BloomDownsamplePipeline.EnqueueCleanup(m_MainDeleter);
+            .Build(m_MainDeleter);
 
     m_BloomHorizontalBlurPipeline.SetName("Bloom (Horizontal Blur)")
             .SetDevice(device.GetDevice())
@@ -2030,8 +1957,7 @@ void VulkanBackend::InitPipelines()
             .AddDescriptorLayout(m_DescriptorLayout3)
             .AddPushConstant<BloomPushConstants>(VK_SHADER_STAGE_COMPUTE_BIT)
             .AddShader(ShaderKind::COMPUTE, "horizontalBlur.comp")
-            .Build();
-    m_BloomHorizontalBlurPipeline.EnqueueCleanup(m_MainDeleter);
+            .Build(m_MainDeleter);
 
     m_BloomVerticalBlurPipeline.SetName("Bloom (Vertical Blur)")
             .SetDevice(device.GetDevice())
@@ -2042,8 +1968,7 @@ void VulkanBackend::InitPipelines()
             .AddDescriptorLayout(m_DescriptorLayout3)
             .AddPushConstant<BloomPushConstants>(VK_SHADER_STAGE_COMPUTE_BIT)
             .AddShader(ShaderKind::COMPUTE, "verticalBlur.comp")
-            .Build();
-    m_BloomVerticalBlurPipeline.EnqueueCleanup(m_MainDeleter);
+            .Build(m_MainDeleter);
 
     m_BloomAccumulatePipeline.SetName("Bloom (Upscale / Accumulate)")
             .SetDevice(device.GetDevice())
@@ -2054,8 +1979,7 @@ void VulkanBackend::InitPipelines()
             .AddDescriptorLayout(m_DescriptorLayout3)
             .AddPushConstant<BloomPushConstants>(VK_SHADER_STAGE_COMPUTE_BIT)
             .AddShader(ShaderKind::COMPUTE, "accumulate.comp")
-            .Build();
-    m_BloomAccumulatePipeline.EnqueueCleanup(m_MainDeleter);
+            .Build(m_MainDeleter);
 }
 
 #ifdef PROFILING

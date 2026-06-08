@@ -45,12 +45,13 @@
 #include "ECS/ecsTypes.h"
 #include "Geometry/vertex.h"
 #include "ResourceManager/imageResource.h"
-#include "System/Render/device.h"
+#include "device.h"
 #include "System/Render/texture.h"
 #include "pipeline.h"
 #include "backendTypes.h"
 #include "commandSubmitter.h"
 #include "config.h"
+#include "mipGenerator.h"
 #include <vulkan/vulkan_core.h>
 
 class VulkanBackend {

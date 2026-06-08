@@ -1,5 +1,6 @@
 #pragma once 
 
+#include "backendTypes.h"
 #include "Util/allocator.h"
 #include "Util/stackVector.h"
 #include <deque>
@@ -29,6 +30,7 @@ public:
     std::optional<SwapchainImage> AcquireSwapchainImage(VkSemaphore acquireSemaphore);
     void SetSwapchainFence(SwapchainImage& swapchainImage, VkFence fence);
     VkCommandBuffer AllocateCommandBuffer();
+    AllocatedBuffer AllocateMappedMemory(DeletionQueue& deleter, uint32_t size, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage);
     void WaitForIdle() { vkDeviceWaitIdle(m_Device); }
     void WaitForFence(VkFence *fence) { vkWaitForFences(m_Device, 1, fence, VK_TRUE, UINT64_MAX); }
     void ResetFence(VkFence *fence) { vkResetFences(m_Device, 1, fence); }
