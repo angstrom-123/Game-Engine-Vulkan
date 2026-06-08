@@ -2,6 +2,7 @@
 
 #include "Util/macros.h"
 #include <cstddef>
+#include <initializer_list>
 #include <utility>
 
 const size_t MAX_STACK_VECTOR_SIZE = 256 * 1024;
@@ -10,7 +11,22 @@ template<typename T, size_t capacity> class StackVector {
     static_assert(capacity > 0 && capacity * sizeof(T) <= MAX_STACK_VECTOR_SIZE && "Bad stack vector capacity");
 public:
     ~StackVector() = default;
+
     StackVector() = default;
+
+    StackVector(std::initializer_list<T> items)
+    {
+        ASSERT(items.size() <= capacity && "Too many items in initializer");
+        for (const auto& item : items) {
+            PushBack(item);
+        }
+    }
+
+    StackVector(size_t size)
+    {
+        ASSERT(size <= capacity && "Size larger than vector");
+        m_Size = size;
+    }
 
     void PushBack(const T& value) 
     { 
@@ -21,7 +37,7 @@ public:
     void PushBack(T&& value) 
     { 
         ASSERT(m_Size < capacity && "Inserting out of bounds");
-        m_Data[m_Size++] = std::move(value);
+        m_Data[m_Size++] = std::forward<T>(value);
     };
 
     template<class... Args> void EmplaceBack(Args&&... args) 
@@ -35,6 +51,11 @@ public:
     {
         ASSERT(newSize <= capacity && "Resizing out of bounds");
         m_Size = newSize;
+    }
+
+    void Clear()
+    {
+        m_Size = 0;
     }
 
     T& Front()

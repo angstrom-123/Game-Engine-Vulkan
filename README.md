@@ -14,7 +14,7 @@ to a better build system in the future.
 
 Make sure you have installed:
 - Vulkan SDK (verion >= 1.4)
-- GLFW
+- GLFW (windows version included)
 
 ### Linux 
 
@@ -52,7 +52,6 @@ in your Linux environment to the project root in your windows environment.
 - GLM
 - STB (image, truetype)
 - VMA
-- VkBootstrap
 - Vulkan SDK
 
 ## Screenshots

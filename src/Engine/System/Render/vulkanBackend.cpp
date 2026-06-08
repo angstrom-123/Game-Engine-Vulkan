@@ -10,7 +10,6 @@
 #include <ranges>
 
 #include <vulkan/vulkan_core.h>
-#include <VkBootstrap/VkBootstrap.h>
 #include <GLFW/glfw3.h>
 #define VMA_IMPLEMENTATION
 #ifdef DEBUG
@@ -65,7 +64,7 @@
 
 VulkanBackend::~VulkanBackend()
 {
-    VK_CHECK(vkDeviceWaitIdle(device));
+    device.WaitForIdle();
 
     for (auto it = m_DynamicDeleter.rbegin(); it != m_DynamicDeleter.rend(); it++) (*it)();
     m_DynamicDeleter.clear();
@@ -140,9 +139,11 @@ void VulkanBackend::Init(struct GLFWwindow *window, const Config &config)
     InitBuffers();
     InitDescriptors();
     InitPipelines();
-    InitMiscBuffers();
-    InitMiscDescriptors();
-    InitMiscPipelines();
+
+    m_NormalMipGenerator = MipGenerator(device, MAX_NORMAL_MIPS);
+    m_MainDeleter.push_back([this] {
+        m_NormalMipGenerator.Cleanup(device);
+    });
 
 #ifdef PROFILING 
     InitProfiling();
@@ -160,31 +161,31 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
     // ================================================== Texture Arrays ==================================================
     const uint32_t MIN_ARRAY_LAYERS = 8;
 
-    frontend.arrayTextures[EnumBase(TextureArrayID::COLOR_SMALL)] = Texture(device, allocator, settings.colorTextureFormat, 
+    frontend.arrayTextures[EnumBase(TextureArrayID::COLOR_SMALL)] = Texture(device, settings.colorTextureFormat, 
             VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
             glm::uvec2(settings.textureArrayResolutions[EnumBase(TextureArrayID::COLOR_SMALL)]), 
             VK_IMAGE_ASPECT_COLOR_BIT, 
             glm::max(info.arrayLayers[EnumBase(TextureArrayID::COLOR_SMALL)], MIN_ARRAY_LAYERS),
             EnumBase(TextureFlag::MIP_MAPS));
-    frontend.arrayTextures[EnumBase(TextureArrayID::COLOR_LARGE)] = Texture(device, allocator, settings.colorTextureFormat, 
+    frontend.arrayTextures[EnumBase(TextureArrayID::COLOR_LARGE)] = Texture(device, settings.colorTextureFormat, 
             VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
             glm::uvec2(settings.textureArrayResolutions[EnumBase(TextureArrayID::COLOR_LARGE)]), 
             VK_IMAGE_ASPECT_COLOR_BIT, 
             glm::max(info.arrayLayers[EnumBase(TextureArrayID::COLOR_LARGE)], MIN_ARRAY_LAYERS),
             EnumBase(TextureFlag::MIP_MAPS));
-    frontend.arrayTextures[EnumBase(TextureArrayID::DATA_SMALL)] = Texture(device, allocator, settings.dataTextureFormat, 
+    frontend.arrayTextures[EnumBase(TextureArrayID::DATA_SMALL)] = Texture(device, settings.dataTextureFormat, 
             VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, 
             glm::uvec2(settings.textureArrayResolutions[EnumBase(TextureArrayID::DATA_SMALL)]), 
             VK_IMAGE_ASPECT_COLOR_BIT, 
             glm::max(info.arrayLayers[EnumBase(TextureArrayID::DATA_SMALL)], MIN_ARRAY_LAYERS),
             EnumBase(TextureFlag::NON_COLOR) | EnumBase(TextureFlag::MIP_MAPS));
-    frontend.arrayTextures[EnumBase(TextureArrayID::DATA_LARGE)] = Texture(device, allocator, settings.dataTextureFormat, 
+    frontend.arrayTextures[EnumBase(TextureArrayID::DATA_LARGE)] = Texture(device, settings.dataTextureFormat, 
             VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, 
             glm::uvec2(settings.textureArrayResolutions[EnumBase(TextureArrayID::DATA_LARGE)]), 
             VK_IMAGE_ASPECT_COLOR_BIT, 
             glm::max(info.arrayLayers[EnumBase(TextureArrayID::DATA_LARGE)], MIN_ARRAY_LAYERS),
             EnumBase(TextureFlag::NON_COLOR) | EnumBase(TextureFlag::MIP_MAPS));
-    frontend.arrayTextures[EnumBase(TextureArrayID::FONT)] = Texture(device, allocator, settings.fontTextureFormat, 
+    frontend.arrayTextures[EnumBase(TextureArrayID::FONT)] = Texture(device, settings.fontTextureFormat, 
             VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
             glm::uvec2(settings.textureArrayResolutions[EnumBase(TextureArrayID::FONT)]), 
             VK_IMAGE_ASPECT_COLOR_BIT, 
@@ -192,7 +193,7 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
             EnumBase(TextureFlag::MIP_MAPS));
 
     // Transition all to shader readable
-    submitter.ImmediateSubmit(device, graphicsQueue, [&](VkCommandBuffer commandBuffer) {
+    submitter.ImmediateSubmit(device, [&](VkCommandBuffer commandBuffer) {
         frontend.arrayTextures[EnumBase(TextureArrayID::COLOR_SMALL)].Transition(commandBuffer, 
                 0, VK_ACCESS_SHADER_READ_BIT, 
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
@@ -235,18 +236,18 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
             .pImageInfo = arrayImageInfos
         };
     }
-    vkUpdateDescriptorSets(device, FRAMES_IN_FLIGHT, writes, 0, nullptr);
+    vkUpdateDescriptorSets(device.GetDevice(), FRAMES_IN_FLIGHT, writes, 0, nullptr);
 
     // ================================================== Shadow Arrays ==================================================
 
     frontend.maxShadows = glm::min(info.maxShadows, settings.maxShadowcasters);
-    frontend.shadowArrayTexture = Texture(device, allocator, settings.depthFormat, 
+    frontend.shadowArrayTexture = Texture(device, settings.depthFormat, 
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 
             glm::uvec2(settings.shadowResolution), 
             VK_IMAGE_ASPECT_DEPTH_BIT, 
             glm::max(info.arrayLayers[EnumBase(TextureArrayID::FONT)], MIN_ARRAY_LAYERS),
             EnumBase(TextureFlag::LAYER_VIEWS));
-    submitter.ImmediateSubmit(device, graphicsQueue, [&](VkCommandBuffer commandBuffer) {
+    submitter.ImmediateSubmit(device, [&](VkCommandBuffer commandBuffer) {
         frontend.shadowArrayTexture.Transition(commandBuffer, 
                 0, VK_ACCESS_SHADER_READ_BIT, 
                 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 
@@ -270,7 +271,7 @@ void VulkanBackend::InitFrontend(GraphicsFrontend& frontend, const GraphicsFront
             .pImageInfo = &shadowImageInfo
         };
     }
-    vkUpdateDescriptorSets(device, FRAMES_IN_FLIGHT, writes, 0, nullptr);
+    vkUpdateDescriptorSets(device.GetDevice(), FRAMES_IN_FLIGHT, writes, 0, nullptr);
 }
 
 void VulkanBackend::CleanupFrontend(GraphicsFrontend& frontend)
@@ -278,10 +279,10 @@ void VulkanBackend::CleanupFrontend(GraphicsFrontend& frontend)
     frontend.camera = INVALID_HANDLE;
 
     for (Texture& texture : frontend.arrayTextures) {
-        texture.Cleanup(device, allocator);
+        texture.Cleanup(device);
     }
 
-    frontend.shadowArrayTexture.Cleanup(device, allocator);
+    frontend.shadowArrayTexture.Cleanup(device);
 }
 
 void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<Entity>& entities)
@@ -299,26 +300,23 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
     size_t frameIndex = m_InternalFrameNumber % FRAMES_IN_FLIGHT;
     FrameData &frame = frames[frameIndex];
 
-    VK_CHECK(vkWaitForFences(device, 1, &frame.renderFence, VK_TRUE, UINT64_MAX));
-    VK_CHECK(vkResetFences(device, 1, &frame.renderFence));
+    device.WaitForFence(&frame.renderFence);
+    device.ResetFence(&frame.renderFence);
 
-    uint32_t imageIndex;
-    VkResult acquireErr = vkAcquireNextImageKHR(device, m_Swapchain, 
-            UINT64_MAX, frame.acquireSemaphore, VK_NULL_HANDLE, &imageIndex);
-    if (acquireErr == VK_ERROR_OUT_OF_DATE_KHR || acquireErr == VK_SUBOPTIMAL_KHR) {
+    std::optional<SwapchainImage> acquireResult = device.AcquireSwapchainImage(frame.acquireSemaphore);
+    if (!acquireResult.has_value()) {
         RequestResize(frontend);
         return;
     }
-    VK_CHECK(acquireErr);
+    SwapchainImage swapchainImage = acquireResult.value();
 
-    SwapchainImageData &swapchainImage = m_Images[imageIndex];
-    if (swapchainImage.flightFence != VK_NULL_HANDLE && swapchainImage.flightFence != frame.renderFence) {
-        VK_CHECK(vkWaitForFences(device, 1, &swapchainImage.flightFence, VK_TRUE, UINT64_MAX));
+    if (swapchainImage.fence != VK_NULL_HANDLE && swapchainImage.fence != frame.renderFence) {
+        device.WaitForFence(&swapchainImage.fence);
     }
-    swapchainImage.flightFence = frame.renderFence;
+    device.SetSwapchainFence(swapchainImage, frame.renderFence);
 
-    Texture swapchainTarget(device, swapchainImage.image, swapchainImage.view, 
-            m_SwapchainFormat, glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT);
+    Texture swapchainTarget(device, swapchainImage.image, swapchainImage.view, swapchainImage.format,
+            glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT);
 
     VK_CHECK(vkResetCommandBuffer(frame.commandBuffer, 0));
     VkCommandBufferBeginInfo beginInfo = {
@@ -1020,19 +1018,20 @@ void VulkanBackend::Draw(ECS *ecs, GraphicsFrontend& frontend, const std::set<En
         .commandBufferCount = 1,
         .pCommandBuffers = &frame.commandBuffer,
         .signalSemaphoreCount = 1,
-        .pSignalSemaphores = &swapchainImage.renderSemaphore
+        .pSignalSemaphores = &swapchainImage.semaphore
     };
-    VK_CHECK(vkQueueSubmit(graphicsQueue, 1, &submitInfo, frame.renderFence));
+    VK_CHECK(vkQueueSubmit(device.GetGraphicsQueue(), 1, &submitInfo, frame.renderFence));
 
+    VkSwapchainKHR swapchain = device.GetSwapchain();
     VkPresentInfoKHR presentInfo = {
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &swapchainImage.renderSemaphore,
+        .pWaitSemaphores = &swapchainImage.semaphore,
         .swapchainCount = 1,
-        .pSwapchains = &m_Swapchain,
-        .pImageIndices = &imageIndex,
+        .pSwapchains = &swapchain,
+        .pImageIndices = &swapchainImage.index,
     };
-    VkResult presentErr = vkQueuePresentKHR(graphicsQueue, &presentInfo);
+    VkResult presentErr = vkQueuePresentKHR(device.GetGraphicsQueue(), &presentInfo);
     if (presentErr == VK_ERROR_OUT_OF_DATE_KHR || presentErr == VK_SUBOPTIMAL_KHR) {
         RequestResize(frontend);
         return;
@@ -1058,11 +1057,11 @@ AllocatedBuffer VulkanBackend::AllocateVertexBuffer(const Vertex *const vertices
     VmaAllocationCreateInfo allocInfo = {
         .usage = VMA_MEMORY_USAGE_CPU_ONLY
     };
-    vmaCreateBuffer(allocator, &stagingBufferInfo, &allocInfo, &stagingBuffer.buffer, &stagingBuffer.allocation, nullptr);
+    vmaCreateBuffer(device.GetAllocator(), &stagingBufferInfo, &allocInfo, &stagingBuffer.buffer, &stagingBuffer.allocation, nullptr);
 
-    vmaMapMemory(allocator, stagingBuffer.allocation, &stagingBuffer.data);
+    vmaMapMemory(device.GetAllocator(), stagingBuffer.allocation, &stagingBuffer.data);
     std::memcpy(stagingBuffer.data, vertices, count * sizeof(Vertex));
-    vmaUnmapMemory(allocator, stagingBuffer.allocation);
+    vmaUnmapMemory(device.GetAllocator(), stagingBuffer.allocation);
 
     // Create vertex buffer
     VkBufferCreateInfo vertexBufferInfo = {
@@ -1071,10 +1070,10 @@ AllocatedBuffer VulkanBackend::AllocateVertexBuffer(const Vertex *const vertices
         .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT
     };
     allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-    vmaCreateBuffer(allocator, &vertexBufferInfo, &allocInfo, &result.buffer, &result.allocation, nullptr);
+    vmaCreateBuffer(device.GetAllocator(), &vertexBufferInfo, &allocInfo, &result.buffer, &result.allocation, nullptr);
 
     // Copy the buffer to the GPU
-    submitter.ImmediateSubmit(device, graphicsQueue, [&](VkCommandBuffer commandBuffer) {
+    submitter.ImmediateSubmit(device, [&](VkCommandBuffer commandBuffer) {
         VkBufferCopy copy = {
             .srcOffset = 0,
             .dstOffset = 0,
@@ -1084,7 +1083,7 @@ AllocatedBuffer VulkanBackend::AllocateVertexBuffer(const Vertex *const vertices
     });
 
     // Clean up staging buffer
-    vmaDestroyBuffer(allocator, stagingBuffer.buffer, stagingBuffer.allocation);
+    vmaDestroyBuffer(device.GetAllocator(), stagingBuffer.buffer, stagingBuffer.allocation);
 
     return result;
 }
@@ -1125,7 +1124,11 @@ AllocatedTexture VulkanBackend::AllocateTexture(ImageResource& image, GraphicsFr
     // Allocate
     Texture& arrayTexture = frontend.arrayTextures[EnumBase(arrayID)];
     uint32_t layerIndex = arrayTexture.AllocateLayer();
-    arrayTexture.CopyToLayer(image, *this, layerIndex);
+    if (isNonColor) {
+        arrayTexture.CopyToLayer(device, submitter, m_NormalMipGenerator, image, layerIndex);
+    } else {
+        arrayTexture.CopyToLayer(device, submitter, {}, image, layerIndex);
+    }
     AllocatedTexture allocation = { arrayID, layerIndex };
 
     return allocation;
@@ -1148,23 +1151,8 @@ void VulkanBackend::Resize(ECS *ecs)
 
     INFO("Resized");
 
-    // Check if valid
-    VkSurfaceCapabilitiesKHR capabilities;
-    VK_CHECK(pfn_GetSurfaceCapabilities(physicalDevice, m_Surface, &capabilities));
-    VkExtent2D extent = capabilities.currentExtent;
-    if (extent.width == 0 || extent.height == 0 || extent.width == UINT32_MAX || extent.height == UINT32_MAX) {
-        m_ResizeCameras.clear();
-        return;
-    }
+    device.WaitForIdle();
 
-    // Update extents
-    VK_CHECK(vkDeviceWaitIdle(device));
-    m_Extent = extent;
-    m_Viewport.width = static_cast<float>(m_Extent.width);
-    m_Viewport.height = static_cast<float>(m_Extent.height);
-    m_ScissorRect.extent = m_Extent;
-
-    // Reset all command buffers
     for (FrameData& frame : frames) {
         VK_CHECK(vkResetCommandBuffer(frame.commandBuffer, 0));
     }
@@ -1213,86 +1201,19 @@ uint32_t VulkanBackend::AllocateShadowMap(GraphicsFrontend& frontend)
     return frontend.shadowArrayTexture.AllocateLayer();
 }
 
-void VulkanBackend::InitVulkan(struct GLFWwindow *window)
+void VulkanBackend::InitVulkan(GLFWwindow *window)
 {
-    vkb::InstanceBuilder builder;
-    auto builtInstance = builder.request_validation_layers(USE_VALIDATION_LAYERS)
-            .set_app_version(1, 0, 0)
-            .require_api_version(1, 3, 0)
-            .use_default_debug_messenger()
-            .build();
+    device = Device(window, m_RequestedPresentMode, USE_VALIDATION_LAYERS);
+    device.EnqueueCleanup(m_MainDeleter);
 
-    vkb::Instance vkbInstance = builtInstance.value();
-    m_Instance = vkbInstance.instance;
-    m_DebugMessenger = vkbInstance.debug_messenger;
-    VK_CHECK(glfwCreateWindowSurface(m_Instance, window, nullptr, &m_Surface));
+    pfn_CmdBeginRendering = device.GET_FUNCTION_POINTER(vkCmdBeginRenderingKHR);
+    pfn_CmdEndRendering = device.GET_FUNCTION_POINTER(vkCmdEndRenderingKHR);
 
-    m_MainDeleter.push_back([this] {
-        vkDestroySurfaceKHR(m_Instance, m_Surface, nullptr);
-        vkb::destroy_debug_utils_messenger(m_Instance, m_DebugMessenger);
-        vkDestroyInstance(m_Instance, nullptr);
-    });
-
-    vkb::PhysicalDeviceSelector selector(vkbInstance);
-    auto vkbPhysicalDevice = selector.set_surface(m_Surface)
-            .set_minimum_version(1, 3)
-            .add_required_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME)
-            .add_required_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)
-            .set_required_features({ .samplerAnisotropy = VK_TRUE })
-            .set_required_features_13({ .dynamicRendering = VK_TRUE })
-            .prefer_gpu_device_type(vkb::PreferredDeviceType::discrete)
-            .require_present()
-            .select()
-            .value();
-    INFO("Selected physical device: " << vkbPhysicalDevice.name);
-
-    vkb::DeviceBuilder deviceBuilder(vkbPhysicalDevice);
-    vkb::Device vkbDevice = deviceBuilder.build().value();
-    device = vkbDevice.device;
-    physicalDevice = vkbDevice.physical_device;
-    vkGetPhysicalDeviceProperties(physicalDevice, &m_PhysicalDeviceProperties);
-
-    m_MainDeleter.push_back([this] {
-        vkDestroyDevice(device, nullptr);
-    });
-
-    graphicsQueue = vkbDevice.get_queue(vkb::QueueType::graphics).value();
-    graphicsQueueFamily = vkbDevice.get_queue_index(vkb::QueueType::graphics).value();
-
-    VmaAllocatorCreateInfo allocInfo = {
-        .physicalDevice = physicalDevice,
-        .device = device,
-        .instance = m_Instance,
-    };
-    vmaCreateAllocator(&allocInfo, &allocator);
-    m_MainDeleter.push_back([this] { 
-        vmaDestroyAllocator(allocator);
-    });
-
-    pfn_GetSurfaceCapabilities = GET_FUNCTION_POINTER(vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
-    pfn_CmdBeginRendering = GET_FUNCTION_POINTER(vkCmdBeginRenderingKHR);
-    pfn_CmdEndRendering = GET_FUNCTION_POINTER(vkCmdEndRenderingKHR);
-
-    VkCommandPoolCreateInfo createInfo = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-        .queueFamilyIndex = graphicsQueueFamily
-    };
-    VK_CHECK(vkCreateCommandPool(device, &createInfo, nullptr, &m_CommandPool));
-    m_MainDeleter.push_back([=, this] { 
-        vkDestroyCommandPool(device, m_CommandPool, nullptr); 
-    });
-
-    VkCommandBufferAllocateInfo alloc_info = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .commandPool = m_CommandPool,
-        .commandBufferCount = 1,
-    };
     for (FrameData& frame : frames) {
-        VK_CHECK(vkAllocateCommandBuffers(device, &alloc_info, &frame.commandBuffer));
+        frame.commandBuffer = device.AllocateCommandBuffer();
     }
 
-    submitter.Init(device, graphicsQueueFamily);
+    submitter.Init(device);
     m_MainDeleter.push_back([=, this] {
         submitter.Cleanup(device);
     });
@@ -1302,39 +1223,15 @@ void VulkanBackend::InitDynamics()
 {
     // ================================================== Swapchain ==================================================
 
-    vkb::SwapchainBuilder builder { physicalDevice, device, m_Surface };
-    auto vkbSwapchain = builder.use_default_format_selection()
-            .set_desired_present_mode(m_PresentMode)
-            .set_desired_min_image_count(FRAMES_IN_FLIGHT + 1)
-            .set_desired_extent(m_Extent.width, m_Extent.height)
-            .build()
-            .value();
-
-    if (vkbSwapchain.present_mode != m_PresentMode) {
-        WARN("Requested present mode unavailable: " << m_PresentMode << ". Fell back to: " << vkbSwapchain.present_mode);
+    if (device.GetSwapchain() == VK_NULL_HANDLE) {
+        m_Extent = device.CreateSwapchain(FRAMES_IN_FLIGHT + 1);
+    } else {
+        m_Extent = device.RecreateSwapchain();
     }
 
-    m_Swapchain = vkbSwapchain.swapchain;
-    m_SwapchainFormat = vkbSwapchain.image_format;
-
-    m_DynamicDeleter.push_back([=] { 
-        vkb::destroy_swapchain(vkbSwapchain);
-    });
-
-    std::vector<VkImage> swapchainImages = vkbSwapchain.get_images().value();
-    std::vector<VkImageView> swapchainViews = vkbSwapchain.get_image_views().value();
-    m_Images.Resize(swapchainImages.size());
-    for (size_t i = 0; i < m_Images.Size(); i++) {
-        m_Images[i] = {
-            .image = swapchainImages[i],
-            .view = swapchainViews[i],
-        };
-
-        m_DynamicDeleter.push_back([=, this] { 
-            vkDestroyImageView(device, m_Images[i].view, nullptr); 
-        });
-    }
-    INFO("Using swapchain images: " << m_Images.Size());
+    m_Viewport.width = m_Extent.width;
+    m_Viewport.height = m_Extent.height;
+    m_ScissorRect.extent = m_Extent;
 
     // ================================================== Render Targets ==================================================
 
@@ -1342,50 +1239,50 @@ void VulkanBackend::InitDynamics()
 
     uint32_t poolIndex = 0;
 
-    m_DepthTarget = new (&m_TexturePool[poolIndex++]) Texture(device, allocator, settings.depthFormat, 
+    m_DepthTarget = new (&m_TexturePool[poolIndex++]) Texture(device, settings.depthFormat, 
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
             glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_DEPTH_BIT, 1, 0);
-    m_DepthTarget->EnqueueCleanup(device, allocator, m_DynamicDeleter);
+    m_DepthTarget->EnqueueCleanup(device, m_DynamicDeleter);
 
-    m_AlbedoTarget = new (&m_TexturePool[poolIndex++]) Texture(device, allocator, settings.albedoFormat, 
+    m_AlbedoTarget = new (&m_TexturePool[poolIndex++]) Texture(device, settings.albedoFormat, 
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
             glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT, 1, 0);
-    m_AlbedoTarget->EnqueueCleanup(device, allocator, m_DynamicDeleter);
+    m_AlbedoTarget->EnqueueCleanup(device, m_DynamicDeleter);
 
-    m_NormalTarget = new (&m_TexturePool[poolIndex++]) Texture(device, allocator, settings.normalFormat, 
+    m_NormalTarget = new (&m_TexturePool[poolIndex++]) Texture(device, settings.normalFormat, 
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
             glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT, 1, 0);
-    m_NormalTarget->EnqueueCleanup(device, allocator, m_DynamicDeleter);
+    m_NormalTarget->EnqueueCleanup(device, m_DynamicDeleter);
 
-    m_MaterialTarget = new (&m_TexturePool[poolIndex++]) Texture(device, allocator, settings.materialFormat, 
+    m_MaterialTarget = new (&m_TexturePool[poolIndex++]) Texture(device, settings.materialFormat, 
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 
             glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT, 1, 0);
-    m_MaterialTarget->EnqueueCleanup(device, allocator, m_DynamicDeleter);
+    m_MaterialTarget->EnqueueCleanup(device, m_DynamicDeleter);
 
-    m_LightingTarget = new (&m_TexturePool[poolIndex++]) Texture(device, allocator, settings.lightingFormat, 
+    m_LightingTarget = new (&m_TexturePool[poolIndex++]) Texture(device, settings.lightingFormat, 
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, 
             glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT, 1, 0);
-    m_LightingTarget->EnqueueCleanup(device, allocator, m_DynamicDeleter);
+    m_LightingTarget->EnqueueCleanup(device, m_DynamicDeleter);
     
     uint32_t mipCount = static_cast<uint32_t>(glm::floor(std::log2(glm::max(m_Extent.width, m_Extent.height))));
     m_BloomPyramidMipCount = glm::min(mipCount, MAX_BLOOM_MIPS);
     for (uint32_t i = 0; i < m_BloomPyramidMipCount; i++) {
         auto resolution = glm::uvec2(glm::max(m_Extent.width >> (i + 1), 1u), glm::max(m_Extent.height >> (i + 1), 1u));
-        m_BloomPyramidTargets[i] = new (&m_TexturePool[poolIndex++]) Texture(device, allocator, settings.bloomFormat, 
+        m_BloomPyramidTargets[i] = new (&m_TexturePool[poolIndex++]) Texture(device, settings.bloomFormat, 
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, 
             resolution, VK_IMAGE_ASPECT_COLOR_BIT, 1, 0);
-        m_BloomPyramidTargets[i]->EnqueueCleanup(device, allocator, m_DynamicDeleter);
+        m_BloomPyramidTargets[i]->EnqueueCleanup(device, m_DynamicDeleter);
     }
 
-    m_BloomPingPongTarget = new (&m_TexturePool[poolIndex++]) Texture(device, allocator, settings.bloomFormat, 
+    m_BloomPingPongTarget = new (&m_TexturePool[poolIndex++]) Texture(device, settings.bloomFormat, 
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, 
             glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT, 1, 0);
-    m_BloomPingPongTarget->EnqueueCleanup(device, allocator, m_DynamicDeleter);
+    m_BloomPingPongTarget->EnqueueCleanup(device, m_DynamicDeleter);
 
-    m_ToneMapTarget = new (&m_TexturePool[poolIndex++]) Texture(device, allocator, settings.tonemapFormat, 
+    m_ToneMapTarget = new (&m_TexturePool[poolIndex++]) Texture(device, settings.tonemapFormat, 
             VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
             glm::uvec2(m_Extent.width, m_Extent.height), VK_IMAGE_ASPECT_COLOR_BIT, 1, 0);
-    m_ToneMapTarget->EnqueueCleanup(device, allocator, m_DynamicDeleter);
+    m_ToneMapTarget->EnqueueCleanup(device, m_DynamicDeleter);
 
     // ================================================== Sync Structs ==================================================
 
@@ -1398,21 +1295,12 @@ void VulkanBackend::InitDynamics()
     };
 
     for (FrameData& frame : frames) {
-        VK_CHECK(vkCreateFence(device, &fenceInfo, nullptr, &frame.renderFence));
-        VK_CHECK(vkCreateSemaphore(device, &semaphoreInfo, nullptr, &frame.acquireSemaphore));
+        VK_CHECK(vkCreateFence(device.GetDevice(), &fenceInfo, nullptr, &frame.renderFence));
+        VK_CHECK(vkCreateSemaphore(device.GetDevice(), &semaphoreInfo, nullptr, &frame.acquireSemaphore));
 
         m_DynamicDeleter.push_back([=, this] {
-            vkDestroyFence(device, frame.renderFence, nullptr);
-            vkDestroySemaphore(device, frame.acquireSemaphore, nullptr);
-        });
-    }
-
-    for (SwapchainImageData& image : m_Images) {
-        image.flightFence = VK_NULL_HANDLE;
-        VK_CHECK(vkCreateSemaphore(device, &semaphoreInfo, nullptr, &image.renderSemaphore));
-
-        m_DynamicDeleter.push_back([=, this] {
-            vkDestroySemaphore(device, image.renderSemaphore, nullptr); 
+            vkDestroyFence(device.GetDevice(), frame.renderFence, nullptr);
+            vkDestroySemaphore(device.GetDevice(), frame.acquireSemaphore, nullptr);
         });
     }
 }
@@ -1461,46 +1349,46 @@ void VulkanBackend::InitBuffers()
     };
 
     for (FrameData& frame : frames) {
-        vmaCreateBuffer(allocator, 
+        vmaCreateBuffer(device.GetAllocator(), 
                 &uniformBufferInfo, &cpuGpuBufferAllocInfo, 
                 &frame.uniformBuffer.buffer, &frame.uniformBuffer.allocation, nullptr);
-        vmaMapMemory(allocator, frame.uniformBuffer.allocation, &frame.uniformBuffer.data);
+        vmaMapMemory(device.GetAllocator(), frame.uniformBuffer.allocation, &frame.uniformBuffer.data);
 
-        vmaCreateBuffer(allocator, 
+        vmaCreateBuffer(device.GetAllocator(), 
                 &lightBufferInfo, &cpuGpuBufferAllocInfo, 
                 &frame.lightBuffer.buffer, &frame.lightBuffer.allocation, nullptr);
-        vmaMapMemory(allocator, frame.lightBuffer.allocation, &frame.lightBuffer.data);
+        vmaMapMemory(device.GetAllocator(), frame.lightBuffer.allocation, &frame.lightBuffer.data);
 
-        vmaCreateBuffer(allocator, 
+        vmaCreateBuffer(device.GetAllocator(), 
                 &shadowBufferInfo, &cpuGpuBufferAllocInfo, 
                 &frame.shadowBuffer.buffer, &frame.shadowBuffer.allocation, nullptr);
-        vmaMapMemory(allocator, frame.shadowBuffer.allocation, &frame.shadowBuffer.data);
+        vmaMapMemory(device.GetAllocator(), frame.shadowBuffer.allocation, &frame.shadowBuffer.data);
 
-        vmaCreateBuffer(allocator, 
+        vmaCreateBuffer(device.GetAllocator(), 
                 &lightIndexBufferInfo, &gpuBufferAllocInfo, 
                 &frame.lightIndexBuffer.buffer, &frame.lightIndexBuffer.allocation, nullptr);
-        vmaMapMemory(allocator, frame.lightIndexBuffer.allocation, &frame.lightIndexBuffer.data);
+        vmaMapMemory(device.GetAllocator(), frame.lightIndexBuffer.allocation, &frame.lightIndexBuffer.data);
 
-        vmaCreateBuffer(allocator, 
+        vmaCreateBuffer(device.GetAllocator(), 
                 &lightTileCountBufferInfo, &gpuBufferAllocInfo, 
                 &frame.lightTileCountBuffer.buffer, &frame.lightTileCountBuffer.allocation, nullptr);
-        vmaMapMemory(allocator, frame.lightTileCountBuffer.allocation, &frame.lightTileCountBuffer.data);
+        vmaMapMemory(device.GetAllocator(), frame.lightTileCountBuffer.allocation, &frame.lightTileCountBuffer.data);
 
-        m_MainDeleter.push_back([=, this] {
-            vmaUnmapMemory(allocator, frame.uniformBuffer.allocation);
-            vmaDestroyBuffer(allocator, frame.uniformBuffer.buffer, frame.uniformBuffer.allocation);
+        m_MainDeleter.push_back([frame, this] {
+            vmaUnmapMemory(device.GetAllocator(), frame.uniformBuffer.allocation);
+            vmaDestroyBuffer(device.GetAllocator(), frame.uniformBuffer.buffer, frame.uniformBuffer.allocation);
 
-            vmaUnmapMemory(allocator, frame.lightBuffer.allocation);
-            vmaDestroyBuffer(allocator, frame.lightBuffer.buffer, frame.lightBuffer.allocation);
+            vmaUnmapMemory(device.GetAllocator(), frame.lightBuffer.allocation);
+            vmaDestroyBuffer(device.GetAllocator(), frame.lightBuffer.buffer, frame.lightBuffer.allocation);
 
-            vmaUnmapMemory(allocator, frame.shadowBuffer.allocation);
-            vmaDestroyBuffer(allocator, frame.shadowBuffer.buffer, frame.shadowBuffer.allocation);
+            vmaUnmapMemory(device.GetAllocator(), frame.shadowBuffer.allocation);
+            vmaDestroyBuffer(device.GetAllocator(), frame.shadowBuffer.buffer, frame.shadowBuffer.allocation);
 
-            vmaUnmapMemory(allocator, frame.lightIndexBuffer.allocation);
-            vmaDestroyBuffer(allocator, frame.lightIndexBuffer.buffer, frame.lightIndexBuffer.allocation);
+            vmaUnmapMemory(device.GetAllocator(), frame.lightIndexBuffer.allocation);
+            vmaDestroyBuffer(device.GetAllocator(), frame.lightIndexBuffer.buffer, frame.lightIndexBuffer.allocation);
 
-            vmaUnmapMemory(allocator, frame.lightTileCountBuffer.allocation);
-            vmaDestroyBuffer(allocator, frame.lightTileCountBuffer.buffer, frame.lightTileCountBuffer.allocation);
+            vmaUnmapMemory(device.GetAllocator(), frame.lightTileCountBuffer.allocation);
+            vmaDestroyBuffer(device.GetAllocator(), frame.lightTileCountBuffer.buffer, frame.lightTileCountBuffer.allocation);
         });
     }
 }
@@ -1522,15 +1410,15 @@ void VulkanBackend::InitSamplers()
         .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE,
         .unnormalizedCoordinates = VK_FALSE
     };
-    VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_TextureSampler));
+    VK_CHECK(vkCreateSampler(device.GetDevice(), &samplerInfo, nullptr, &m_TextureSampler));
 
     // Distinct sampler for normal maps in case I need to adjust anisotropy or mipmapping
-    VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_NormalSampler));
+    VK_CHECK(vkCreateSampler(device.GetDevice(), &samplerInfo, nullptr, &m_NormalSampler));
 
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_OffscreenSampler));
+    VK_CHECK(vkCreateSampler(device.GetDevice(), &samplerInfo, nullptr, &m_OffscreenSampler));
 
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
@@ -1541,15 +1429,15 @@ void VulkanBackend::InitSamplers()
     samplerInfo.mipLodBias = 0.0;
     samplerInfo.anisotropyEnable = VK_FALSE;
     samplerInfo.maxAnisotropy = 0.0;
-    VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_ComparisonShadowSampler));
-    VK_CHECK(vkCreateSampler(device, &samplerInfo, nullptr, &m_LinearShadowSampler));
+    VK_CHECK(vkCreateSampler(device.GetDevice(), &samplerInfo, nullptr, &m_ComparisonShadowSampler));
+    VK_CHECK(vkCreateSampler(device.GetDevice(), &samplerInfo, nullptr, &m_LinearShadowSampler));
 
     m_MainDeleter.push_back([=, this] {
-        vkDestroySampler(device, m_OffscreenSampler, nullptr);
-        vkDestroySampler(device, m_TextureSampler, nullptr);
-        vkDestroySampler(device, m_NormalSampler, nullptr);
-        vkDestroySampler(device, m_ComparisonShadowSampler, nullptr);
-        vkDestroySampler(device, m_LinearShadowSampler, nullptr);
+        vkDestroySampler(device.GetDevice(), m_OffscreenSampler, nullptr);
+        vkDestroySampler(device.GetDevice(), m_TextureSampler, nullptr);
+        vkDestroySampler(device.GetDevice(), m_NormalSampler, nullptr);
+        vkDestroySampler(device.GetDevice(), m_ComparisonShadowSampler, nullptr);
+        vkDestroySampler(device.GetDevice(), m_LinearShadowSampler, nullptr);
     });
 }
 
@@ -1574,9 +1462,9 @@ void VulkanBackend::InitDescriptors()
         .poolSizeCount = 9,
         .pPoolSizes = poolSizes,
     };
-    VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_DescriptorPool));
+    VK_CHECK(vkCreateDescriptorPool(device.GetDevice(), &poolInfo, nullptr, &m_DescriptorPool));
     m_MainDeleter.push_back([=, this] {
-        vkDestroyDescriptorPool(device, m_DescriptorPool, nullptr);
+        vkDestroyDescriptorPool(device.GetDevice(), m_DescriptorPool, nullptr);
     });
 
     // ================================================== Create Dummy Set ==================================================
@@ -1584,9 +1472,9 @@ void VulkanBackend::InitDescriptors()
     VkDescriptorSetLayoutCreateInfo layoutInfoDummy = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO
     };
-    VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfoDummy, nullptr, &m_DummyDescriptorLayout));
+    VK_CHECK(vkCreateDescriptorSetLayout(device.GetDevice(), &layoutInfoDummy, nullptr, &m_DummyDescriptorLayout));
     m_MainDeleter.push_back([=, this] {
-        vkDestroyDescriptorSetLayout(device, m_DummyDescriptorLayout, nullptr);
+        vkDestroyDescriptorSetLayout(device.GetDevice(), m_DummyDescriptorLayout, nullptr);
     });
 
     // ================================================== Create Set 0 ==================================================
@@ -1617,9 +1505,9 @@ void VulkanBackend::InitDescriptors()
             .bindingCount = 3,
             .pBindings = bindings
         };
-        VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_DescriptorLayout0));
+        VK_CHECK(vkCreateDescriptorSetLayout(device.GetDevice(), &layoutInfo, nullptr, &m_DescriptorLayout0));
         m_MainDeleter.push_back([=, this] {
-            vkDestroyDescriptorSetLayout(device, m_DescriptorLayout0, nullptr);
+            vkDestroyDescriptorSetLayout(device.GetDevice(), m_DescriptorLayout0, nullptr);
         });
     }
 
@@ -1669,9 +1557,9 @@ void VulkanBackend::InitDescriptors()
             .bindingCount = 6,
             .pBindings = bindings
         };
-        VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_DescriptorLayout1));
+        VK_CHECK(vkCreateDescriptorSetLayout(device.GetDevice(), &layoutInfo, nullptr, &m_DescriptorLayout1));
         m_MainDeleter.push_back([=, this] {
-            vkDestroyDescriptorSetLayout(device, m_DescriptorLayout1, nullptr);
+            vkDestroyDescriptorSetLayout(device.GetDevice(), m_DescriptorLayout1, nullptr);
         });
     }
 
@@ -1709,9 +1597,9 @@ void VulkanBackend::InitDescriptors()
             .bindingCount = 4,
             .pBindings = bindings
         };
-        VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_DescriptorLayout2));
+        VK_CHECK(vkCreateDescriptorSetLayout(device.GetDevice(), &layoutInfo, nullptr, &m_DescriptorLayout2));
         m_MainDeleter.push_back([=, this] {
-            vkDestroyDescriptorSetLayout(device, m_DescriptorLayout2, nullptr);
+            vkDestroyDescriptorSetLayout(device.GetDevice(), m_DescriptorLayout2, nullptr);
         });
     }
 
@@ -1737,9 +1625,9 @@ void VulkanBackend::InitDescriptors()
             .bindingCount = 2,
             .pBindings = bindings
         };
-        VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_DescriptorLayout3));
+        VK_CHECK(vkCreateDescriptorSetLayout(device.GetDevice(), &layoutInfo, nullptr, &m_DescriptorLayout3));
         m_MainDeleter.push_back([=, this] {
-            vkDestroyDescriptorSetLayout(device, m_DescriptorLayout3, nullptr);
+            vkDestroyDescriptorSetLayout(device.GetDevice(), m_DescriptorLayout3, nullptr);
         });
     }
 
@@ -1752,19 +1640,19 @@ void VulkanBackend::InitDescriptors()
             .descriptorSetCount = 1,
             .pSetLayouts = &m_DummyDescriptorLayout
         };
-        VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &frame.dummyDescriptorSet));
+        VK_CHECK(vkAllocateDescriptorSets(device.GetDevice(), &allocInfo, &frame.dummyDescriptorSet));
 
         allocInfo.pSetLayouts = &m_DescriptorLayout0;
-        VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &frame.descriptorSet0));
+        VK_CHECK(vkAllocateDescriptorSets(device.GetDevice(), &allocInfo, &frame.descriptorSet0));
 
         allocInfo.pSetLayouts = &m_DescriptorLayout1;
-        VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &frame.descriptorSet1));
+        VK_CHECK(vkAllocateDescriptorSets(device.GetDevice(), &allocInfo, &frame.descriptorSet1));
 
         allocInfo.pSetLayouts = &m_DescriptorLayout2;
-        VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &frame.descriptorSet2));
+        VK_CHECK(vkAllocateDescriptorSets(device.GetDevice(), &allocInfo, &frame.descriptorSet2));
 
         allocInfo.pSetLayouts = &m_DescriptorLayout3;
-        VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &frame.descriptorSet3));
+        VK_CHECK(vkAllocateDescriptorSets(device.GetDevice(), &allocInfo, &frame.descriptorSet3));
     }
 
     UpdateDescriptors();
@@ -1819,7 +1707,7 @@ void VulkanBackend::UpdateDescriptors()
                 },
             };
 
-            vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
+            vkUpdateDescriptorSets(device.GetDevice(), 3, writes, 0, nullptr);
         }
 
         // ================================================== Write Set 1 ==================================================
@@ -1873,7 +1761,7 @@ void VulkanBackend::UpdateDescriptors()
                 }
             };
 
-            vkUpdateDescriptorSets(device, 3, writes, 0, nullptr);
+            vkUpdateDescriptorSets(device.GetDevice(), 3, writes, 0, nullptr);
         }
 
         // ================================================== Write Set 2 ==================================================
@@ -1937,7 +1825,7 @@ void VulkanBackend::UpdateDescriptors()
                 },
             };
 
-            vkUpdateDescriptorSets(device, 4, writes, 0, nullptr);
+            vkUpdateDescriptorSets(device.GetDevice(), 4, writes, 0, nullptr);
         }
 
         // ================================================== Write Set 3 ==================================================
@@ -1975,7 +1863,7 @@ void VulkanBackend::UpdateDescriptors()
                     .pImageInfo = downsampleImageInfos
                 },
             };
-            vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+            vkUpdateDescriptorSets(device.GetDevice(), 2, writes, 0, nullptr);
         }
     }
 }
@@ -1983,7 +1871,7 @@ void VulkanBackend::UpdateDescriptors()
 void VulkanBackend::InitPipelines()
 {
     m_DepthPipeline.SetName("Depth")
-            .SetDevice(device)
+            .SetDevice(device.GetDevice())
             .SetKind(PipelineKind::GRAPHICS)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DescriptorLayout1)
@@ -2001,7 +1889,7 @@ void VulkanBackend::InitPipelines()
     m_DepthPipeline.EnqueueCleanup(m_MainDeleter);
 
     m_ShadowPipeline.SetName("Shadow")
-            .SetDevice(device)
+            .SetDevice(device.GetDevice())
             .SetKind(PipelineKind::GRAPHICS)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DescriptorLayout1)
@@ -2017,7 +1905,7 @@ void VulkanBackend::InitPipelines()
     m_ShadowPipeline.EnqueueCleanup(m_MainDeleter);
 
     m_GBufferPipeline.SetName("GBuffer")
-            .SetDevice(device)
+            .SetDevice(device.GetDevice())
             .SetKind(PipelineKind::GRAPHICS)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DescriptorLayout1)
@@ -2038,7 +1926,7 @@ void VulkanBackend::InitPipelines()
     m_GBufferPipeline.EnqueueCleanup(m_MainDeleter);
 
     m_TransparencyPipeline.SetName("Transparency")
-            .SetDevice(device)
+            .SetDevice(device.GetDevice())
             .SetKind(PipelineKind::GRAPHICS)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DescriptorLayout1)
@@ -2059,7 +1947,7 @@ void VulkanBackend::InitPipelines()
     m_TransparencyPipeline.EnqueueCleanup(m_MainDeleter);
 
     m_ToneMapPipeline.SetName("Tone Map")
-            .SetDevice(device)
+            .SetDevice(device.GetDevice())
             .SetKind(PipelineKind::GRAPHICS)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DescriptorLayout1)
@@ -2074,13 +1962,13 @@ void VulkanBackend::InitPipelines()
     m_ToneMapPipeline.EnqueueCleanup(m_MainDeleter);
 
     m_AntiAliasingPipeline.SetName("Anti Aliasing")
-            .SetDevice(device)
+            .SetDevice(device.GetDevice())
             .SetKind(PipelineKind::GRAPHICS)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DescriptorLayout1)
             .AddShader(ShaderKind::VERTEX, "fullscreen.verte")
             .AddShader(ShaderKind::FRAGMENT, "antialias.frag")
-            .SetDynamicColorAttachment(m_SwapchainFormat)
+            .SetDynamicColorAttachment(device.GetSwapchainFormat())
             .SetBounds(m_Viewport, m_ScissorRect, m_Extent)
             .SetCulling(VK_CULL_MODE_BACK_BIT)
             .SetDepthCompare(VK_COMPARE_OP_ALWAYS)
@@ -2090,7 +1978,7 @@ void VulkanBackend::InitPipelines()
     // ================================================== Compute Pipelines ==================================================
 
     m_LightCullingPipeline.SetName("Light Culling")
-            .SetDevice(device)
+            .SetDevice(device.GetDevice())
             .SetKind(PipelineKind::COMPUTE)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DummyDescriptorLayout)
@@ -2100,7 +1988,7 @@ void VulkanBackend::InitPipelines()
     m_LightCullingPipeline.EnqueueCleanup(m_MainDeleter);
 
     m_LightingPipeline.SetName("Lighting")
-            .SetDevice(device)
+            .SetDevice(device.GetDevice())
             .SetKind(PipelineKind::COMPUTE)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DescriptorLayout1)
@@ -2110,7 +1998,7 @@ void VulkanBackend::InitPipelines()
     m_LightingPipeline.EnqueueCleanup(m_MainDeleter);
 
     m_BloomLightExtractionPipeline.SetName("Bloom (Light Extraction)")
-            .SetDevice(device)
+            .SetDevice(device.GetDevice())
             .SetKind(PipelineKind::COMPUTE)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DummyDescriptorLayout)
@@ -2122,7 +2010,7 @@ void VulkanBackend::InitPipelines()
     m_BloomLightExtractionPipeline.EnqueueCleanup(m_MainDeleter);
 
     m_BloomDownsamplePipeline.SetName("Bloom (Downsample)")
-            .SetDevice(device)
+            .SetDevice(device.GetDevice())
             .SetKind(PipelineKind::COMPUTE)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DummyDescriptorLayout)
@@ -2134,7 +2022,7 @@ void VulkanBackend::InitPipelines()
     m_BloomDownsamplePipeline.EnqueueCleanup(m_MainDeleter);
 
     m_BloomHorizontalBlurPipeline.SetName("Bloom (Horizontal Blur)")
-            .SetDevice(device)
+            .SetDevice(device.GetDevice())
             .SetKind(PipelineKind::COMPUTE)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DummyDescriptorLayout)
@@ -2146,7 +2034,7 @@ void VulkanBackend::InitPipelines()
     m_BloomHorizontalBlurPipeline.EnqueueCleanup(m_MainDeleter);
 
     m_BloomVerticalBlurPipeline.SetName("Bloom (Vertical Blur)")
-            .SetDevice(device)
+            .SetDevice(device.GetDevice())
             .SetKind(PipelineKind::COMPUTE)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DummyDescriptorLayout)
@@ -2158,7 +2046,7 @@ void VulkanBackend::InitPipelines()
     m_BloomVerticalBlurPipeline.EnqueueCleanup(m_MainDeleter);
 
     m_BloomAccumulatePipeline.SetName("Bloom (Upscale / Accumulate)")
-            .SetDevice(device)
+            .SetDevice(device.GetDevice())
             .SetKind(PipelineKind::COMPUTE)
             .AddDescriptorLayout(m_DescriptorLayout0)
             .AddDescriptorLayout(m_DummyDescriptorLayout)
@@ -2168,77 +2056,6 @@ void VulkanBackend::InitPipelines()
             .AddShader(ShaderKind::COMPUTE, "accumulate.comp")
             .Build();
     m_BloomAccumulatePipeline.EnqueueCleanup(m_MainDeleter);
-}
-
-void VulkanBackend::InitMiscBuffers()
-{
-    // None for now
-}
-
-void VulkanBackend::InitMiscDescriptors()
-{
-    VkDescriptorPoolSize poolSizes[1] = {
-        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, MAX_NORMAL_MIPS * 2 },    // Normal mipmap sources and destinations
-    };
-    VkDescriptorPoolCreateInfo poolInfo = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .maxSets = 1,
-        .poolSizeCount = 1,
-        .pPoolSizes = poolSizes,
-    };
-    VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &m_MiscDescriptorPool));
-    m_MainDeleter.push_back([=, this] {
-        vkDestroyDescriptorPool(device, m_MiscDescriptorPool, nullptr);
-    });
-
-    // ================================================== Create Normal Mipmap Set  ==================================================
-
-    {
-        VkDescriptorSetLayoutBinding bindings[2] = {
-            { // Source image 
-                .binding = 0,
-                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                .descriptorCount = MAX_NORMAL_MIPS,
-                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-            },
-            { // Destination image 
-                .binding = 1,
-                .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                .descriptorCount = MAX_NORMAL_MIPS,
-                .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
-            },
-        };
-        VkDescriptorSetLayoutCreateInfo layoutInfo = {
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .bindingCount = 2,
-            .pBindings = bindings
-        };
-        VK_CHECK(vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &m_NormalMipmapDescriptorLayout));
-        m_MainDeleter.push_back([=, this] {
-            vkDestroyDescriptorSetLayout(device, m_NormalMipmapDescriptorLayout, nullptr);
-        });
-
-        // Allocate
-        VkDescriptorSetAllocateInfo allocInfo = {
-            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .descriptorPool = m_MiscDescriptorPool,
-            .descriptorSetCount = 1,
-            .pSetLayouts = &m_NormalMipmapDescriptorLayout
-        };
-        VK_CHECK(vkAllocateDescriptorSets(device, &allocInfo, &m_NormalMipmapDescriptorSet));
-    }
-}
-
-void VulkanBackend::InitMiscPipelines()
-{
-    m_NormalMipmapPipeline.SetName("Normal Mipmap")
-            .SetDevice(device)
-            .SetKind(PipelineKind::COMPUTE)
-            .AddDescriptorLayout(m_NormalMipmapDescriptorLayout)
-            .AddPushConstant<NormalMipmapPushConstants>(VK_SHADER_STAGE_COMPUTE_BIT)
-            .AddShader(ShaderKind::COMPUTE, "normalMipmap.comp")
-            .Build();
-    m_NormalMipmapPipeline.EnqueueCleanup(m_MainDeleter);
 }
 
 #ifdef PROFILING

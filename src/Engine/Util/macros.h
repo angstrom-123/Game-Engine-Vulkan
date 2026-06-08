@@ -6,6 +6,7 @@
 #define QUOTE(...) #__VA_ARGS__
 
 #define _LOG(name, col, msg) std::cerr << col "[" name "] " __FILE_NAME__ << ":" <<  __func__ << ":" << __LINE__ << ": " << "\033[0m" << msg << std::endl
+#define _LOG_STRIPPED(name, col, msg) std::cerr << col "[" name "]: \033[0m" << msg << std::endl
 
 #define INFO(msg) _LOG("INFO", "", msg)
 #define ERROR(msg) _LOG("ERROR", "\033[91m", msg)

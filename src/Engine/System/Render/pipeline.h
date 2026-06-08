@@ -1,6 +1,5 @@
 #pragma once
 
-#include "System/Render/texture.h"
 #include "Util/enumIndex.h"
 #include "Util/stackVector.h"
 #include "Geometry/vertex.h"
@@ -62,6 +61,8 @@ struct DescriptorSets {
 
 class Pipeline {
 public:
+    ~Pipeline() = default;
+    Pipeline() = default;
     Pipeline& SetDevice(VkDevice device);
     Pipeline& SetKind(PipelineKind kind);
     Pipeline& SetName(const std::string& name);
@@ -77,11 +78,11 @@ public:
     Pipeline& AddShader(ShaderKind shaderKind, const fs::path& path);
     Pipeline& SetDynamicDepthAttachment(VkFormat format);
     Pipeline& SetDynamicColorAttachment(VkFormat format);
-    Pipeline& AddColorAttachment(const Texture& texture, 
+    Pipeline& AddColorAttachment(const class Texture& texture, 
             VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
-    Pipeline& SetDepthWriteAttachment(const Texture& texture, 
+    Pipeline& SetDepthWriteAttachment(const class Texture& texture, 
             VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
-    Pipeline& SetDepthReadAttachment(const Texture& texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
+    Pipeline& SetDepthReadAttachment(const class Texture& texture, VkAttachmentLoadOp loadOp, VkAttachmentStoreOp storeOp);
     Pipeline& SetBounds(VkViewport viewport, VkRect2D scissor, VkExtent2D extent);
     Pipeline& SetCulling(VkCullModeFlags culling);
     Pipeline& EnableBlending(bool enabled);
@@ -89,6 +90,7 @@ public:
     Pipeline& SetDepthCompare(VkCompareOp compareOp);
     Pipeline& SetVertexInput(const VertexInputDesc& input);
     void Build();
+    void Cleanup();
     void EnqueueCleanup(std::deque<std::function<void ()>>& deletionQueue);
     void PrepareForDynamicRendering(VkCommandBuffer commandBuffer, DescriptorSets descriptorSets);
     void BeginDynamicDepthRendering(VkCommandBuffer commandBuffer, 
@@ -104,8 +106,8 @@ public:
     void BeginCompute(VkCommandBuffer commandBufffer, DescriptorSets descriptorSets);
     void EndCompute();
 
-    void UpdateDepthAttachment(const Texture& texture);
-    void UpdateColorAttachment(uint32_t index, const Texture& texture);
+    void UpdateDepthAttachment(const class Texture& texture);
+    void UpdateColorAttachment(uint32_t index, const class Texture& texture);
     void UpdateBounds(VkViewport viewport, VkRect2D scissor, VkExtent2D extent);
 
     VkPipelineLayout GetLayout() const { return m_PipelineLayout; }

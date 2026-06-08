@@ -42,7 +42,7 @@ void RenderSystem::RequestResize(VulkanBackend *backend)
 
 void RenderSystem::UploadResources(std::vector<Resource> resources, const fs::path& sceneDir, ResourceManager *manager, VulkanBackend *backend)
 {
-    backend->WaitForIdle();
+    backend->device.WaitForIdle();
 
     ResourceManifest manifest = manager->GetManifest(sceneDir);
 
@@ -314,7 +314,7 @@ Entity RenderSystem::CreateText(ECS *ecs, const TextCreateInfo& info, VulkanBack
     ecs->AddComponent<Material>(e, material);
 
     m_Deleter.push_back([=] {
-        vmaDestroyBuffer(backend->allocator, mesh.vertexBuffer.buffer, mesh.vertexBuffer.allocation);
+        vmaDestroyBuffer(backend->device.GetAllocator(), mesh.vertexBuffer.buffer, mesh.vertexBuffer.allocation);
     });
 
     return e;
@@ -438,7 +438,7 @@ void RenderSystem::UploadModel(Resource resource, ResourceManager *manager, Vulk
 
         mesh.vertexBuffer = backend->AllocateVertexBuffer(vertices.data(), vertices.size());
         m_Deleter.push_back([=] {
-            vmaDestroyBuffer(backend->allocator, mesh.vertexBuffer.buffer, mesh.vertexBuffer.allocation);
+            vmaDestroyBuffer(backend->device.GetAllocator(), mesh.vertexBuffer.buffer, mesh.vertexBuffer.allocation);
         });
 
         mesh.allocated = true;

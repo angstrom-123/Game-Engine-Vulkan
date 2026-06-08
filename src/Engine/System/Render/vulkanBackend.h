@@ -45,8 +45,8 @@
 #include "ECS/ecsTypes.h"
 #include "Geometry/vertex.h"
 #include "ResourceManager/imageResource.h"
+#include "System/Render/device.h"
 #include "System/Render/texture.h"
-#include "backendDefs.h"
 #include "pipeline.h"
 #include "backendTypes.h"
 #include "commandSubmitter.h"
@@ -56,6 +56,7 @@
 class VulkanBackend {
 public:
     ~VulkanBackend();
+    VulkanBackend() = default;
     void Init(struct GLFWwindow *window, const Config &config);
     void InitFrontend(GraphicsFrontend& frontend, const GraphicsFrontendInfo& info);
     void CleanupFrontend(GraphicsFrontend& frontend);
@@ -65,24 +66,14 @@ public:
     AllocatedTexture AllocateTexture(uint8_t *pixels, glm::ivec2 size, uint32_t flags, int32_t channels, GraphicsFrontend& frontend);
     uint32_t AllocateShadowMap(GraphicsFrontend& frontend);
     void RequestResize(const GraphicsFrontend& frontend) { m_ResizeCameras.push_back(frontend.camera); }
-    void WaitForIdle() { VK_CHECK(vkDeviceWaitIdle(device)); }
 
-    Pipeline& GetNormalMipmapPipeline() { return m_NormalMipmapPipeline; }
-    VkDescriptorSet GetNormalMipmapDescriptorSet() { return m_NormalMipmapDescriptorSet; }
-    
 public:
-    // A funny idiom, publicly viewable but not editable without need for a getter
+    // A funny idiom, publicly viewable but not editable and don't need for a getter
     const uint64_t& frameNumber{m_InternalFrameNumber};
 
+    Device device;
     VulkanBackendSettings settings;
 
-    VkPhysicalDevice physicalDevice{VK_NULL_HANDLE};
-    VkDevice device{VK_NULL_HANDLE};
-
-    VkQueue graphicsQueue{VK_NULL_HANDLE};
-    uint32_t graphicsQueueFamily{0};
-
-    struct VmaAllocator_T *allocator{nullptr};
     CommandSubmitter submitter;
     FrameData frames[FRAMES_IN_FLIGHT];
 
@@ -95,17 +86,6 @@ public:
     void UpdateDescriptors();
     void InitBuffers();
     void InitPipelines();
-    void InitMiscBuffers();
-    void InitMiscDescriptors();
-    void InitMiscPipelines();
-
-#define GET_FUNCTION_POINTER(T) GetFunctionPointer<PFN_##T>(#T)
-    template<typename T> T GetFunctionPointer(const char *name) 
-    { 
-        T result = reinterpret_cast<T>(vkGetInstanceProcAddr(m_Instance, name)); 
-        ASSERT(result && "Failed to get function pointer");
-        return result;
-    }
 
 #ifdef PROFILING
     void InitProfiling();
@@ -115,20 +95,11 @@ private:
     uint64_t m_InternalFrameNumber{0};
     std::vector<std::pair<float, Entity>> m_SortingBuffer;
 
-    VkInstance m_Instance{VK_NULL_HANDLE};
-    VkDebugUtilsMessengerEXT m_DebugMessenger{VK_NULL_HANDLE};
-    VkPhysicalDeviceProperties m_PhysicalDeviceProperties{0};
-    PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR pfn_GetSurfaceCapabilities{nullptr};
+    // TODO Move like everything into device
     PFN_vkCmdBeginRenderingKHR pfn_CmdBeginRendering{nullptr};
     PFN_vkCmdEndRenderingKHR pfn_CmdEndRendering{nullptr};
 
-    VkSurfaceKHR m_Surface{VK_NULL_HANDLE};
-    VkSwapchainKHR m_OldSwapchain{VK_NULL_HANDLE};
-    VkSwapchainKHR m_Swapchain{VK_NULL_HANDLE};
-    VkFormat m_SwapchainFormat{VK_FORMAT_UNDEFINED};
     VkPresentModeKHR m_RequestedPresentMode{VK_PRESENT_MODE_IMMEDIATE_KHR};
-    VkPresentModeKHR m_PresentMode{VK_PRESENT_MODE_FIFO_KHR};
-    StackVector<SwapchainImageData, FRAMES_IN_FLIGHT + 1> m_Images;
 
     VkExtent2D m_Extent{0};
     VkViewport m_Viewport{0};
@@ -160,8 +131,6 @@ private:
     VkSampler m_ComparisonShadowSampler{VK_NULL_HANDLE};
     VkSampler m_LinearShadowSampler{VK_NULL_HANDLE};
 
-    VkCommandPool m_CommandPool{VK_NULL_HANDLE};
-
     // Graphics
     VkDescriptorPool m_DescriptorPool{VK_NULL_HANDLE};
     VkDescriptorSetLayout m_DummyDescriptorLayout{VK_NULL_HANDLE};
@@ -184,11 +153,5 @@ private:
     Pipeline m_ToneMapPipeline;
     Pipeline m_AntiAliasingPipeline;
 
-    // Miscellaneous (mipmap gen, etc.)
-    VkDescriptorPool m_MiscDescriptorPool{VK_NULL_HANDLE};
-
-    AllocatedBuffer m_NormalMipmapUniformBuffer;
-    VkDescriptorSetLayout m_NormalMipmapDescriptorLayout{VK_NULL_HANDLE};
-    VkDescriptorSet m_NormalMipmapDescriptorSet{VK_NULL_HANDLE};
-    Pipeline m_NormalMipmapPipeline;
+    MipGenerator m_NormalMipGenerator;
 };

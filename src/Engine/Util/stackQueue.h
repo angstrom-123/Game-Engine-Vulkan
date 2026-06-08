@@ -25,7 +25,7 @@ public:
     void Push(T&& value)
     {
         ASSERT(m_Size < capacity  && "Queue full");
-        m_Data[m_Back++] = std::move(value);
+        m_Data[m_Back++] = std::forward(value);
         if (m_Back == capacity) {
             m_Back = 0;
         }

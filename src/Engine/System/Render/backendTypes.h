@@ -5,7 +5,6 @@
 
 #include "ECS/ecsTypes.h"
 #include "System/Render/texture.h"
-#include "attachmentArray.h"
 #include "Util/enumIndex.h"
 
 const uint32_t FRAMES_IN_FLIGHT = 2;
@@ -83,15 +82,6 @@ struct ToneMapPushConstants {
     uint32_t bloomEnabled{0};
 };
 
-struct NormalMipmapPushConstants {
-    uint32_t srcIndex{0};
-    uint32_t srcWidth{0};
-    uint32_t srcHeight{0};
-    uint32_t dstIndex{0};
-    uint32_t dstWidth{0};
-    uint32_t dstHeight{0};
-};
-
 struct BloomPushConstants {
     uint32_t currentIndex{0};
     uint32_t blurKernelRadius{0};
@@ -149,13 +139,13 @@ struct FrameData {
 #endif
 };
 
-struct SwapchainImageData {
-    VkFence flightFence{VK_NULL_HANDLE};
-    VkSemaphore renderSemaphore{VK_NULL_HANDLE};
-    VkImage image{VK_NULL_HANDLE};
-    VkImageView view{VK_NULL_HANDLE};
-};
-
+// struct SwapchainImageData {
+//     VkFence flightFence{VK_NULL_HANDLE};
+//     VkSemaphore renderSemaphore{VK_NULL_HANDLE};
+//     VkImage image{VK_NULL_HANDLE};
+//     VkImageView view{VK_NULL_HANDLE};
+// };
+//
 struct AllocatedTexture {
     TextureArrayID arrayID{TextureArrayID::MAX_ENUM};
     uint32_t layerID{UINT32_MAX};

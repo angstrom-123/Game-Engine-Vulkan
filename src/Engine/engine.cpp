@@ -41,7 +41,7 @@ Engine::Engine()
 
 Engine::~Engine()
 {
-    m_GraphicsBackend.WaitForIdle();
+    m_GraphicsBackend.device.WaitForIdle();
     glfwDestroyWindow(m_Window);
     glfwTerminate();
 }

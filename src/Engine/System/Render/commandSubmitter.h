@@ -1,13 +1,17 @@
 #pragma once
 
+#include <deque>
 #include <functional>
 #include <vulkan/vulkan_core.h>
 
 class CommandSubmitter {
 public:
-    void Init(VkDevice device, uint32_t graphicsQueueFamily);
-    void Cleanup(VkDevice device);
-    void ImmediateSubmit(VkDevice device, VkQueue graphicsQueue, std::function<void (VkCommandBuffer)>&& function);
+    ~CommandSubmitter() = default;
+    CommandSubmitter() = default;
+    void Init(const class Device& device);
+    void Cleanup(const class Device& device);
+    void EnqueueCleanup(const class Device& device, std::deque<std::function<void ()>>& deleter);
+    void ImmediateSubmit(const class Device& device, std::function<void (VkCommandBuffer)>&& function) const;
 
 private:
     VkFence m_UploadFence{VK_NULL_HANDLE};

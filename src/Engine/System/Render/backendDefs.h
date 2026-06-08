@@ -1,6 +1,7 @@
 #pragma once
 
 #ifdef DEBUG 
+    #include "Util/macros.h"
     #define USE_VALIDATION_LAYERS VK_TRUE 
     #define VK_CHECK(x)\
         do {\

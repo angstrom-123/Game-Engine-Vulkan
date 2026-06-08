@@ -2,6 +2,7 @@
 #include "backendDefs.h"
 #include "Util/macros.h"
 #include <vulkan/vulkan_core.h>
+#include "texture.h"
 
 #include <fstream>
 
@@ -260,12 +261,18 @@ void Pipeline::Build()
     m_IsBuilt = true;
 }
 
+void Pipeline::Cleanup()
+{
+    ASSERT(m_IsBuilt && "Not built");
+    vkDestroyPipelineLayout(m_Device, m_PipelineLayout, nullptr);
+    vkDestroyPipeline(m_Device, m_Pipeline, nullptr);
+}
+
 void Pipeline::EnqueueCleanup(std::deque<std::function<void ()>>& deletionQueue) 
 {
     ASSERT(m_IsBuilt && "Not built");
     deletionQueue.push_back([this] {
-        vkDestroyPipelineLayout(m_Device, m_PipelineLayout, nullptr);
-        vkDestroyPipeline(m_Device, m_Pipeline, nullptr);
+        Cleanup();
     });
 }
 
