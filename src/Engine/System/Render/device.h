@@ -55,6 +55,7 @@ public:
 private:
     bool CheckFeatureSupport(VkPhysicalDevice device);
     bool CheckExtensionSupport(VkPhysicalDevice device, const char **extensions, uint32_t count);
+    bool CheckLayerSupport(const char **layers, uint32_t count);
     uint32_t ScorePhysicalDevice(VkPhysicalDevice device);
     bool SelectQueue(VkPhysicalDevice device, uint32_t *outQueueFamily);
     bool SelectFormat(VkPhysicalDevice device, VkFormat *outFormat, VkColorSpaceKHR *outColorSpace);
@@ -74,6 +75,7 @@ private:
     PFN_vkDestroyDebugUtilsMessengerEXT pfn_DestroyDebugMessenger{nullptr};
 
     VkBool32 m_ValidationEnabled{VK_FALSE};
+    bool m_ValidationSupported{VK_FALSE};
     VkInstance m_Instance{VK_NULL_HANDLE};
     VmaAllocator m_Allocator{VK_NULL_HANDLE};
     VkSurfaceKHR m_Surface{VK_NULL_HANDLE};

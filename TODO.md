@@ -8,9 +8,6 @@
 
 ## Improvements
 
-### VKB 
-- Replace vk bootstrap instance, device, physical device, swapchain creation
-
 ### Embedding
 - Embed some default resources as headers 
 - Could use for engine font, etc.
@@ -37,8 +34,3 @@
 - Allow font selection during text creation
 
 ## Bugs
-
-### Fix Memory Leak
-- Small bug between glfw, vulkan, and linux
-- Caused by swapchain creation in vk bootstrap
-- Constant leak amount at end of program (very minor)

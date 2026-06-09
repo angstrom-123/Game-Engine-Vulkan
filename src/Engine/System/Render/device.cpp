@@ -261,12 +261,31 @@ bool Device::CheckExtensionSupport(VkPhysicalDevice device, const char **extensi
 {
     uint32_t availableCount;
     vkEnumerateDeviceExtensionProperties(device, nullptr, &availableCount, nullptr);
-    StackVector<VkExtensionProperties, 256> availableExtensions(availableCount);
+    StackVector<VkExtensionProperties, 512> availableExtensions(availableCount);
     vkEnumerateDeviceExtensionProperties(device, nullptr, &availableCount, availableExtensions.Data());
     for (uint32_t i = 0; i < count; i++) {
         bool found = false;
         for (const auto& extension : availableExtensions) {
             if (std::strcmp(extensions[i], extension.extensionName) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+    return true;
+}
+
+bool Device::CheckLayerSupport(const char **layers, uint32_t count)
+{
+    uint32_t availableCount;
+    vkEnumerateInstanceLayerProperties(&availableCount, nullptr);
+    StackVector<VkLayerProperties, 32> availableLayers(availableCount);
+    vkEnumerateInstanceLayerProperties(&availableCount, availableLayers.Data());
+    for (uint32_t i = 0; i < count; i++) {
+        bool found = false;
+        for (const auto& layer : availableLayers) {
+            if (std::strcmp(layers[i], layer.layerName) == 0) {
                 found = true;
                 break;
             }
@@ -282,7 +301,7 @@ bool Device::SelectQueue(VkPhysicalDevice device, uint32_t *outQueueFamily)
     uint32_t queueFamilyCount;
     vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
     if (queueFamilyCount == 0) return false;
-    StackVector<VkQueueFamilyProperties, 8> queueFamilies(queueFamilyCount);
+    StackVector<VkQueueFamilyProperties, 16> queueFamilies(queueFamilyCount);
     vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.Data());
     for (uint32_t i = 0; i < queueFamilyCount; i++) {
         VkBool32 presentSupport = VK_FALSE;
@@ -301,7 +320,7 @@ bool Device::SelectFormat(VkPhysicalDevice device, VkFormat *outFormat, VkColorS
     uint32_t formatCount;
     vkGetPhysicalDeviceSurfaceFormatsKHR(device, m_Surface, &formatCount, nullptr);
     if (formatCount == 0) return false;
-    StackVector<VkSurfaceFormatKHR, 8> formats(formatCount);
+    StackVector<VkSurfaceFormatKHR, 16> formats(formatCount);
     vkGetPhysicalDeviceSurfaceFormatsKHR(device, m_Surface, &formatCount, formats.Data());
     for (const auto& format : formats) {
         if (format.format == VK_FORMAT_B8G8R8A8_SRGB && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
@@ -334,7 +353,7 @@ void Device::SelectPhysicalDevice(VkPresentModeKHR desiredPresentMode)
     // Find all possible devices
     uint32_t deviceCount;
     vkEnumeratePhysicalDevices(m_Instance, &deviceCount, nullptr);
-    StackVector<VkPhysicalDevice, 4> devices(deviceCount);
+    StackVector<VkPhysicalDevice, 8> devices(deviceCount);
     vkEnumeratePhysicalDevices(m_Instance, &deviceCount, devices.Data());
     
     uint32_t bestScore = 0;
@@ -343,7 +362,7 @@ void Device::SelectPhysicalDevice(VkPresentModeKHR desiredPresentMode)
         uint32_t deviceScore = ScorePhysicalDevice(device) ;
         if (deviceScore < bestScore) continue;
 
-        StackVector<const char *, 2> deviceExtensions({
+        StackVector<const char *, 8> deviceExtensions({
             VK_KHR_SWAPCHAIN_EXTENSION_NAME,
             VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME
         });
@@ -392,7 +411,7 @@ void Device::CreateDevice()
         .dynamicRendering = VK_TRUE
     };
 
-    StackVector<const char *, 2> deviceExtensions({
+    StackVector<const char *, 8> deviceExtensions({
         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
         VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME
     });
@@ -424,7 +443,7 @@ void Device::CreateInstance()
         .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
         .pEngineName = "No Engine",
         .engineVersion = VK_MAKE_VERSION(1, 0, 0),
-        .apiVersion = VK_API_VERSION_1_4
+        .apiVersion = VK_API_VERSION_1_3 // was 1_4
     };
 
     uint32_t glfwExtensionCount;
@@ -433,11 +452,21 @@ void Device::CreateInstance()
     std::copy(glfwExtensions, glfwExtensions + glfwExtensionCount, instanceExtensions.Data());
 
     VkDebugUtilsMessengerCreateInfoEXT debugMessengerInfo = {};
-    StackVector<const char *, 1> validationLayers({
-        "VK_LAYER_KHRONOS_validation"
-    });
+    StackVector<const char *, 32> instanceLayers;
+
     if (m_ValidationEnabled) {
         instanceExtensions.PushBack(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+
+        const char *validationLayer = "VK_LAYER_KHRONOS_validation";
+        if (CheckLayerSupport(&validationLayer, 1)) {
+            instanceLayers.PushBack("VK_LAYER_KHRONOS_validation");
+        } else {
+            WARN("Validation layers not supported by physical device");
+        }
+
+        #ifdef PLAT_WINDOWS
+            instanceExtensions.PushBack(VK_EXT_DEBUG_REPORT_EXTENSION_NAME );
+        #endif
 
         debugMessengerInfo = {
             .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
@@ -462,8 +491,8 @@ void Device::CreateInstance()
 
     if (m_ValidationEnabled) {
         instanceInfo.pNext = &debugMessengerInfo;
-        instanceInfo.enabledLayerCount = validationLayers.Size();
-        instanceInfo.ppEnabledLayerNames = validationLayers.Data();
+        instanceInfo.enabledLayerCount = instanceLayers.Size();
+        instanceInfo.ppEnabledLayerNames = instanceLayers.Data();
     }
 
     if (vkCreateInstance(&instanceInfo, nullptr, &m_Instance) != VK_SUCCESS) {

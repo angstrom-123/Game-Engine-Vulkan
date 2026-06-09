@@ -38,6 +38,7 @@ ifeq ($(TARGET_OS), windows)
 	MINGW_LIB_DIR	:= $(MAKE_DIR)/vendor/mingw-libs
 	C_FLAGS			+= -I$(MINGW_LIB_DIR)/include
 	C_FLAGS			+= -L$(MINGW_LIB_DIR)/lib
+	C_FLAGS			+= -DPLAT_WINDOWS
 
 	LINKS			:= -lglfw3
 	LINKS			+= -lvulkan-1
@@ -47,6 +48,8 @@ else
 	RELEASE_DIR		:= $(MAKE_DIR)/bin/release
 	PROFILING_DIR	:= $(MAKE_DIR)/bin/profiling
 	DEBUG_DIR		:= $(MAKE_DIR)/bin/debug
+
+	C_FLAGS			+= -DPLAT_LINUX
 
 	DEBUG_FLAGS 	+= -fsanitize=address -fsanitize=undefined
 

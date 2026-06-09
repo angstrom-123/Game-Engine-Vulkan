@@ -5,8 +5,15 @@
 
 #define QUOTE(...) #__VA_ARGS__
 
-#define _LOG(name, col, msg) std::cerr << col "[" name "] " __FILE_NAME__ << ":" <<  __func__ << ":" << __LINE__ << ": " << "\033[0m" << msg << std::endl
-#define _LOG_STRIPPED(name, col, msg) std::cerr << col "[" name "]: \033[0m" << msg << std::endl
+#ifdef PLAT_WINDOWS
+    #define _LOG(name, col, msg) std::cerr << "[" name "] " __FILE_NAME__ << ":" <<  __func__ << ":" << __LINE__ << ": " << msg << std::endl
+    #define _LOG_STRIPPED(name, col, msg) std::cerr << col "[" name "]: \033[0m" << msg << std::endl
+#elifdef PLAT_LINUX
+    #define _LOG(name, col, msg) std::cerr << "[" name "] " __FILE_NAME__ << ":" <<  __func__ << ":" << __LINE__ << ": " << msg << std::endl
+    #define _LOG_STRIPPED(name, col, msg) std::cerr << col "[" name "]: \033[0m" << msg << std::endl
+#else 
+    #error "Platform not specified"
+#endif
 
 #define INFO(msg) _LOG("INFO", "", msg)
 #define ERROR(msg) _LOG("ERROR", "\033[91m", msg)
